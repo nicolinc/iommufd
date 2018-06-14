@@ -7,6 +7,7 @@
 #include <linux/bug.h>
 #include <linux/kernel.h>
 #include <linux/jump_label.h>
+#include <linux/percpu.h>
 #include <linux/sched.h>
 
 #define IA32_PQR_ASSOC	0x0c8f
@@ -59,8 +60,8 @@ DECLARE_STATIC_KEY_FALSE(rdt_mon_enable_key);
 static void __resctrl_sched_in(void)
 {
 	struct resctrl_pqr_state *state = this_cpu_ptr(&pqr_state);
-	u32 closid = state->default_closid;
-	u32 rmid = state->default_rmid;
+	u32 closid = READ_ONCE(state->default_closid);
+	u32 rmid = READ_ONCE(state->default_rmid);
 	u32 tmp;
 
 	/*
@@ -93,6 +94,13 @@ static inline unsigned int resctrl_arch_round_mon_val(unsigned int val)
 	/* h/w works in units of "boot_cpu_data.x86_cache_occ_scale" */
 	val /= scale;
 	return val * scale;
+}
+
+static inline void resctrl_arch_set_cpu_default_closid_rmid(int cpu, u32 closid,
+							    u32 rmid)
+{
+	WRITE_ONCE(per_cpu(pqr_state.default_closid, cpu), closid);
+	WRITE_ONCE(per_cpu(pqr_state.default_rmid, cpu), rmid);
 }
 
 static inline void resctrl_arch_set_closid_rmid(struct task_struct *tsk,
