@@ -4,9 +4,10 @@
 
 #ifdef CONFIG_X86_CPU_RESCTRL
 
+#include <linux/bug.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/jump_label.h>
+#include <linux/sched.h>
 
 #define IA32_PQR_ASSOC	0x0c8f
 
@@ -141,6 +142,26 @@ static inline int resctrl_arch_mon_ctx_alloc(struct rdt_resource *r, int evtid)
 };
 static inline void resctrl_arch_mon_ctx_free(struct rdt_resource *r, int evtid,
 					     int ctx) { };
+
+static inline void resctrl_arch_enable_alloc(void)
+{
+	static_branch_enable_cpuslocked(&rdt_alloc_enable_key);
+}
+
+static inline void resctrl_arch_disable_alloc(void)
+{
+	static_branch_disable_cpuslocked(&rdt_alloc_enable_key);
+}
+
+static inline void resctrl_arch_enable_mon(void)
+{
+	static_branch_enable_cpuslocked(&rdt_mon_enable_key);
+}
+
+static inline void resctrl_arch_disable_mon(void)
+{
+	static_branch_disable_cpuslocked(&rdt_mon_enable_key);
+}
 
 void resctrl_cpu_detect(struct cpuinfo_x86 *c);
 
