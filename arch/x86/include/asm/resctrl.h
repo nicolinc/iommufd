@@ -35,6 +35,9 @@ struct resctrl_pqr_state {
 
 DECLARE_PER_CPU(struct resctrl_pqr_state, pqr_state);
 
+extern bool rdt_alloc_capable;
+extern bool rdt_mon_capable;
+
 DECLARE_STATIC_KEY_FALSE(rdt_enable_key);
 DECLARE_STATIC_KEY_FALSE(rdt_alloc_enable_key);
 DECLARE_STATIC_KEY_FALSE(rdt_mon_enable_key);
@@ -143,6 +146,11 @@ static inline int resctrl_arch_mon_ctx_alloc(struct rdt_resource *r, int evtid)
 static inline void resctrl_arch_mon_ctx_free(struct rdt_resource *r, int evtid,
 					     int ctx) { };
 
+static inline bool resctrl_arch_alloc_capable(void)
+{
+	return rdt_alloc_capable;
+}
+
 static inline void resctrl_arch_enable_alloc(void)
 {
 	static_branch_enable_cpuslocked(&rdt_alloc_enable_key);
@@ -153,6 +161,11 @@ static inline void resctrl_arch_disable_alloc(void)
 {
 	static_branch_disable_cpuslocked(&rdt_alloc_enable_key);
 	static_branch_dec_cpuslocked(&rdt_enable_key);
+}
+
+static inline bool resctrl_arch_mon_capable(void)
+{
+	return rdt_mon_capable;
 }
 
 static inline void resctrl_arch_enable_mon(void)
