@@ -92,6 +92,12 @@ config IOMMU_DEBUGFS
 	  debug/iommu directory, and then populate a subdirectory with
 	  entries as required.
 
+config IOMMU_BENCHMARK
+	bool "IOMMU Benchmark Test"
+	depends on IOMMU_DEBUGFS
+	help
+	  Enable IOMMU map and unmap Benchmark test
+
 choice
 	prompt "IOMMU default domain type"
 	depends on IOMMU_API

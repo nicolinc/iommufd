@@ -47,5 +47,8 @@ void iommu_debugfs_setup(void)
 		pr_warn("**                                                         **\n");
 		pr_warn("**     NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE    **\n");
 		pr_warn("*************************************************************\n");
+#ifdef CONFIG_IOMMU_BENCHMARK
+		iommu_benchmark_init(iommu_debugfs_dir);
+#endif
 	}
 }

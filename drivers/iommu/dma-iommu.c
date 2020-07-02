@@ -1595,6 +1595,9 @@ void iommu_setup_dma_ops(struct device *dev, u64 dma_base, u64 dma_limit)
 		if (iommu_dma_init_domain(domain, dma_base, dma_limit, dev))
 			goto out_err;
 		dev->dma_ops = &iommu_dma_ops;
+#ifdef CONFIG_IOMMU_BENCHMARK
+		iommu_benchmark_add_dev(dev);
+#endif
 	}
 
 	return;
