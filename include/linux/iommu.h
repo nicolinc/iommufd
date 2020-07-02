@@ -1134,6 +1134,12 @@ void iommu_debugfs_setup(void);
 static inline void iommu_debugfs_setup(void) {}
 #endif
 
+#ifdef CONFIG_IOMMU_BENCHMARK
+void iommu_benchmark_init(struct device *dev);
+#else
+static inline void iommu_benchmark_init(struct device *dev) {}
+#endif
+
 #ifdef CONFIG_IOMMU_DMA
 #include <linux/msi.h>
 

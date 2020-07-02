@@ -2025,6 +2025,9 @@ static int __iommu_attach_device(struct iommu_domain *domain,
 		return ret;
 	dev->iommu->attach_deferred = 0;
 	trace_attach_device_to_domain(dev);
+#ifdef CONFIG_IOMMU_BENCHMARK
+	iommu_benchmark_init(dev);
+#endif
 	return 0;
 }
 
