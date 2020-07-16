@@ -1834,8 +1834,9 @@
 		interrupt-names = "stall", "nonstall";
 
 		clocks = <&bpmp TEGRA186_CLK_GPCCLK>,
-			 <&bpmp TEGRA186_CLK_GPU>;
-		clock-names = "gpu", "pwr";
+			 <&bpmp TEGRA186_CLK_GPU>,
+			 <&bpmp TEGRA186_CLK_FUSE>;
+		clock-names = "gpu", "pwr", "fuse";
 		resets = <&bpmp TEGRA186_RESET_GPU>;
 		reset-names = "gpu";
 		status = "disabled";
