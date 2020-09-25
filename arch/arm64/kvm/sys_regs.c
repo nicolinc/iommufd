@@ -1080,6 +1080,7 @@ static u64 read_id_reg(const struct kvm_vcpu *vcpu,
 			val &= ~ARM64_FEATURE_MASK(ID_AA64PFR0_SVE);
 		val &= ~ARM64_FEATURE_MASK(ID_AA64PFR0_AMU);
 		val &= ~ARM64_FEATURE_MASK(ID_AA64PFR0_CSV2);
+		val &= ~ARM64_FEATURE_MASK(ID_AA64PFR0_MPAM);
 		val |= FIELD_PREP(ARM64_FEATURE_MASK(ID_AA64PFR0_CSV2), (u64)vcpu->kvm->arch.pfr0_csv2);
 		val &= ~ARM64_FEATURE_MASK(ID_AA64PFR0_CSV3);
 		val |= FIELD_PREP(ARM64_FEATURE_MASK(ID_AA64PFR0_CSV3), (u64)vcpu->kvm->arch.pfr0_csv3);
