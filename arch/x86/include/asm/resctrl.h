@@ -4,6 +4,7 @@
 
 #ifdef CONFIG_X86_CPU_RESCTRL
 
+#include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/jump_label.h>
 
@@ -130,6 +131,16 @@ static inline u32 resctrl_arch_rmid_idx_encode(u32 closid, u32 rmid)
 {
 	return rmid;
 }
+
+/* x86 can always read an rmid, nothing needs allocating */
+struct rdt_resource;
+static inline int resctrl_arch_mon_ctx_alloc(struct rdt_resource *r, int evtid)
+{
+	might_sleep();
+	return 0;
+};
+static inline void resctrl_arch_mon_ctx_free(struct rdt_resource *r, int evtid,
+					     int ctx) { };
 
 void resctrl_cpu_detect(struct cpuinfo_x86 *c);
 
