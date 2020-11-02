@@ -748,9 +748,33 @@ void arm_smmu_tlb_inv_asid(struct arm_smmu_device *smmu, u16 asid);
 void arm_smmu_tlb_inv_range_asid(unsigned long iova, size_t size, int asid,
 				 size_t granule, bool leaf,
 				 struct arm_smmu_domain *smmu_domain);
+void __arm_smmu_tlb_inv_range(struct arm_smmu_cmdq_ent *cmd,
+			      unsigned long iova, size_t size,
+			      size_t granule,
+			      struct arm_smmu_domain *smmu_domain);
 bool arm_smmu_free_asid(struct arm_smmu_ctx_desc *cd);
 int arm_smmu_atc_inv_domain(struct arm_smmu_domain *smmu_domain, int ssid,
 			    unsigned long iova, size_t size);
+void arm_smmu_sync_cd(struct arm_smmu_domain *smmu_domain, int ssid, bool leaf);
+int arm_smmu_cmdq_issue_cmd_with_sync(struct arm_smmu_device *smmu,
+				      struct arm_smmu_cmdq_ent *ent);
+
+struct iommu_domain *arm_smmu_domain_alloc(unsigned type);
+int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev);
+void arm_smmu_domain_free(struct iommu_domain *domain);
+
+#ifdef CONFIG_IOMMUFD
+struct iommu_domain *
+arm_smmu_nested_domain_alloc(struct iommu_domain *s2_domain,
+			     const void *user_data);
+#else
+static inline struct iommu_domain *
+arm_smmu_nested_domain_alloc(struct iommu_domain *s2_domain,
+			     const void *user_data)
+{
+	return NULL;
+}
+#endif
 
 #ifdef CONFIG_ARM_SMMU_V3_SVA
 bool arm_smmu_sva_supported(struct arm_smmu_device *smmu);
