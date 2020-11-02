@@ -1010,6 +1010,10 @@ static void arm_smmu_write_cd_l1_desc(__le64 *dst,
 	WRITE_ONCE(*dst, cpu_to_le64(val));
 }
 
+/*
+ * Must not be used in case of nested mode where the CD table is owned
+ * by the guest
+ */
 static __le64 *arm_smmu_get_cd_ptr(struct arm_smmu_domain *smmu_domain,
 				   u32 ssid)
 {
@@ -2074,6 +2078,7 @@ static struct iommu_domain *arm_smmu_domain_alloc(unsigned type)
 	if (type != IOMMU_DOMAIN_UNMANAGED &&
 	    type != IOMMU_DOMAIN_DMA &&
 	    type != IOMMU_DOMAIN_DMA_FQ &&
+	    type != IOMMU_DOMAIN_NESTING &&
 	    type != IOMMU_DOMAIN_IDENTITY)
 		return NULL;
 
@@ -2844,6 +2849,106 @@ static void arm_smmu_get_resv_regions(struct device *dev,
 	iommu_dma_get_resv_regions(dev, head);
 }
 
+static int arm_smmu_attach_dev_pasid(struct iommu_domain *domain,
+				     struct device *dev, ioasid_t pasid)
+{
+	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+	struct arm_smmu_device *smmu = smmu_domain->smmu;
+
+	if (!smmu || !master)
+		return -EINVAL;
+
+	mutex_lock(&smmu_domain->init_mutex);
+
+	if (smmu_domain->stage != ARM_SMMU_DOMAIN_NESTED) {
+		mutex_unlock(&smmu_domain->init_mutex);
+		return -EINVAL;
+	}
+
+	arm_smmu_install_ste_for_dev(master);
+
+	mutex_unlock(&smmu_domain->init_mutex);
+
+	return 0;
+}
+
+static void arm_smmu_detach_dev_pasid(struct iommu_domain *domain,
+				      struct device *dev, ioasid_t pasid)
+{
+	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+	struct arm_smmu_device *smmu = smmu_domain->smmu;
+
+	if (!smmu || !master)
+		return;
+
+	mutex_lock(&smmu_domain->init_mutex);
+
+	if (smmu_domain->stage != ARM_SMMU_DOMAIN_NESTED) {
+		mutex_unlock(&smmu_domain->init_mutex);
+		return;
+	}
+
+	smmu_domain->s1_cfg.set = false;
+	smmu_domain->abort = false;
+	arm_smmu_install_ste_for_dev(master);
+
+	mutex_unlock(&smmu_domain->init_mutex);
+}
+
+struct iommu_domain *arm_smmu_nested_domain_alloc(struct iommu_domain *s2_domain,
+						  unsigned long s1_pgtbl,
+						  union iommu_stage1_config *cfg)
+{
+	struct iommu_stage1_config_smmu *smmu = &cfg->smmu;
+	struct arm_smmu_domain *smmu_domain;
+	struct iommu_domain *domain;
+
+	if (smmu->format != IOMMU_SMMU_FORMAT_SMMUV3)
+		return NULL;
+
+	if (smmu->config != IOMMU_SMMU_CONFIG_ABORT &&
+	    smmu->config != IOMMU_SMMU_CONFIG_BYPASS &&
+	    smmu->config != IOMMU_SMMU_CONFIG_TRANSLATE)
+		return NULL;
+
+	smmu_domain = to_smmu_domain(s2_domain);
+	domain = s2_domain;
+
+	mutex_lock(&smmu_domain->init_mutex);
+
+	if (smmu_domain->stage != ARM_SMMU_DOMAIN_NESTED) {
+		domain = NULL;
+		goto unlock;
+	}
+
+	switch (smmu->config) {
+	case IOMMU_SMMU_CONFIG_ABORT:
+		smmu_domain->s1_cfg.set = false;
+		smmu_domain->abort = true;
+		break;
+	case IOMMU_SMMU_CONFIG_BYPASS:
+		smmu_domain->s1_cfg.set = false;
+		smmu_domain->abort = false;
+		break;
+	case IOMMU_SMMU_CONFIG_TRANSLATE:
+		smmu_domain->s1_cfg.cdcfg.cdtab_dma = s1_pgtbl;
+		smmu_domain->s1_cfg.s1cdmax = smmu->s1cdmax;
+		smmu_domain->s1_cfg.s1fmt = smmu->s1fmt;
+		smmu_domain->s1_cfg.set = true;
+		smmu_domain->abort = false;
+		break;
+	default:
+		break;
+	}
+
+unlock:
+	mutex_unlock(&smmu_domain->init_mutex);
+
+	return domain;
+}
+
 static bool arm_smmu_dev_has_feature(struct device *dev,
 				     enum iommu_dev_features feat)
 {
@@ -2926,6 +3031,7 @@ static int arm_smmu_dev_disable_feature(struct device *dev,
 static struct iommu_ops arm_smmu_ops = {
 	.capable		= arm_smmu_capable,
 	.domain_alloc		= arm_smmu_domain_alloc,
+	.nested_domain_alloc	= arm_smmu_nested_domain_alloc,
 	.probe_device		= arm_smmu_probe_device,
 	.release_device		= arm_smmu_release_device,
 	.device_group		= arm_smmu_device_group,
@@ -2941,6 +3047,8 @@ static struct iommu_ops arm_smmu_ops = {
 	.owner			= THIS_MODULE,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
 		.attach_dev		= arm_smmu_attach_dev,
+		.attach_dev_pasid	= arm_smmu_attach_dev_pasid,
+		.detach_dev_pasid	= arm_smmu_detach_dev_pasid,
 		.map_pages		= arm_smmu_map_pages,
 		.unmap_pages		= arm_smmu_unmap_pages,
 		.flush_iotlb_all	= arm_smmu_flush_iotlb_all,
