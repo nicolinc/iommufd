@@ -1010,6 +1010,10 @@ static void arm_smmu_write_cd_l1_desc(__le64 *dst,
 	WRITE_ONCE(*dst, cpu_to_le64(val));
 }
 
+/*
+ * Must not be used in case of nested mode where the CD table is owned
+ * by the guest
+ */
 static __le64 *arm_smmu_get_cd_ptr(struct arm_smmu_domain *smmu_domain,
 				   u32 ssid)
 {
@@ -2022,6 +2026,7 @@ static struct iommu_domain *arm_smmu_domain_alloc(unsigned type)
 	if (type != IOMMU_DOMAIN_UNMANAGED &&
 	    type != IOMMU_DOMAIN_DMA &&
 	    type != IOMMU_DOMAIN_DMA_FQ &&
+	    type != IOMMU_DOMAIN_NESTING &&
 	    type != IOMMU_DOMAIN_IDENTITY)
 		return NULL;
 
@@ -2195,6 +2200,12 @@ static int arm_smmu_domain_finalise(struct iommu_domain *domain,
 	     !(smmu->features & ARM_SMMU_FEAT_TRANS_S2))) {
 		dev_info(smmu_domain->smmu->dev,
 			 "does not implement two stages\n");
+		return -EINVAL;
+	}
+
+	if (domain->type == IOMMU_DOMAIN_NESTING && !smmu_domain->s2) {
+		dev_err(smmu_domain->smmu->dev,
+			"does not have stage-2 domain\n");
 		return -EINVAL;
 	}
 
@@ -2793,6 +2804,92 @@ static void arm_smmu_get_resv_regions(struct device *dev,
 	iommu_dma_get_resv_regions(dev, head);
 }
 
+struct iommu_domain *
+arm_smmu_domain_alloc_user(struct device *dev, struct iommu_domain *s2_domain,
+			   void *user_data, unsigned iommu_domain_type)
+{
+	struct iommu_hwpt_arm_smmuv3 *user = user_data;
+	bool stage2 = user->flags & IOMMU_SMMU_FLAG_S2;
+	struct arm_smmu_domain *s2, *smmu_domain;
+	struct iommu_domain *domain;
+
+	if (user && user->format != IOMMU_SMMU_FORMAT_SMMUV3)
+		return NULL;
+
+	if (iommu_domain_type != IOMMU_DOMAIN_NESTING &&
+	    iommu_domain_type != IOMMU_DOMAIN_UNMANAGED)
+		return NULL;
+
+	if (iommu_domain_type & IOMMU_DOMAIN_UNMANAGED) {
+		domain = arm_smmu_domain_alloc(iommu_domain_type);
+		if (!domain)
+			return NULL;
+		domain->ops = arm_smmu_ops.default_domain_ops;
+		domain->geometry.aperture_end = ULONG_MAX;
+
+		smmu_domain = to_smmu_domain(domain);
+		mutex_lock(&smmu_domain->init_mutex);
+		if (stage2)
+			smmu_domain->stage = ARM_SMMU_DOMAIN_S2;
+		mutex_unlock(&smmu_domain->init_mutex);
+
+		return domain;
+	}
+
+	/* Nesting (stage-1) domain */
+
+	if (!user || !s2_domain || stage2)
+		return NULL;
+
+	s2 = to_smmu_domain(s2_domain);
+
+	mutex_lock(&s2->init_mutex);
+	if (s2->stage != ARM_SMMU_DOMAIN_S2) {
+		mutex_unlock(&s2->init_mutex);
+		return NULL;
+	}
+	mutex_unlock(&s2->init_mutex);
+
+	if (user->config != IOMMU_SMMU_CONFIG_ABORT &&
+	    user->config != IOMMU_SMMU_CONFIG_BYPASS &&
+	    user->config != IOMMU_SMMU_CONFIG_TRANSLATE)
+		return NULL;
+
+	domain = arm_smmu_domain_alloc(IOMMU_DOMAIN_NESTING);
+	if (!domain)
+		return NULL;
+	domain->ops = arm_smmu_ops.default_domain_ops;
+
+	smmu_domain = to_smmu_domain(domain);
+	mutex_lock(&smmu_domain->init_mutex);
+
+	smmu_domain->s2 = s2;
+
+	switch (user->config) {
+	case IOMMU_SMMU_CONFIG_ABORT:
+		smmu_domain->bypass = false;
+		smmu_domain->abort = true;
+		break;
+	case IOMMU_SMMU_CONFIG_BYPASS:
+		smmu_domain->bypass = true;
+		smmu_domain->abort = false;
+		break;
+	case IOMMU_SMMU_CONFIG_TRANSLATE:
+		smmu_domain->s1_cfg.cdcfg.cdtab_dma = user->s1ctxptr;
+		smmu_domain->s1_cfg.s1cdmax = user->s1cdmax;
+		smmu_domain->s1_cfg.s1fmt = user->s1fmt;
+		smmu_domain->bypass = false;
+		smmu_domain->abort = false;
+		break;
+	default:
+		break;
+	}
+
+	mutex_unlock(&smmu_domain->init_mutex);
+
+	return domain;
+}
+
 static int arm_smmu_dev_enable_feature(struct device *dev,
 				       enum iommu_dev_features feat)
 {
@@ -2848,6 +2945,7 @@ static int arm_smmu_dev_disable_feature(struct device *dev,
 static struct iommu_ops arm_smmu_ops = {
 	.capable		= arm_smmu_capable,
 	.domain_alloc		= arm_smmu_domain_alloc,
+	.domain_alloc_user	= arm_smmu_domain_alloc_user,
 	.probe_device		= arm_smmu_probe_device,
 	.release_device		= arm_smmu_release_device,
 	.device_group		= arm_smmu_device_group,
