@@ -2950,6 +2950,86 @@ static struct iommu_domain *arm_smmu_get_msi_domain(struct device *dev)
 	return &smmu_domain->domain;
 }
 
+static int arm_smmu_cache_invalidate(struct iommu_domain *domain,
+				     struct iommu_cache_invalidate_info *inv)
+{
+	struct arm_smmu_cmdq_ent cmd = {.opcode = CMDQ_OP_TLBI_NSNH_ALL};
+	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+	struct arm_smmu_device *smmu = smmu_domain->smmu;
+
+	if (domain->type != IOMMU_DOMAIN_NESTING || !smmu_domain->s2)
+		return -EINVAL;
+
+	if (!smmu)
+		return -EINVAL;
+
+	if (inv->version != IOMMU_CACHE_INVALIDATE_INFO_VERSION_1)
+		return -EINVAL;
+
+	if (inv->cache & IOMMU_CACHE_INV_TYPE_DEV_IOTLB)
+		return -ENOENT;
+
+	/* IOTLB invalidation */
+
+	switch (inv->granularity) {
+	case IOMMU_INV_GRANU_PASID:
+	{
+		struct iommu_inv_pasid_info *info = &inv->granu.pasid_info;
+
+		if (inv->cache & IOMMU_CACHE_INV_TYPE_IOTLB) {
+			if (!(info->flags & IOMMU_INV_PASID_FLAGS_ARCHID))
+				return -EINVAL;
+
+			__arm_smmu_tlb_inv_context(smmu_domain, info->archid);
+		} else {
+			if (!(info->flags & IOMMU_INV_PASID_FLAGS_PASID))
+				return -EINVAL;
+
+			arm_smmu_sync_cd(smmu_domain, info->pasid, true);
+		}
+		return 0;
+	}
+	case IOMMU_INV_GRANU_ADDR:
+	{
+		struct iommu_inv_addr_info *info = &inv->granu.addr_info;
+		uint64_t granule_size  = info->granule_size;
+		uint64_t size = info->nb_granules * info->granule_size;
+		bool leaf = info->flags & IOMMU_INV_ADDR_FLAGS_LEAF;
+		int tg;
+
+		if (info->flags & IOMMU_INV_ADDR_FLAGS_PASID)
+			return -ENOENT;
+
+		if (!(info->flags & IOMMU_INV_ADDR_FLAGS_ARCHID))
+			break;
+
+		tg = __ffs(granule_size);
+		if (!granule_size || granule_size & ~(1ULL << tg) ||
+		    !(granule_size & smmu->pgsize_bitmap))
+			return -EINVAL;
+
+		/* range invalidation must be used */
+		if (!size)
+			return -EINVAL;
+
+		arm_smmu_tlb_inv_range_domain(info->addr, size,
+					      granule_size, leaf,
+					      info->archid, smmu_domain);
+		return 0;
+	}
+	case IOMMU_INV_GRANU_DOMAIN:
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	/* Global S1 invalidation */
+	cmd.tlbi.vmid = smmu_domain->s2->s2_cfg.vmid;
+	arm_smmu_cmdq_issue_cmd_with_sync(smmu, &cmd);
+
+	return 0;
+}
+
 static bool arm_smmu_dev_has_feature(struct device *dev,
 				     enum iommu_dev_features feat)
 {
@@ -3049,6 +3129,7 @@ static struct iommu_ops arm_smmu_ops = {
 	.owner			= THIS_MODULE,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
 		.attach_dev		= arm_smmu_attach_dev,
+		.cache_invalidate	= arm_smmu_cache_invalidate,
 		.map_pages		= arm_smmu_map_pages,
 		.unmap_pages		= arm_smmu_unmap_pages,
 		.flush_iotlb_all	= arm_smmu_flush_iotlb_all,
