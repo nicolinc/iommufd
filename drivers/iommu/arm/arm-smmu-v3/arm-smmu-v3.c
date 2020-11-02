@@ -26,6 +26,7 @@
 #include <linux/pci.h>
 #include <linux/pci-ats.h>
 #include <linux/platform_device.h>
+#include <uapi/linux/iommufd.h>
 
 #include "arm-smmu-v3.h"
 #include "../../dma-iommu.h"
@@ -888,8 +889,8 @@ static int arm_smmu_cmdq_issue_cmd(struct arm_smmu_device *smmu,
 	return __arm_smmu_cmdq_issue_cmd(smmu, ent, false);
 }
 
-static int arm_smmu_cmdq_issue_cmd_with_sync(struct arm_smmu_device *smmu,
-					     struct arm_smmu_cmdq_ent *ent)
+int arm_smmu_cmdq_issue_cmd_with_sync(struct arm_smmu_device *smmu,
+				      struct arm_smmu_cmdq_ent *ent)
 {
 	return __arm_smmu_cmdq_issue_cmd(smmu, ent, true);
 }
@@ -971,8 +972,7 @@ void arm_smmu_tlb_inv_asid(struct arm_smmu_device *smmu, u16 asid)
 	arm_smmu_cmdq_issue_cmd_with_sync(smmu, &cmd);
 }
 
-static void arm_smmu_sync_cd(struct arm_smmu_domain *smmu_domain,
-			     int ssid, bool leaf)
+void arm_smmu_sync_cd(struct arm_smmu_domain *smmu_domain, int ssid, bool leaf)
 {
 	size_t i;
 	unsigned long flags;
@@ -1026,6 +1026,10 @@ static void arm_smmu_write_cd_l1_desc(__le64 *dst,
 	WRITE_ONCE(*dst, cpu_to_le64(val));
 }
 
+/*
+ * Must not be used in case of nested mode where the CD table is owned
+ * by the guest
+ */
 static __le64 *arm_smmu_get_cd_ptr(struct arm_smmu_domain *smmu_domain,
 				   u32 ssid)
 {
@@ -1887,10 +1891,10 @@ static void arm_smmu_tlb_inv_context(void *cookie)
 	arm_smmu_atc_inv_domain(smmu_domain, 0, 0, 0);
 }
 
-static void __arm_smmu_tlb_inv_range(struct arm_smmu_cmdq_ent *cmd,
-				     unsigned long iova, size_t size,
-				     size_t granule,
-				     struct arm_smmu_domain *smmu_domain)
+void __arm_smmu_tlb_inv_range(struct arm_smmu_cmdq_ent *cmd,
+			      unsigned long iova, size_t size,
+			      size_t granule,
+			      struct arm_smmu_domain *smmu_domain)
 {
 	struct arm_smmu_device *smmu = smmu_domain->smmu;
 	unsigned long end = iova + size, num_pages = 0, tg = 0;
@@ -2053,7 +2057,7 @@ static void *arm_smmu_hw_info(struct device *dev, u32 *length)
 	return info;
 }
 
-static struct iommu_domain *arm_smmu_domain_alloc(unsigned type)
+struct iommu_domain *arm_smmu_domain_alloc(unsigned type)
 {
 	struct arm_smmu_domain *smmu_domain;
 
@@ -2061,6 +2065,7 @@ static struct iommu_domain *arm_smmu_domain_alloc(unsigned type)
 		return arm_smmu_sva_domain_alloc();
 
 	if (type != IOMMU_DOMAIN_UNMANAGED &&
+	    type != IOMMU_DOMAIN_NESTED &&
 	    type != IOMMU_DOMAIN_DMA &&
 	    type != IOMMU_DOMAIN_DMA_FQ &&
 	    type != IOMMU_DOMAIN_IDENTITY)
@@ -2081,6 +2086,33 @@ static struct iommu_domain *arm_smmu_domain_alloc(unsigned type)
 	INIT_LIST_HEAD(&smmu_domain->mmu_notifiers);
 
 	return &smmu_domain->domain;
+}
+
+static struct iommu_domain *
+arm_smmu_domain_alloc_user(struct device *dev, struct iommu_domain *parent,
+			   const void *user_data)
+{
+	const struct iommu_hwpt_arm_smmuv3 *alloc = user_data;
+	struct iommu_domain *domain;
+
+	if (parent)
+		return arm_smmu_nested_domain_alloc(parent, user_data);
+
+	/* Allocate a plain unmanaged domain, unless... */
+	domain = iommu_domain_alloc(dev->bus);
+	if (!domain)
+		return NULL;
+
+	/* ...the nested stage-2 flag is set */
+	if (alloc && alloc->flags & IOMMU_SMMUV3_FLAG_S2) {
+		struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+
+		mutex_lock(&smmu_domain->init_mutex);
+		smmu_domain->stage = ARM_SMMU_DOMAIN_S2;
+		mutex_unlock(&smmu_domain->init_mutex);
+	}
+
+	return domain;
 }
 
 static struct iommu_domain *arm_smmu_get_msi_domain(struct device *dev)
@@ -2112,7 +2144,7 @@ static void arm_smmu_bitmap_free(unsigned long *map, int idx)
 	clear_bit(idx, map);
 }
 
-static void arm_smmu_domain_free(struct iommu_domain *domain)
+void arm_smmu_domain_free(struct iommu_domain *domain)
 {
 	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
 	struct arm_smmu_device *smmu = smmu_domain->smmu;
@@ -2239,6 +2271,26 @@ static int arm_smmu_domain_finalise(struct iommu_domain *domain,
 
 	if (domain->type == IOMMU_DOMAIN_IDENTITY) {
 		smmu_domain->stage = ARM_SMMU_DOMAIN_BYPASS;
+		return 0;
+	}
+
+	if (domain->type == IOMMU_DOMAIN_NESTED) {
+		if (!(smmu->features & ARM_SMMU_FEAT_TRANS_S1) ||
+		    !(smmu->features & ARM_SMMU_FEAT_TRANS_S2)) {
+			dev_dbg(smmu_domain->smmu->dev,
+				"does not implement two stages\n");
+			return -EINVAL;
+		}
+		if (!smmu_domain->s2) {
+			dev_dbg(smmu_domain->smmu->dev,
+				"does not have stage-2 domain\n");
+			return -EINVAL;
+		}
+
+		/*
+		 * A nested domain is maintained by a guest OS,
+		 * so no need to finalise anything here.
+		 */
 		return 0;
 	}
 
@@ -2454,7 +2506,7 @@ static void arm_smmu_detach_dev(struct arm_smmu_master *master)
 	arm_smmu_install_ste_for_dev(master);
 }
 
-static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
+int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 {
 	int ret = 0;
 	unsigned long flags;
@@ -2891,6 +2943,7 @@ static struct iommu_ops arm_smmu_ops = {
 	.capable		= arm_smmu_capable,
 	.hw_info		= arm_smmu_hw_info,
 	.domain_alloc		= arm_smmu_domain_alloc,
+	.domain_alloc_user	= arm_smmu_domain_alloc_user,
 	.get_msi_domain		= arm_smmu_get_msi_domain,
 	.probe_device		= arm_smmu_probe_device,
 	.release_device		= arm_smmu_release_device,
