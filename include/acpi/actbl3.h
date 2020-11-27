@@ -24,6 +24,7 @@
  * file. Useful because they make it more difficult to inadvertently type in
  * the wrong signature.
  */
+#define ACPI_SIG_MPAM           "MPAM"	/* Memory Partitioning And Monitoring Table */
 #define ACPI_SIG_SLIC           "SLIC"	/* Software Licensing Description Table */
 #define ACPI_SIG_SLIT           "SLIT"	/* System Locality Distance Information Table */
 #define ACPI_SIG_SPCR           "SPCR"	/* Serial Port Console Redirection table */
@@ -60,6 +61,68 @@
  * and stuck with it." Norman Ramsey.
  * See http://stackoverflow.com/a/1053662/41661
  */
+
+/*******************************************************************************
+ *
+ * MPAM - Memory Partitioning and Monitoring Table
+ *        Version 1
+ *
+  ******************************************************************************/
+/* Values for acpi_table_mpam_msc_res.component_type */
+#define ACPI_MPAM_LOCATION_TYPE_PROCESSOR_CACHE 0x00
+#define ACPI_MPAM_LOCATION_TYPE_MEMORY          0x01
+#define ACPI_MPAM_LOCATION_TYPE_SMMU            0x02
+#define ACPI_MPAM_LOCATION_TYPE_MEMORY_CACHE    0x03
+#define ACPI_MPAM_LOCATION_TYPE_ACPI_DEVICE     0x04
+
+struct acpi_table_mpam_dependency {
+	u32				producer;
+	u32				reserved;
+};
+
+struct acpi_table_mpam_msc_res {
+	u32				identifier;
+	u8				ris_index;
+	u16				reserved1;
+	u8				locator_type;
+	u64				locator1;
+	u32				locator2;
+	u32				num_dependencies;
+	struct acpi_table_mpam_dependency dependency_list[];
+};
+
+/* Flags for acpi_table_mpam_msc.*_interrupt_flags */
+#define ACPI_MPAM_MSC_IRQ_MODE_EDGE			1
+#define ACPI_MPAM_MSC_IRQ_TYPE_MASK			(3<<1)
+#define ACPI_MPAM_MSC_IRQ_TYPE_WIRED			0
+#define ACPI_MPAM_MSC_IRQ_AFFINITY_PROCESSOR_CONTAINER	(1<<3)
+
+struct acpi_table_mpam_msc {
+	u16				length;
+	u16				reserved;
+	u32				identifier;
+	u64				base_address;
+	u32				mmio_size;
+	u32				overflow_interrupt;
+	u32				overflow_interrupt_flags;
+	u32				reserved1;
+	u32				overflow_interrupt_affinity;
+	u32				error_interrupt;
+	u32				error_interrupt_flags;
+	u32				reserved2;
+	u32				error_interrupt_affinity;
+	u32				max_nrdy_usec;
+	u64				pm_link_hid;
+	u32				pm_link_uid;
+	u32				num_mpam_resources;
+	struct acpi_table_mpam_msc_res	resources[0];
+};
+
+struct acpi_table_mpam {
+	struct acpi_table_header	header;
+	struct acpi_table_mpam_msc	nodes[0];
+};
+
 
 /*******************************************************************************
  *
