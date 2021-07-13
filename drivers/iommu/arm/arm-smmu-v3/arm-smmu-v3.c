@@ -334,6 +334,9 @@ static int arm_smmu_cmdq_build_cmd(u64 *cmd, struct arm_smmu_cmdq_ent *ent)
 
 static struct arm_smmu_cmdq *arm_smmu_get_cmdq(struct arm_smmu_device *smmu)
 {
+	if (arm_smmu_has_tegra241_cmdqv(smmu))
+		return tegra241_cmdqv_get_cmdq(smmu);
+
 	return &smmu->cmdq;
 }
 
@@ -3591,6 +3594,15 @@ static int arm_smmu_device_reset(struct arm_smmu_device *smmu)
 		return ret;
 	}
 
+	if (arm_smmu_has_tegra241_cmdqv(smmu)) {
+		ret = tegra241_cmdqv_device_reset(smmu);
+		if (ret) {
+			dev_warn(smmu->dev,
+				 "tegra241_cmdqv: falling back to cmdq\n");
+			tegra241_cmdqv_device_remove(smmu);
+		}
+	}
+
 	/* Invalidate any cached configuration */
 	cmd.opcode = CMDQ_OP_CFGI_ALL;
 	arm_smmu_cmdq_issue_cmd_with_sync(smmu, &cmd);
@@ -3959,6 +3971,8 @@ static int arm_smmu_device_acpi_probe(struct platform_device *pdev,
 	if (iort_smmu->flags & ACPI_IORT_SMMU_V3_COHACC_OVERRIDE)
 		smmu->features |= ARM_SMMU_FEAT_COHERENCY;
 
+	smmu->tegra241_cmdqv = tegra241_cmdqv_acpi_probe(smmu, node);
+
 	return 0;
 }
 #else
@@ -4063,11 +4077,14 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 
 	/* Base address */
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!res)
-		return -EINVAL;
+	if (!res) {
+		ret = -EINVAL;
+		goto out;
+	}
 	if (resource_size(res) < arm_smmu_resource_size(smmu)) {
 		dev_err(dev, "MMIO region too small (%pr)\n", res);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out;
 	}
 	ioaddr = res->start;
 
@@ -4076,14 +4093,18 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 	 * the PMCG registers which are reserved by the PMU driver.
 	 */
 	smmu->base = arm_smmu_ioremap(dev, ioaddr, ARM_SMMU_REG_SZ);
-	if (IS_ERR(smmu->base))
-		return PTR_ERR(smmu->base);
+	if (IS_ERR(smmu->base)) {
+		ret = PTR_ERR(smmu->base);
+		goto out;
+	}
 
 	if (arm_smmu_resource_size(smmu) > SZ_64K) {
 		smmu->page1 = arm_smmu_ioremap(dev, ioaddr + SZ_64K,
 					       ARM_SMMU_REG_SZ);
-		if (IS_ERR(smmu->page1))
-			return PTR_ERR(smmu->page1);
+		if (IS_ERR(smmu->page1)) {
+			ret = PTR_ERR(smmu->page1);
+			goto out;
+		}
 	} else {
 		smmu->page1 = smmu->base;
 	}
@@ -4109,12 +4130,12 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 	/* Probe the h/w */
 	ret = arm_smmu_device_hw_probe(smmu);
 	if (ret)
-		return ret;
+		goto out;
 
 	/* Initialise in-memory data structures */
 	ret = arm_smmu_init_structures(smmu);
 	if (ret)
-		return ret;
+		goto out;
 
 	/* Record our private device structure */
 	platform_set_drvdata(pdev, smmu);
@@ -4125,28 +4146,35 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 	/* Reset the device */
 	ret = arm_smmu_device_reset(smmu);
 	if (ret)
-		return ret;
+		goto out;
 
 	/* And we're up. Go go go! */
 	ret = iommu_device_sysfs_add(&smmu->iommu, dev, NULL,
 				     "smmu3.%pa", &ioaddr);
 	if (ret)
-		return ret;
+		goto out;
 
 	ret = iommu_device_register(&smmu->iommu, &arm_smmu_ops, dev);
 	if (ret) {
 		dev_err(dev, "Failed to register iommu\n");
 		iommu_device_sysfs_remove(&smmu->iommu);
-		return ret;
+		goto out;
 	}
 
 	return 0;
+
+out:
+	if (arm_smmu_has_tegra241_cmdqv(smmu))
+		tegra241_cmdqv_device_remove(smmu);
+	return ret;
 }
 
 static void arm_smmu_device_remove(struct platform_device *pdev)
 {
 	struct arm_smmu_device *smmu = platform_get_drvdata(pdev);
 
+	if (arm_smmu_has_tegra241_cmdqv(smmu))
+		tegra241_cmdqv_device_remove(smmu);
 	iommu_device_unregister(&smmu->iommu);
 	iommu_device_sysfs_remove(&smmu->iommu);
 	arm_smmu_device_disable(smmu);
