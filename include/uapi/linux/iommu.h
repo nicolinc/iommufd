@@ -7,6 +7,55 @@
 #define _UAPI_IOMMU_H
 
 #include <linux/types.h>
+#include <linux/ioctl.h>
+
+/* -------- IOCTLs for IOMMU file descriptor (/dev/iommu) -------- */
+
+#define IOMMU_TYPE	(';')
+#define IOMMU_BASE	100
+
+/*
+ * IOMMU_DEVICE_GET_INFO - _IOR(IOMMU_TYPE, IOMMU_BASE + 1,
+ *				struct iommu_device_info)
+ *
+ * Check IOMMU capabilities and format information on a bound device.
+ *
+ * The device is identified by devid (returned by kernel when binding
+ * this device).
+ *
+ * @argsz:	   user filled size of this data.
+ * @flags:	   tells userspace which capability info is available
+ * @devid:	   device id
+ * @addr_width:    the address width of supported I/O address spaces.
+ * @pgsize_bitmap: Bitmap of supported page sizes. 1-setting of the
+ *		   bit in pgsize_bitmap[63:12] indicates a supported
+ *		   page size. Details as below table:
+ *
+ *		   +===============+============+
+ *		   |  Bit[index]   |  Page Size |
+ *		   +---------------+------------+
+ *		   |  12           |  4 KB      |
+ *		   +---------------+------------+
+ *		   |  13           |  8 KB      |
+ *		   +---------------+------------+
+ *		   |  14           |  16 KB     |
+ *		   +---------------+------------+
+ *		   ...
+ *
+ * Availability: after device is bound to iommufd
+ */
+struct iommu_device_info {
+	__u32		argsz;
+	__u32		flags;
+#define IOMMU_DEVICE_INFO_ENFORCE_SNOOP	(1 << 0) /* IOMMU enforced snoop */
+#define IOMMU_DEVICE_INFO_ADDR_WIDTH	(1 << 1) /* addr_wdith field valid */
+#define IOMMU_DEVICE_INFO_PGSIZES	(1 << 2) /* supported page sizes */
+	__u32		devid;
+	__u32		addr_width;
+	__aligned_u64   pgsize_bitmap;
+};
+
+#define IOMMU_DEVICE_GET_INFO	_IO(IOMMU_TYPE, IOMMU_BASE + 1)
 
 #define IOMMU_FAULT_PERM_READ	(1 << 0) /* read */
 #define IOMMU_FAULT_PERM_WRITE	(1 << 1) /* write */

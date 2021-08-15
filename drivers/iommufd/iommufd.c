@@ -92,12 +92,61 @@ static int iommufd_fops_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
+static void iommu_device_build_info(struct device *dev,
+				    struct iommu_device_info *info)
+{
+	union iommu_devattr_data attr;
+
+	if (!iommu_device_get_info(dev, IOMMU_DEV_INFO_FORCE_SNOOP, &attr))
+		info->flags |= attr.force_snoop ? IOMMU_DEVICE_INFO_ENFORCE_SNOOP : 0;
+
+	if (!iommu_device_get_info(dev, IOMMU_DEV_INFO_ADDR_WIDTH, &attr)) {
+		info->addr_width = attr.addr_width;
+		info->flags |= IOMMU_DEVICE_INFO_ADDR_WIDTH;
+	}
+
+	if (!iommu_device_get_info(dev, IOMMU_DEV_INFO_PAGE_SIZE, &attr)) {
+		info->pgsize_bitmap = attr.page_size;
+		info->flags |= IOMMU_DEVICE_INFO_PGSIZES;
+	}
+}
+
+static int iommufd_get_device_info(struct iommufd_ctx *ictx,
+				   unsigned long arg)
+{
+	struct iommu_device_info info;
+	unsigned long minsz;
+	struct iommufd_device *idev;
+
+	minsz = offsetofend(struct iommu_device_info, pgsize_bitmap);
+
+	if (copy_from_user(&info, (void __user *)arg, minsz))
+		return -EFAULT;
+
+	if (info.argsz < minsz || info.devid == IOMMUFD_INVALID_DEVID)
+		return -EINVAL;
+
+	info.flags = 0;
+
+	idev = xa_load(&ictx->device_xa, info.devid);
+	if (!idev)
+		return -EINVAL;
+
+	iommu_device_build_info(idev->dev, &info);
+
+	return copy_to_user((void __user *)arg, &info, minsz) ? -EFAULT : 0;
+}
+
 static long iommufd_fops_unl_ioctl(struct file *filp,
 				   unsigned int cmd, unsigned long arg)
 {
+	struct iommufd_ctx *ictx = filp->private_data;
 	long ret = -EINVAL;
 
 	switch (cmd) {
+	case IOMMU_DEVICE_GET_INFO:
+		ret = iommufd_get_device_info(ictx, arg);
+		break;
 	default:
 		break;
 	}
