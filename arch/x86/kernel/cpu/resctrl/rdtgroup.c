@@ -2899,6 +2899,20 @@ static int rdtgroup_init_alloc(struct rdtgroup *rdtgrp)
 	return 0;
 }
 
+static int mkdir_rdt_prepare_rmid(struct rdtgroup *rdtgrp, u32 rmid)
+{
+	int ret;
+
+	rdtgrp->mon.rmid = rmid;
+	ret = mkdir_mondata_all(rdtgrp->kn, rdtgrp, &rdtgrp->mon.mon_data_kn);
+	if (ret) {
+		rdt_last_cmd_puts("kernfs subdir error\n");
+		return ret;
+	}
+
+	return 0;
+}
+
 static int mkdir_rdt_prepare(struct kernfs_node *parent_kn,
 			     const char *name, umode_t mode,
 			     enum rdt_group_type rtype, struct rdtgroup **r)
@@ -2964,20 +2978,6 @@ static int mkdir_rdt_prepare(struct kernfs_node *parent_kn,
 		goto out_destroy;
 	}
 
-	if (rdt_mon_capable) {
-		ret = alloc_rmid();
-		if (ret < 0) {
-			rdt_last_cmd_puts("Out of RMIDs\n");
-			goto out_destroy;
-		}
-		rdtgrp->mon.rmid = ret;
-
-		ret = mkdir_mondata_all(kn, rdtgrp, &rdtgrp->mon.mon_data_kn);
-		if (ret) {
-			rdt_last_cmd_puts("kernfs subdir error\n");
-			goto out_idfree;
-		}
-	}
 	kernfs_activate(kn);
 
 	/*
@@ -2985,8 +2985,6 @@ static int mkdir_rdt_prepare(struct kernfs_node *parent_kn,
 	 */
 	return 0;
 
-out_idfree:
-	free_rmid(rdtgrp->closid, rdtgrp->mon.rmid);
 out_destroy:
 	kernfs_put(rdtgrp->kn);
 	kernfs_remove(rdtgrp->kn);
@@ -2995,13 +2993,6 @@ out_free_rgrp:
 out_unlock:
 	rdtgroup_kn_unlock(parent_kn);
 	return ret;
-}
-
-static void mkdir_rdt_prepare_clean(struct rdtgroup *rgrp)
-{
-	kernfs_remove(rgrp->kn);
-	free_rmid(rgrp->closid, rgrp->mon.rmid);
-	rdtgroup_remove(rgrp);
 }
 
 /*
@@ -3013,6 +3004,7 @@ static int rdtgroup_mkdir_mon(struct kernfs_node *parent_kn,
 			      const char *name, umode_t mode)
 {
 	struct rdtgroup *rdtgrp, *prgrp;
+	u32 rmid;
 	int ret;
 
 	ret = mkdir_rdt_prepare(parent_kn, name, mode, RDTMON_GROUP, &rdtgrp);
@@ -3022,12 +3014,35 @@ static int rdtgroup_mkdir_mon(struct kernfs_node *parent_kn,
 	prgrp = rdtgrp->mon.parent;
 	rdtgrp->closid = prgrp->closid;
 
+	if (rdt_mon_capable) {
+		ret = alloc_rmid();
+		if (ret < 0) {
+			rdt_last_cmd_puts("Out of RMIDs\n");
+			goto out_destroy;
+		}
+
+		rmid = ret;
+		ret = mkdir_rdt_prepare_rmid(rdtgrp, rmid);
+		if (ret)
+			goto out_rmid_free;
+	}
+
 	/*
 	 * Add the rdtgrp to the list of rdtgrps the parent
 	 * ctrl_mon group has to track.
 	 */
 	list_add_tail(&rdtgrp->mon.crdtgrp_list, &prgrp->mon.crdtgrp_list);
 
+	goto out_unlock;
+
+out_rmid_free:
+	if (rdt_mon_capable)
+		free_rmid(rdtgrp->closid, rmid);
+out_destroy:
+	kernfs_remove(rdtgrp->kn);
+	rdtgroup_remove(rdtgrp);
+
+out_unlock:
 	rdtgroup_kn_unlock(parent_kn);
 	return ret;
 }
@@ -3041,7 +3056,7 @@ static int rdtgroup_mkdir_ctrl_mon(struct kernfs_node *parent_kn,
 {
 	struct rdtgroup *rdtgrp;
 	struct kernfs_node *kn;
-	u32 closid;
+	u32 rmid;
 	int ret;
 
 	ret = mkdir_rdt_prepare(parent_kn, name, mode, RDTCTRL_GROUP, &rdtgrp);
@@ -3054,13 +3069,24 @@ static int rdtgroup_mkdir_ctrl_mon(struct kernfs_node *parent_kn,
 		rdt_last_cmd_puts("Out of CLOSIDs\n");
 		goto out_common_fail;
 	}
-	closid = ret;
-	ret = 0;
+	rdtgrp->closid = ret;
 
-	rdtgrp->closid = closid;
+	if (rdt_mon_capable) {
+		ret = alloc_rmid();
+		if (ret < 0) {
+			rdt_last_cmd_puts("Out of RMIDs\n");
+			goto out_closid_free;
+		}
+
+		rmid = ret;
+		ret = mkdir_rdt_prepare_rmid(rdtgrp, rmid);
+		if (ret)
+			goto out_rmid_free;
+	}
+
 	ret = rdtgroup_init_alloc(rdtgrp);
 	if (ret < 0)
-		goto out_id_free;
+		goto out_rmid_free;
 
 	list_add(&rdtgrp->rdtgroup_list, &rdt_all_groups);
 
@@ -3080,10 +3106,14 @@ static int rdtgroup_mkdir_ctrl_mon(struct kernfs_node *parent_kn,
 
 out_del_list:
 	list_del(&rdtgrp->rdtgroup_list);
-out_id_free:
-	closid_free(closid);
+out_rmid_free:
+	if (rdt_mon_capable)
+		free_rmid(rdtgrp->closid, rmid);
+out_closid_free:
+	closid_free(rdtgrp->closid);
 out_common_fail:
-	mkdir_rdt_prepare_clean(rdtgrp);
+	kernfs_remove(rdtgrp->kn);
+	rdtgroup_remove(rdtgrp);
 out_unlock:
 	rdtgroup_kn_unlock(parent_kn);
 	return ret;
