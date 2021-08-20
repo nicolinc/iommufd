@@ -321,6 +321,37 @@ static struct rmid_entry *resctrl_find_free_rmid(u32 closid)
 	return ERR_PTR(-ENOSPC);
 }
 
+/**
+ * resctrl_closid_is_dirty - Determine if clean rmid can be allocate for this
+ *                           closid.
+ * @closid: The closid that is being queried.
+ *
+ * MPAM's equivalent of rmid are per-closid, meaning a freshly allocate closid
+ * may not be able to allocate clean rmid. To avoid this the allocator will
+ * only return clean closid.
+ */
+bool resctrl_closid_is_dirty(u32 closid)
+{
+	struct rmid_entry *entry;
+	int i;
+
+	lockdep_assert_held(&rdtgroup_mutex);
+
+	if (IS_ENABLED(CONFIG_RESCTRL_RMID_DEPENDS_ON_CLOSID))
+		return false;
+
+	for (i = 0; i < resctrl_arch_system_num_rmid_idx(); i++) {
+		entry = &rmid_ptrs[i];
+		if (entry->closid != closid)
+			continue;
+
+		if (entry->busy)
+			return true;
+	}
+
+	return false;
+}
+
 /*
  * As of now the RMIDs allocation is the same in each domain.
  * However we keep track of which packages the RMIDs
