@@ -701,6 +701,7 @@ struct arm_smmu_device {
 
 struct arm_smmu_stream {
 	u32				id;
+	u32				cmdqv_sid_slot;
 	struct arm_smmu_master		*master;
 	struct rb_node			node;
 };
@@ -776,6 +777,14 @@ int arm_smmu_init_one_queue(struct arm_smmu_device *smmu,
 			    unsigned long prod_off, unsigned long cons_off,
 			    size_t dwords, const char *name);
 
+static inline phys_addr_t
+arm_smmu_domain_ipa_to_pa(struct arm_smmu_domain *smmu_domain, u64 ipa)
+{
+	if (WARN_ON_ONCE(smmu_domain->stage != ARM_SMMU_DOMAIN_S2))
+		return 0;
+	return iommu_iova_to_phys(&smmu_domain->domain, ipa);
+}
+
 #ifdef CONFIG_ARM_SMMU_V3_SVA
 bool arm_smmu_sva_supported(struct arm_smmu_device *smmu);
 bool arm_smmu_master_sva_supported(struct arm_smmu_master *master);
@@ -838,6 +847,9 @@ tegra241_cmdqv_acpi_probe(struct arm_smmu_device *smmu, int id);
 int tegra241_cmdqv_device_reset(struct arm_smmu_device *smmu);
 struct arm_smmu_cmdq *tegra241_cmdqv_get_cmdq(struct arm_smmu_device *smmu,
 					      u64 *cmds, int n);
+struct iommufd_viommu *
+tegra241_cmdqv_viommu_alloc(struct tegra241_cmdqv *cmdqv,
+			    struct arm_smmu_domain *smmu_domain);
 #else /* CONFIG_TEGRA241_CMDQV */
 static inline struct tegra241_cmdqv *
 tegra241_cmdqv_acpi_probe(struct arm_smmu_device *smmu, int id)
@@ -854,6 +866,13 @@ static inline struct arm_smmu_cmdq *
 tegra241_cmdqv_get_cmdq(struct arm_smmu_device *smmu, u64 *cmds, int n)
 {
 	return NULL;
+}
+
+static inline struct iommufd_viommu *
+tegra241_cmdqv_viommu_alloc(struct tegra241_cmdqv *cmdqv,
+			    struct arm_smmu_domain *smmu_domain);
+{
+	return -ENODEV;
 }
 #endif /* CONFIG_TEGRA241_CMDQV */
 

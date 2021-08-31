@@ -17,6 +17,7 @@
 #include <linux/err.h>
 #include <linux/interrupt.h>
 #include <linux/io-pgtable.h>
+#include <linux/iommufd.h>
 #include <linux/iopoll.h>
 #include <linux/module.h>
 #include <linux/msi.h>
@@ -3077,6 +3078,23 @@ static void arm_smmu_remove_dev_pasid(struct device *dev, ioasid_t pasid)
 	arm_smmu_sva_remove_dev_pasid(domain, dev, pasid);
 }
 
+static struct iommufd_viommu *arm_smmu_viommu_alloc(struct device *dev,
+						    unsigned int viommu_type,
+						    struct iommu_domain *domain)
+{
+	struct arm_smmu_domain *smmu_domain = to_smmu_domain_devices(domain);
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+
+	if (!master || !master->smmu)
+		return ERR_PTR(-ENODEV);
+
+	if (master->smmu->tegra241_cmdqv &&
+	    viommu_type == IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV)
+		return tegra241_cmdqv_viommu_alloc(
+			master->smmu->tegra241_cmdqv, smmu_domain);
+	return ERR_PTR(-EOPNOTSUPP);
+}
+
 static struct iommu_ops arm_smmu_ops = {
 	.identity_domain	= &arm_smmu_identity_domain,
 	.blocked_domain		= &arm_smmu_blocked_domain,
@@ -3091,6 +3109,7 @@ static struct iommu_ops arm_smmu_ops = {
 	.remove_dev_pasid	= arm_smmu_remove_dev_pasid,
 	.dev_enable_feat	= arm_smmu_dev_enable_feature,
 	.dev_disable_feat	= arm_smmu_dev_disable_feature,
+	.viommu_alloc		= arm_smmu_viommu_alloc,
 	.page_response		= arm_smmu_page_response,
 	.def_domain_type	= arm_smmu_def_domain_type,
 	.pgsize_bitmap		= -1UL, /* Restricted during device attach */
