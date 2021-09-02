@@ -19,6 +19,7 @@
 #include <linux/iommufd.h>
 #include <linux/xarray.h>
 #include <asm-generic/bug.h>
+#include <linux/vfio.h>
 
 /* Per iommufd */
 struct iommufd_ctx {
@@ -224,6 +225,38 @@ static int iommufd_ioas_free(struct iommufd_ctx *ictx, unsigned long arg)
 	return 0;
 };
 
+static int iommu_device_add_cap_chain(struct device *dev, unsigned long arg,
+				      struct iommu_device_info *info)
+{
+	struct vfio_info_cap caps = { .buf = NULL, .size = 0 };
+	int ret;
+
+	ret = vfio_device_add_iova_cap(dev, &caps);
+	if (ret)
+		return ret;
+
+	if (caps.size) {
+		info->flags |= IOMMU_DEVICE_INFO_CAPS;
+
+		if (info->argsz < sizeof(*info) + caps.size) {
+			info->argsz = sizeof(*info) + caps.size;
+		} else {
+			vfio_info_cap_shift(&caps, sizeof(*info));
+			if (copy_to_user((void __user *)arg +
+					sizeof(*info), caps.buf,
+					caps.size)) {
+				kfree(caps.buf);
+				info->flags &= ~IOMMU_DEVICE_INFO_CAPS;
+				return -EFAULT;
+			}
+			info->cap_offset = sizeof(*info);
+		}
+
+		kfree(caps.buf);
+	}
+	return 0;
+}
+
 static void iommu_device_build_info(struct device *dev,
 				    struct iommu_device_info *info)
 {
@@ -249,8 +282,9 @@ static int iommufd_get_device_info(struct iommufd_ctx *ictx,
 	struct iommu_device_info info;
 	unsigned long minsz;
 	struct iommufd_device *idev;
+	int ret;
 
-	minsz = offsetofend(struct iommu_device_info, pgsize_bitmap);
+	minsz = offsetofend(struct iommu_device_info, cap_offset);
 
 	if (copy_from_user(&info, (void __user *)arg, minsz))
 		return -EFAULT;
@@ -265,6 +299,11 @@ static int iommufd_get_device_info(struct iommufd_ctx *ictx,
 		return -EINVAL;
 
 	iommu_device_build_info(idev->dev, &info);
+
+	info.cap_offset = 0;
+	ret = iommu_device_add_cap_chain(idev->dev, arg, &info);
+	if (ret)
+		pr_debug("No cap chain added, error %d\n", ret);
 
 	return copy_to_user((void __user *)arg, &info, minsz) ? -EFAULT : 0;
 }

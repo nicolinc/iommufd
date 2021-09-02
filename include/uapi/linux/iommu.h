@@ -68,6 +68,7 @@
  *		   |  14           |  16 KB     |
  *		   +---------------+------------+
  *		   ...
+ * @cap_offset:	   Offset within info struct of first cap
  *
  * Availability: after device is bound to iommufd
  */
@@ -77,9 +78,11 @@ struct iommu_device_info {
 #define IOMMU_DEVICE_INFO_ENFORCE_SNOOP	(1 << 0) /* IOMMU enforced snoop */
 #define IOMMU_DEVICE_INFO_ADDR_WIDTH	(1 << 1) /* addr_wdith field valid */
 #define IOMMU_DEVICE_INFO_PGSIZES	(1 << 2) /* supported page sizes */
+#define IOMMU_DEVICE_INFO_CAPS		(1 << 3) /* info supports cap chain */
 	__u32		devid;
 	__u32		addr_width;
 	__aligned_u64   pgsize_bitmap;
+	__u32		cap_offset;
 };
 
 #define IOMMU_DEVICE_GET_INFO	_IO(IOMMU_TYPE, IOMMU_BASE + 1)
