@@ -162,6 +162,18 @@ enum iommu_dev_features {
 	IOMMU_DEV_FEAT_IOPF,
 };
 
+/**
+ * enum iommu_dma_owner - IOMMU DMA ownership
+ * @DMA_OWNER_NONE: No DMA ownership
+ * @DMA_OWNER_KERNEL: Device DMAs are initiated by a kernel driver
+ * @DMA_OWNER_USER: Device DMAs are initiated by a userspace driver
+ */
+enum iommu_dma_owner {
+	DMA_OWNER_NONE,
+	DMA_OWNER_KERNEL,
+	DMA_OWNER_USER,
+};
+
 #define IOMMU_PASID_INVALID	(-1U)
 
 #ifdef CONFIG_IOMMU_API
@@ -681,6 +693,10 @@ struct iommu_sva *iommu_sva_bind_device(struct device *dev,
 void iommu_sva_unbind_device(struct iommu_sva *handle);
 u32 iommu_sva_get_pasid(struct iommu_sva *handle);
 
+int iommu_device_set_dma_owner(struct device *dev, enum iommu_dma_owner mode,
+			       struct file *user_file);
+void iommu_device_release_dma_owner(struct device *dev, enum iommu_dma_owner mode);
+
 #else /* CONFIG_IOMMU_API */
 
 struct iommu_ops {};
@@ -1080,6 +1096,18 @@ static inline int iommu_sva_unbind_gpasid(struct iommu_domain *domain,
 static inline struct iommu_fwspec *dev_iommu_fwspec_get(struct device *dev)
 {
 	return NULL;
+}
+
+static inline int iommu_device_set_dma_owner(struct device *dev,
+					     enum iommu_dma_owner mode,
+					     struct file *user_file)
+{
+	return 0;
+}
+
+static inline void iommu_device_release_dma_owner(struct device *dev,
+						  enum iommu_dma_owner mode)
+{
 }
 #endif /* CONFIG_IOMMU_API */
 
