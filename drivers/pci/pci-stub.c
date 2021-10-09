@@ -36,6 +36,9 @@ static struct pci_driver stub_driver = {
 	.name		= "pci-stub",
 	.id_table	= NULL,	/* only dynamic id's */
 	.probe		= pci_stub_probe,
+	.driver		= {
+		.suppress_auto_claim_dma_owner = true,
+	},
 };
 
 static int __init pci_stub_init(void)
