@@ -28,6 +28,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/pinctrl/devinfo.h>
 #include <linux/slab.h>
+#include <linux/iommu.h>
 
 #include "base.h"
 #include "power/power.h"
@@ -566,6 +567,12 @@ static int really_probe(struct device *dev, struct device_driver *drv)
 		goto done;
 	}
 
+	if (!drv->suppress_auto_claim_dma_owner) {
+		ret = iommu_device_set_dma_owner(dev, DMA_OWNER_KERNEL, NULL);
+		if (ret)
+			return ret;
+	}
+
 re_probe:
 	dev->driver = drv;
 
@@ -673,6 +680,8 @@ pinctrl_bind_failed:
 		dev->pm_domain->dismiss(dev);
 	pm_runtime_reinit(dev);
 	dev_pm_set_driver_flags(dev, 0);
+	if (!drv->suppress_auto_claim_dma_owner)
+		iommu_device_release_dma_owner(dev, DMA_OWNER_KERNEL);
 done:
 	return ret;
 }
@@ -1214,6 +1223,9 @@ static void __device_release_driver(struct device *dev, struct device *parent)
 			dev->pm_domain->dismiss(dev);
 		pm_runtime_reinit(dev);
 		dev_pm_set_driver_flags(dev, 0);
+
+		if (!drv->suppress_auto_claim_dma_owner)
+			iommu_device_release_dma_owner(dev, DMA_OWNER_KERNEL);
 
 		klist_remove(&dev->p->knode_driver);
 		device_pm_check_callbacks(dev);
