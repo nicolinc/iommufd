@@ -75,6 +75,7 @@ static struct platform_driver vfio_platform_driver = {
 	.remove		= vfio_platform_remove,
 	.driver	= {
 		.name	= "vfio-platform",
+		.suppress_auto_claim_dma_owner = true,
 	},
 };
 
