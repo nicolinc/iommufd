@@ -195,6 +195,12 @@ void iommufd_unbind_device(struct iommufd_device *idev)
 }
 EXPORT_SYMBOL_GPL(iommufd_unbind_device);
 
+u32 iommufd_device_get_id(struct iommufd_device *idev)
+{
+	return idev->devid;
+}
+EXPORT_SYMBOL_GPL(iommufd_device_get_id);
+
 static int __init iommufd_init(void)
 {
 	int ret;

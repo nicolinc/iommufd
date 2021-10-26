@@ -1794,6 +1794,7 @@ int vfio_pci_core_init_device(struct vfio_pci_core_device *vdev,
 	mutex_init(&vdev->vma_lock);
 	INIT_LIST_HEAD(&vdev->vma_list);
 	init_rwsem(&vdev->memory_lock);
+	mutex_init(&vdev->idev_lock);
 
 	return 0;
 }

@@ -125,8 +125,55 @@ static int vfio_pci_open_device(struct vfio_device *core_vdev)
 	return 0;
 }
 
+static int vfio_pci_bind_iommufd(struct vfio_device *core_vdev,
+				 struct vfio_device_iommu_bind_data *bind_data)
+{
+	struct vfio_pci_core_device *vdev =
+		container_of(core_vdev, struct vfio_pci_core_device, vdev);
+	struct iommufd_device *idev;
+	int ret = 0;
+
+	mutex_lock(&vdev->idev_lock);
+
+	/* Allow only one iommufd per vfio_device */
+	if (vdev->idev) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
+
+	idev = iommufd_bind_device(bind_data->iommufd,
+				   &vdev->pdev->dev,
+				   bind_data->dev_cookie);
+	if (IS_ERR(idev)) {
+		ret = PTR_ERR(idev);
+		goto out_unlock;
+	}
+
+	vdev->idev = idev;
+	bind_data->devid = iommufd_device_get_id(idev);
+
+out_unlock:
+	mutex_unlock(&vdev->idev_lock);
+	return ret;
+}
+
+static void vfio_pci_unbind_iommufd(struct vfio_device *core_vdev)
+{
+	struct vfio_pci_core_device *vdev =
+		container_of(core_vdev, struct vfio_pci_core_device, vdev);
+
+	mutex_lock(&vdev->idev_lock);
+	if (vdev->idev) {
+		iommufd_unbind_device(vdev->idev);
+		vdev->idev = NULL;
+	}
+	mutex_unlock(&vdev->idev_lock);
+}
+
 static const struct vfio_device_ops vfio_pci_ops = {
 	.name		= "vfio-pci",
+	.bind_iommufd	= vfio_pci_bind_iommufd,
+	.unbind_iommufd	= vfio_pci_unbind_iommufd,
 	.open_device	= vfio_pci_open_device,
 	.close_device	= vfio_pci_core_close_device,
 	.ioctl		= vfio_pci_core_ioctl,
