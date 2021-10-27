@@ -203,6 +203,8 @@ static struct pci_driver pcie_portdriver = {
 	.err_handler	= &pcie_portdrv_err_handler,
 
 	.driver.pm	= PCIE_PORTDRV_PM_OPS,
+
+	.driver.suppress_auto_claim_dma_owner = true,
 };
 
 static int __init dmi_pcie_pme_disable_msi(const struct dmi_system_id *d)
