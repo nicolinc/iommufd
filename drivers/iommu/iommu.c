@@ -3418,6 +3418,62 @@ out:
 }
 
 /**
+ * iommu_group_set_dma_owner() - Set DMA ownership of a group
+ * @group: The group.
+ * @owner: DMA_OWNER_KERNEL or DMA_OWNER_USER.
+ * @user_file: The device fd when set USER ownership.
+ *
+ * This is only for the existing device passthrough scheme through vfio.
+ * Future framework should use iommu_device_set_dma_owner() instead.
+ */
+int iommu_group_set_dma_owner(struct iommu_group *group, enum iommu_dma_owner owner,
+			      struct file *user_file)
+{
+	int ret;
+
+	mutex_lock(&group->mutex);
+	ret = __iommu_group_set_dma_owner(group, owner, user_file);
+	mutex_unlock(&group->mutex);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(iommu_group_set_dma_owner);
+
+/**
+ * iommu_group_release_dma_owner() - Release DMA ownership of a group
+ * @group: The group.
+ * @owner: DMA_OWNER_KERNEL or DMA_OWNER_USER.
+ *
+ * Release the DMA ownership claimed by iommu_group_set_dma_owner().
+ */
+void iommu_group_release_dma_owner(struct iommu_group *group, enum iommu_dma_owner owner)
+{
+	mutex_lock(&group->mutex);
+	__iommu_group_release_dma_owner(group, owner);
+	mutex_unlock(&group->mutex);
+}
+EXPORT_SYMBOL_GPL(iommu_group_release_dma_owner);
+
+/**
+ * iommu_group_viable_for_user() - Check user viable of a group
+ * @group: The group.
+ *
+ * This is only added for the existing device passthrough scheme through vfio
+ * for compatability with VFIO_GROUP_FLAGS_VIABLE.
+ */
+bool iommu_group_viable_for_user(struct iommu_group *group)
+{
+	enum iommu_dma_owner owner;
+
+	mutex_lock(&group->mutex);
+	owner = group->dma_owner;
+	mutex_unlock(&group->mutex);
+
+	return owner != DMA_OWNER_KERNEL;
+}
+EXPORT_SYMBOL_GPL(iommu_group_viable_for_user);
+
+/**
  * iommu_device_set_dma_owner() - Set DMA ownership of a device
  * @dev: The device.
  * @owner: DMA_OWNER_KERNEL or DMA_OWNER_USER.
