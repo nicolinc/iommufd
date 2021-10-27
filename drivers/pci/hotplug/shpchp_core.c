@@ -322,6 +322,8 @@ static struct pci_driver shpc_driver = {
 	.id_table =	shpcd_pci_tbl,
 	.probe =	shpc_probe,
 	.remove =	shpc_remove,
+
+	.driver.suppress_auto_claim_dma_owner = true,
 };
 
 static int __init shpcd_init(void)
