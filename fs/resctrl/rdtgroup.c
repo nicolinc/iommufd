@@ -19,6 +19,7 @@
 #include <linux/fs_parser.h>
 #include <linux/sysfs.h>
 #include <linux/kernfs.h>
+#include <linux/random.h>
 #include <linux/seq_buf.h>
 #include <linux/seq_file.h>
 #include <linux/sched/signal.h>
@@ -64,6 +65,8 @@ static struct seq_buf last_cmd_status;
 static char last_cmd_status_buf[512];
 
 struct dentry *debugfs_resctrl;
+
+u64 resctrl_id_obsfucation;
 
 void rdt_last_cmd_clear(void)
 {
@@ -1450,6 +1453,67 @@ out:
 	return ret;
 }
 
+static inline u64 resctrl_id_encode(u32 closid, u32 rmid)
+{
+	u64 id;
+
+	id = FIELD_PREP(RESCTRL_ID_CLOSID, closid) |
+	     FIELD_PREP(RESCTRL_ID_RMID, rmid);
+
+	return id ^ resctrl_id_obsfucation;
+}
+
+int resctrl_id_decode(u64 id, u32 *closid, u32 *rmid)
+{
+	struct rdtgroup *prgrp, *crgrp;
+	int err = -EINVAL;
+
+	__resctrl_id_decode(id, closid, rmid);
+
+	/* Check this closid/rmid is allocated */
+	mutex_lock(&rdtgroup_mutex);
+	list_for_each_entry(prgrp, &rdt_all_groups, rdtgroup_list) {
+		if (prgrp->closid != *closid)
+			continue;
+
+		if (prgrp->mon.rmid == *rmid) {
+			err = 0;
+			break;
+		}
+
+		list_for_each_entry(crgrp, &prgrp->mon.crdtgrp_list,
+				    mon.crdtgrp_list)
+		{
+			if (crgrp->mon.rmid == *rmid) {
+				err = 0;
+				break;
+			}
+		}
+	}
+	mutex_unlock(&rdtgroup_mutex);
+
+	return err;
+}
+
+static int rdtgroup_id_show(struct kernfs_open_file *of,
+			    struct seq_file *seq, void *v)
+{
+	struct rdtgroup *rdtgrp;
+	int ret = 0;
+	u64 id;
+
+	rdtgrp = rdtgroup_kn_lock_live(of->kn);
+	if (rdtgrp) {
+		id = resctrl_id_encode(rdtgrp->closid, rdtgrp->mon.rmid);
+		seq_printf(seq, "0x%llx\n", id);
+	} else {
+		ret = -ENOENT;
+	}
+	rdtgroup_kn_unlock(of->kn);
+
+	return ret;
+}
+
 /* rdtgroup information files for one cache resource. */
 static struct rftype res_common_files[] = {
 	{
@@ -1596,7 +1660,13 @@ static struct rftype res_common_files[] = {
 		.seq_show	= rdtgroup_size_show,
 		.fflags		= RF_CTRL_BASE,
 	},
-
+	{
+		.name		= "id",
+		.mode		= 0444,
+		.kf_ops		= &rdtgroup_kf_single_ops,
+		.seq_show	= rdtgroup_id_show,
+		.fflags		= RFTYPE_BASE,
+	},
 };
 
 static int rdtgroup_add_files(struct kernfs_node *kn, unsigned long fflags)
@@ -3485,6 +3555,8 @@ int resctrl_init(void)
 	 * tell lockdep that).
 	 */
 	debugfs_resctrl = debugfs_create_dir("resctrl", NULL);
+
+	resctrl_id_obsfucation = get_random_u64();
 
 	return 0;
 
