@@ -3453,3 +3453,28 @@ void iommu_device_release_dma_owner(struct device *dev, enum iommu_dma_owner own
 	iommu_group_put(group);
 }
 EXPORT_SYMBOL_GPL(iommu_device_release_dma_owner);
+
+/**
+ * iommu_device_get_info() - Get per-device iommu attributes
+ * @dev: The device.
+ * @attr: attribute type.
+ * @data: attribute data payload.
+ *
+ * Return 0 on success with the attribute value saved in @data. Otherwise,
+ * return negtive integer.
+ */
+int iommu_device_get_info(struct device *dev, enum iommu_devattr_type attr,
+			  union iommu_devattr_data *data)
+{
+	const struct iommu_ops *ops;
+
+	if (!dev->bus || !dev->bus->iommu_ops)
+		return -EINVAL;
+
+	ops = dev->bus->iommu_ops;
+	if (unlikely(!ops->device_info))
+		return -ENODEV;
+
+	return ops->device_info(dev, attr, data);
+}
+EXPORT_SYMBOL_GPL(iommu_device_get_info);

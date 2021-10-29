@@ -174,6 +174,26 @@ enum iommu_dma_owner {
 	DMA_OWNER_USER,
 };
 
+/**
+ * enum iommu_devattr_type - Per device IOMMU attributes
+ * @IOMMU_DEV_INFO_FORCE_SNOOP: IOMMU can force DMA to be snooped.
+ * @IOMMU_DEV_INFO_PAGE_SIZE: Page sizes that iommu supports.
+ * @IOMMU_DEV_INFO_ADDR_WIDTH: Address width supported.
+ */
+enum iommu_devattr_type {
+	IOMMU_DEV_INFO_FORCE_SNOOP,
+	IOMMU_DEV_INFO_PAGE_SIZE,
+	IOMMU_DEV_INFO_ADDR_WIDTH,
+};
+
+union iommu_devattr_data {
+	struct {
+		u64	force_snoop:1;	/* FORCE_SNOOP */
+	};
+	u64	page_size;		/* PAGE_SIZE */
+	u32	addr_width;		/* ADDR_WIDTH */
+} __attribute__ ((packed));
+
 #define IOMMU_PASID_INVALID	(-1U)
 
 #ifdef CONFIG_IOMMU_API
@@ -248,6 +268,7 @@ struct iommu_iotlb_gather {
  *		- IOMMU_DOMAIN_IDENTITY: must use an identity domain
  *		- IOMMU_DOMAIN_DMA: must use a dma domain
  *		- 0: use the default setting
+ * @device_info: query per-device iommu attributes
  * @pgsize_bitmap: bitmap of all possible supported page sizes
  * @owner: Driver module providing these ops
  */
@@ -321,6 +342,9 @@ struct iommu_ops {
 	int (*sva_unbind_gpasid)(struct device *dev, u32 pasid);
 
 	int (*def_domain_type)(struct device *dev);
+
+	int (*device_info)(struct device *dev, enum iommu_devattr_type attr,
+			   union iommu_devattr_data *data);
 
 	unsigned long pgsize_bitmap;
 	struct module *owner;
@@ -689,6 +713,9 @@ int iommu_group_set_dma_owner(struct iommu_group *group, enum iommu_dma_owner mo
 			      struct file *user_file);
 void iommu_group_release_dma_owner(struct iommu_group *group, enum iommu_dma_owner mode);
 bool iommu_group_viable_for_user(struct iommu_group *group);
+
+int iommu_device_get_info(struct device *dev, enum iommu_devattr_type attr,
+			  union iommu_devattr_data *data);
 
 #else /* CONFIG_IOMMU_API */
 
@@ -1106,6 +1133,13 @@ static inline void iommu_group_release_dma_owner(struct iommu_group *group,
 static inline bool iommu_group_viable_for_user(struct iommu_group *group)
 {
 	return false;
+}
+
+static inline int iommu_device_get_info(struct device *dev,
+					enum iommu_devattr_type attr,
+					union iommu_devattr_data *data)
+{
+	return -ENODEV;
 }
 #endif /* CONFIG_IOMMU_API */
 
