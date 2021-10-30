@@ -65,6 +65,10 @@ struct vfio_device_ops {
 	int	(*bind_iommufd)(struct vfio_device *vdev,
 				struct vfio_device_iommu_bind_data *bind_data);
 	void	(*unbind_iommufd)(struct vfio_device *vdev);
+	int	(*attach_ioas)(struct vfio_device *vdev,
+			       struct vfio_device_attach_ioas *attach);
+	void	(*detach_ioas)(struct vfio_device *vdev,
+			       struct vfio_device_attach_ioas *attach);
 	int	(*open_device)(struct vfio_device *vdev);
 	void	(*close_device)(struct vfio_device *vdev);
 	ssize_t	(*read)(struct vfio_device *vdev, char __user *buf,

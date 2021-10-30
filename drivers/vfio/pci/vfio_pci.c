@@ -150,6 +150,8 @@ static int vfio_pci_bind_iommufd(struct vfio_device *core_vdev,
 	}
 
 	vdev->idev = idev;
+	vdev->iommufd = bind_data->iommufd;
+	vdev->ioas = IOMMUFD_INVALID_IOAS;
 	bind_data->devid = iommufd_device_get_id(idev);
 
 out_unlock:
@@ -164,9 +166,65 @@ static void vfio_pci_unbind_iommufd(struct vfio_device *core_vdev)
 
 	mutex_lock(&vdev->idev_lock);
 	if (vdev->idev) {
+		if (vdev->ioas != IOMMUFD_INVALID_IOAS) {
+			iommufd_device_detach_ioas(vdev->idev, vdev->ioas);
+			vdev->ioas = IOMMUFD_INVALID_IOAS;
+		}
 		iommufd_unbind_device(vdev->idev);
 		vdev->idev = NULL;
 	}
+	mutex_unlock(&vdev->idev_lock);
+}
+
+static int vfio_pci_attach_ioas(struct vfio_device *core_vdev,
+				struct vfio_device_attach_ioas *attach)
+{
+	struct vfio_pci_core_device *vdev =
+		container_of(core_vdev, struct vfio_pci_core_device, vdev);
+	int ret;
+
+	mutex_lock(&vdev->idev_lock);
+
+	if (!vdev->idev || vdev->iommufd != attach->iommufd) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
+	/* Currently only allows one IOASID attach */
+	if (vdev->ioas != IOMMUFD_INVALID_IOAS) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
+
+	ret = __pci_iommufd_device_attach_ioas(vdev->pdev, vdev->idev,
+					       attach->ioas);
+	if (!ret)
+		vdev->ioas = attach->ioas;
+
+out_unlock:
+	mutex_unlock(&vdev->idev_lock);
+
+	return ret;
+}
+
+static void vfio_pci_detach_ioas(struct vfio_device *core_vdev,
+				 struct vfio_device_attach_ioas *attach)
+{
+	struct vfio_pci_core_device *vdev =
+		container_of(core_vdev, struct vfio_pci_core_device, vdev);
+
+	mutex_lock(&vdev->idev_lock);
+
+	if (!vdev || vdev->iommufd != attach->iommufd)
+		goto out_unlock;
+
+	if (vdev->ioas == IOMMUFD_INVALID_IOAS || vdev->ioas != attach->ioas)
+		goto out_unlock;
+
+	vdev->ioas = IOMMUFD_INVALID_IOAS;
+	iommufd_device_detach_ioas(vdev->idev, attach->ioas);
+
+out_unlock:
 	mutex_unlock(&vdev->idev_lock);
 }
 
@@ -174,6 +232,8 @@ static const struct vfio_device_ops vfio_pci_ops = {
 	.name		= "vfio-pci",
 	.bind_iommufd	= vfio_pci_bind_iommufd,
 	.unbind_iommufd	= vfio_pci_unbind_iommufd,
+	.attach_ioas	= vfio_pci_attach_ioas,
+	.detach_ioas	= vfio_pci_detach_ioas,
 	.open_device	= vfio_pci_open_device,
 	.close_device	= vfio_pci_core_close_device,
 	.ioctl		= vfio_pci_core_ioctl,

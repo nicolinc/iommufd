@@ -140,6 +140,8 @@ struct vfio_pci_core_device {
 	struct rw_semaphore	memory_lock;
 	struct mutex		idev_lock;
 	struct iommufd_device	*idev;
+	int			iommufd;
+	u32			ioas;
 };
 
 #define is_intx(vdev) (vdev->irq_type == VFIO_PCI_INTX_IRQ_INDEX)
