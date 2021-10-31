@@ -49,6 +49,7 @@ struct iommu_group {
 	enum iommu_dma_owner dma_owner;
 	refcount_t owner_cnt;
 	struct file *owner_user_file;
+	refcount_t attach_cnt;
 };
 
 struct group_device {
@@ -1937,10 +1938,15 @@ int iommu_attach_device(struct iommu_domain *domain, struct device *dev)
 	 */
 	mutex_lock(&group->mutex);
 	ret = -EINVAL;
-	if (iommu_group_device_count(group) != 1)
+	if (group->dma_owner != DMA_OWNER_USER &&
+	    iommu_group_device_count(group) != 1)
 		goto out_unlock;
 
-	ret = __iommu_attach_group(domain, group);
+	if (!refcount_inc_not_zero(&group->attach_cnt)) {
+		ret = __iommu_attach_group(domain, group);
+		if (!ret)
+			refcount_set(&group->attach_cnt, 1);
+	}
 
 out_unlock:
 	mutex_unlock(&group->mutex);
@@ -2192,12 +2198,14 @@ void iommu_detach_device(struct iommu_domain *domain, struct device *dev)
 		return;
 
 	mutex_lock(&group->mutex);
-	if (iommu_group_device_count(group) != 1) {
+	if (group->dma_owner != DMA_OWNER_USER &&
+	    iommu_group_device_count(group) != 1) {
 		WARN_ON(1);
 		goto out_unlock;
 	}
 
-	__iommu_detach_group(domain, group);
+	if (refcount_dec_and_test(&group->attach_cnt))
+		__iommu_detach_group(domain, group);
 
 out_unlock:
 	mutex_unlock(&group->mutex);
