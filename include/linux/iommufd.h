@@ -17,6 +17,7 @@
 struct iommufd_device;
 
 #define IOMMUFD_INVALID_DEVID	0
+#define IOMMUFD_INVALID_IOAS	0
 
 #if IS_ENABLED(CONFIG_IOMMUFD)
 struct iommufd_device *

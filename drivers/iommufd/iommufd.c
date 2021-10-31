@@ -24,6 +24,7 @@
 struct iommufd_ctx {
 	struct file *filp;
 	struct xarray device_xa; /* xarray of bound devices */
+	struct xarray ioas_xa; /* xarray of ioases */
 };
 
 /*
@@ -41,6 +42,16 @@ struct iommufd_device {
 	u64 dev_cookie;
 };
 
+/* Represent an I/O address space */
+struct iommufd_ioas {
+	u32 ioas_id;
+	u32 type;
+	u32 addr_width;
+	bool enforce_snoop;
+	struct iommufd_ctx *ictx;
+	refcount_t refs;
+};
+
 static int iommufd_fops_open(struct inode *inode, struct file *filp)
 {
 	struct iommufd_ctx *ictx;
@@ -51,6 +62,7 @@ static int iommufd_fops_open(struct inode *inode, struct file *filp)
 		return -ENOMEM;
 
 	xa_init_flags(&ictx->device_xa, XA_FLAGS_ALLOC1);
+	xa_init_flags(&ictx->ioas_xa, XA_FLAGS_ALLOC1);
 	ictx->filp = filp;
 	filp->private_data = ictx;
 
@@ -82,15 +94,103 @@ static struct file *iommufd_fget(int fd)
 	return filp;
 }
 
+static void ioas_put(struct iommufd_ioas *ioas)
+{
+	struct iommufd_ctx *ictx = ioas->ictx;
+	u32 ioas_id = ioas->ioas_id;
+
+	if (!refcount_dec_and_test(&ioas->refs))
+		return;
+
+	xa_erase(&ictx->ioas_xa, ioas_id);
+	kfree(ioas);
+}
+
 static int iommufd_fops_release(struct inode *inode, struct file *filp)
 {
 	struct iommufd_ctx *ictx = filp->private_data;
+	struct iommufd_ioas *ioas;
+	unsigned long index;
+
+	xa_for_each(&ictx->ioas_xa, index, ioas)
+		ioas_put(ioas);
 
 	WARN_ON(!xa_empty(&ictx->device_xa));
+	WARN_ON(!xa_empty(&ictx->ioas_xa));
+
 	kfree(ictx);
 
 	return 0;
 }
+
+static int iommufd_ioas_alloc(struct iommufd_ctx *ictx, unsigned long arg)
+{
+	struct iommu_ioas_alloc req;
+	struct iommufd_ioas *ioas;
+	unsigned long minsz;
+	int ret;
+
+	minsz = offsetofend(struct iommu_ioas_alloc, addr_width);
+
+	if (copy_from_user(&req, (void __user *)arg, minsz))
+		return -EFAULT;
+
+	if (req.argsz < minsz || !req.addr_width ||
+	    req.flags != IOMMU_IOAS_ENFORCE_SNOOP ||
+	    req.type != IOMMU_IOAS_TYPE_KERNEL_TYPE1V2)
+		return -EINVAL;
+
+	ioas = kzalloc(sizeof(*ioas), GFP_KERNEL);
+	if (!ioas)
+		return -ENOMEM;
+
+	/* only supports kernel managed I/O page table so far */
+	ioas->type = IOMMU_IOAS_TYPE_KERNEL_TYPE1V2;
+	ioas->addr_width = req.addr_width;
+	/* only supports enforce snoop today */
+	ioas->enforce_snoop = true;
+	ioas->ictx = ictx;
+
+	refcount_set(&ioas->refs, 1);
+
+	ret = xa_alloc(&ictx->ioas_xa, &ioas->ioas_id, ioas,
+		       xa_limit_32b, GFP_KERNEL);
+	if (ret)
+		kfree(ioas);
+
+	if (copy_to_user((void __user *)arg + minsz,
+			 &ioas->ioas_id, sizeof(ioas->ioas_id))) {
+		xa_erase(&ictx->ioas_xa, ioas->ioas_id);
+		kfree(ioas);
+		ret = -EFAULT;
+	}
+
+	return ret;
+}
+
+static int iommufd_ioas_free(struct iommufd_ctx *ictx, unsigned long arg)
+{
+	struct iommufd_ioas *ioas = NULL;
+	u32 ioas_id;
+
+	if (copy_from_user(&ioas_id, (void __user *)arg, sizeof(ioas_id)))
+		return -EFAULT;
+
+	if (ioas_id == IOMMUFD_INVALID_IOAS)
+		return -EINVAL;
+
+	ioas = xa_load(&ictx->ioas_xa, ioas_id);
+	if (IS_ERR_OR_NULL(ioas))
+		return -EINVAL;
+
+	/* Disallow free if refcount is not 1 */
+	if (refcount_read(&ioas->refs) > 1)
+		return -EBUSY;
+
+	ioas_put(ioas);
+
+	return 0;
+};
 
 static void iommu_device_build_info(struct device *dev,
 				    struct iommu_device_info *info)
@@ -146,6 +246,12 @@ static long iommufd_fops_unl_ioctl(struct file *filp,
 	switch (cmd) {
 	case IOMMU_DEVICE_GET_INFO:
 		ret = iommufd_get_device_info(ictx, arg);
+		break;
+	case IOMMU_IOAS_ALLOC:
+		ret = iommufd_ioas_alloc(ictx, arg);
+		break;
+	case IOMMU_IOAS_FREE:
+		ret = iommufd_ioas_free(ictx, arg);
 		break;
 	default:
 		break;
