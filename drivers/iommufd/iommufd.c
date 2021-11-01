@@ -50,6 +50,19 @@ struct iommufd_ioas {
 	bool enforce_snoop;
 	struct iommufd_ctx *ictx;
 	refcount_t refs;
+	struct rw_semaphore device_lock;
+	struct xarray device;
+	struct iommu_domain *domain;
+};
+
+/*
+ * An ioas_device_info object is created per each successful attaching
+ * request. A list of objects are maintained per ioas when the address
+ * space is shared by multiple devices.
+ */
+struct ioas_device_info {
+	struct iommufd_device *idev;
+	struct list_head next;
 };
 
 static int iommufd_fops_open(struct inode *inode, struct file *filp)
@@ -94,6 +107,21 @@ static struct file *iommufd_fget(int fd)
 	return filp;
 }
 
+static struct iommufd_ioas *ioasid_get_ioas(struct iommufd_ctx *ictx,
+					    u32 ioas_id)
+{
+	struct iommufd_ioas *ioas;
+
+	if (ioas_id == IOMMUFD_INVALID_IOAS)
+		return NULL;
+
+	ioas = xa_load(&ictx->ioas_xa, ioas_id);
+	if (!(ioas && refcount_inc_not_zero(&ioas->refs)))
+		ioas = NULL;
+
+	return ioas;
+}
+
 static void ioas_put(struct iommufd_ioas *ioas)
 {
 	struct iommufd_ctx *ictx = ioas->ictx;
@@ -102,6 +130,7 @@ static void ioas_put(struct iommufd_ioas *ioas)
 	if (!refcount_dec_and_test(&ioas->refs))
 		return;
 
+	WARN_ON(!xa_empty(&ioas->device));
 	xa_erase(&ictx->ioas_xa, ioas_id);
 	kfree(ioas);
 }
@@ -150,6 +179,9 @@ static int iommufd_ioas_alloc(struct iommufd_ctx *ictx, unsigned long arg)
 	/* only supports enforce snoop today */
 	ioas->enforce_snoop = true;
 	ioas->ictx = ictx;
+
+	init_rwsem(&ioas->device_lock);
+	xa_init_flags(&ioas->device, XA_FLAGS_ALLOC1);
 
 	refcount_set(&ioas->refs, 1);
 
@@ -280,6 +312,157 @@ static struct miscdevice iommu_misc_dev = {
 	.nodename = "iommu",
 	.mode = 0666,
 };
+
+/* Caller should hold write on ioas->device_lock */
+static void ioas_free_domain_if_empty(struct iommufd_ioas *ioas)
+{
+	if (xa_empty(&ioas->device)) {
+		iommu_domain_free(ioas->domain);
+		ioas->domain = NULL;
+	}
+}
+
+static int ioas_check_device_compatibility(struct iommufd_ioas *ioas,
+					   struct device *dev)
+{
+	union iommu_devattr_data attr;
+	int ret;
+
+	/*
+	 * currently we only support I/O page table with iommu enforce-snoop
+	 * format. Attaching a device which doesn't support this format in its
+	 * upstreaming iommu is rejected.
+	 */
+	ret = iommu_device_get_info(dev, IOMMU_DEV_INFO_FORCE_SNOOP, &attr);
+	if (ret || !attr.force_snoop)
+		return -EINVAL;
+
+	ret = iommu_device_get_info(dev, IOMMU_DEV_INFO_ADDR_WIDTH, &attr);
+	if (ret || attr.addr_width < ioas->addr_width)
+		return -EINVAL;
+
+	/* TODO: also need to check permitted iova ranges and pgsize bitmap */
+
+	return 0;
+}
+
+/**
+ * iommufd_device_attach_ioas - attach device to an ioas
+ * @idev: [in] Pointer to struct iommufd_device.
+ * @ioas: [in] ioas points to an I/O address space.
+ *
+ * Returns 0 for successful attach, otherwise returns error.
+ *
+ */
+int iommufd_device_attach_ioas(struct iommufd_device *idev, u32 ioas_id)
+{
+	struct iommufd_ioas *ioas;
+	struct ioas_device_info *ioas_dev;
+	struct iommu_domain *domain;
+	int ret;
+	u32 id;
+
+	ioas = ioasid_get_ioas(idev->ictx, ioas_id);
+	if (!ioas)
+		return -EINVAL;
+
+	down_write(&ioas->device_lock);
+
+	if (xa_load(&ioas->device, idev->devid)) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
+
+	ret = ioas_check_device_compatibility(ioas, idev->dev);
+	if (ret)
+		goto out_unlock;
+
+	ioas_dev = kzalloc(sizeof(*ioas_dev), GFP_KERNEL);
+	if (!ioas_dev) {
+		ret = -ENOMEM;
+		goto out_unlock;
+	}
+
+	/*
+	 * Each ioas is backed by an iommu domain, which is allocated
+	 * when the ioas is attached for the first time and then shared
+	 * by following devices.
+	 */
+	if (xa_empty(&ioas->device)) {
+		struct iommu_domain *d;
+
+		d = iommu_domain_alloc(idev->dev->bus);
+		if (!d) {
+			ret = -ENOMEM;
+			goto out_free;
+		}
+		ioas->domain = d;
+	}
+	domain = ioas->domain;
+
+	/* Install the I/O page table to the iommu for this device */
+	ret = iommu_attach_device(domain, idev->dev);
+	if (ret)
+		goto out_domain;
+
+	ioas_dev->idev = idev;
+
+	ret = xa_alloc(&ioas->device, &id, ioas_dev,
+		       XA_LIMIT(idev->devid, idev->devid), GFP_KERNEL);
+	if (ret)
+		goto out_detach;
+
+	up_write(&ioas->device_lock);
+
+	return 0;
+out_detach:
+	iommu_detach_device(domain, idev->dev);
+out_domain:
+	ioas_free_domain_if_empty(ioas);
+out_free:
+	kfree(ioas_dev);
+out_unlock:
+	up_write(&ioas->device_lock);
+	ioas_put(ioas);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(iommufd_device_attach_ioas);
+
+/**
+ * iommufd_device_detach_ioas - Detach an ioas from a device.
+ * @idev: [in] Pointer to struct iommufd_device.
+ * @ioas: [in] ioas points to an I/O address space.
+ *
+ */
+void iommufd_device_detach_ioas(struct iommufd_device *idev, u32 ioas_id)
+{
+	struct iommufd_ioas *ioas;
+	struct ioas_device_info *ioas_dev;
+
+	ioas = ioasid_get_ioas(idev->ictx, ioas_id);
+	if (!ioas)
+		return;
+
+	down_write(&ioas->device_lock);
+
+	ioas_dev = xa_erase(&ioas->device, idev->devid);
+	if (!ioas_dev) {
+		up_write(&ioas->device_lock);
+		goto out;
+	}
+	iommu_detach_device(ioas->domain, idev->dev);
+	ioas_free_domain_if_empty(ioas);
+	kfree(ioas_dev);
+
+	up_write(&ioas->device_lock);
+
+	/* release the reference acquired at the start of this function */
+	ioas_put(ioas);
+out:
+	ioas_put(ioas);
+}
+EXPORT_SYMBOL_GPL(iommufd_device_detach_ioas);
 
 /**
  * iommufd_bind_device - Bind a physical device marked by a device
