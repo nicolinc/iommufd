@@ -1389,13 +1389,54 @@ static const struct file_operations vfio_group_fops = {
 /**
  * VFIO Device fd
  */
+static int vfio_device_fops_open(struct inode *inode, struct file *filep)
+{
+	struct vfio_device *device =
+		container_of(inode->i_cdev, struct vfio_device, cdev);
+	int ret;
+
+	if (!vfio_device_try_get(device))
+		return -ENODEV;
+
+	if (!try_module_get(device->dev->driver->owner)) {
+		ret = -ENODEV;
+		goto err_device_put;
+	}
+
+	mutex_lock(&device->dev_set->lock);
+	device->open_count++;
+	if (device->open_count == 1 && device->ops->open_device) {
+		ret = device->ops->open_device(device);
+		if (ret)
+			goto err_undo_count;
+	}
+	mutex_unlock(&device->dev_set->lock);
+
+	filep->private_data = device;
+
+	return 0;
+
+err_undo_count:
+	device->open_count--;
+	mutex_unlock(&device->dev_set->lock);
+	module_put(device->dev->driver->owner);
+err_device_put:
+	vfio_device_put(device);
+	return ret;
+}
+
 static int vfio_device_fops_release(struct inode *inode, struct file *filep)
 {
 	struct vfio_device *device = filep->private_data;
 
 	mutex_lock(&device->dev_set->lock);
-	if (!--device->open_count && device->ops->close_device)
-		device->ops->close_device(device);
+	if (!--device->open_count) {
+		if ((!device->group || !device->group->container) &&
+		    device->ops->unbind_iommufd)
+			device->ops->unbind_iommufd(device);
+		if (device->ops->close_device)
+			device->ops->close_device(device);
+	}
 	mutex_unlock(&device->dev_set->lock);
 
 	module_put(device->dev->driver->owner);
@@ -1414,6 +1455,10 @@ static long vfio_device_fops_unl_ioctl(struct file *filep,
 
 	if (unlikely(!device->ops->ioctl))
 		return -EINVAL;
+
+	/* Bind iommufd is only allowed in the parked fops */
+	if (cmd == VFIO_DEVICE_BIND_IOMMUFD)
+		return -EBUSY;
 
 	return device->ops->ioctl(device, cmd, arg);
 }
@@ -1453,6 +1498,7 @@ static int vfio_device_fops_mmap(struct file *filep, struct vm_area_struct *vma)
 
 static const struct file_operations vfio_device_fops = {
 	.owner		= THIS_MODULE,
+	.open		= vfio_device_fops_open,
 	.release	= vfio_device_fops_release,
 	.read		= vfio_device_fops_read,
 	.write		= vfio_device_fops_write,
@@ -1488,7 +1534,53 @@ static long vfio_device_parked_fops_unl_ioctl(struct file *filep,
 					      unsigned int cmd,
 					      unsigned long arg)
 {
-	return -ENOTTY;
+	struct vfio_device_iommu_bind_data bind_data;
+	struct vfio_device *device = filep->private_data;
+	unsigned long minsz;
+	int ret;
+
+	/* Parking fops only supports bind iommufd */
+	if (cmd != VFIO_DEVICE_BIND_IOMMUFD)
+		return -ENODEV;
+
+	minsz = offsetofend(struct vfio_device_iommu_bind_data, iommufd);
+
+	if (copy_from_user(&bind_data, (void __user *)arg, minsz))
+		return -EFAULT;
+
+	if (bind_data.argsz < minsz || bind_data.flags ||
+	    bind_data.iommufd < 0)
+		return -EINVAL;
+
+	if (!try_module_get(device->dev->driver->owner))
+		return -ENODEV;
+
+	if (!device->ops->bind_iommufd || !device->ops->unbind_iommufd) {
+		module_put(device->dev->driver->owner);
+		return -ENODEV;
+	}
+
+	ret = device->ops->bind_iommufd(device, &bind_data);
+	if (ret) {
+		module_put(device->dev->driver->owner);
+		return ret;
+	}
+
+	replace_fops(filep, &vfio_device_fops);
+	if (filep->f_op->open) {
+		ret = filep->f_op->open(filep->f_inode, filep);
+		if (ret)
+			device->ops->unbind_iommufd(device);
+	}
+
+	module_put(device->dev->driver->owner);
+
+	/* Undo the work done in vfio_device_parked_fops_open() */
+	vfio_device_parked_fops_release(filep->f_inode, filep);
+
+	return copy_to_user((void __user *)arg + minsz,
+			    &bind_data.devid,
+			    sizeof(bind_data.devid)) ? -EFAULT : 0;
 }
 
 static const struct file_operations vfio_device_parked_fops = {
