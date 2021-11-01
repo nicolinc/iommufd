@@ -722,7 +722,9 @@ static int mtty_probe(struct mdev_device *mdev)
 		goto err_nr_ports;
 	}
 
-	vfio_init_group_dev(&mdev_state->vdev, &mdev->dev, &mtty_dev_ops);
+	ret = vfio_init_group_dev(&mdev_state->vdev, &mdev->dev, &mtty_dev_ops);
+	if (ret)
+		goto err_state;
 
 	mdev_state->nr_ports = nr_ports;
 	mdev_state->irq_index = -1;
@@ -733,7 +735,7 @@ static int mtty_probe(struct mdev_device *mdev)
 
 	if (mdev_state->vconfig == NULL) {
 		ret = -ENOMEM;
-		goto err_state;
+		goto err_init;
 	}
 
 	mutex_init(&mdev_state->ops_lock);
@@ -749,8 +751,9 @@ static int mtty_probe(struct mdev_device *mdev)
 
 err_vconfig:
 	kfree(mdev_state->vconfig);
-err_state:
+err_init:
 	vfio_uninit_group_dev(&mdev_state->vdev);
+err_state:
 	kfree(mdev_state);
 err_nr_ports:
 	atomic_add(nr_ports, &mdev_avail_ports);

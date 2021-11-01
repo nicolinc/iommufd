@@ -528,7 +528,10 @@ static int vfio_fsl_mc_probe(struct fsl_mc_device *mc_dev)
 	if (!vdev)
 		return -ENOMEM;
 
-	vfio_init_group_dev(&vdev->vdev, dev, &vfio_fsl_mc_ops);
+	ret = vfio_init_group_dev(&vdev->vdev, dev, &vfio_fsl_mc_ops);
+	if (ret)
+		goto out_free;
+
 	vdev->mc_dev = mc_dev;
 	mutex_init(&vdev->igate);
 
@@ -561,6 +564,7 @@ out_device:
 	vfio_fsl_uninit_device(vdev);
 out_uninit:
 	vfio_uninit_group_dev(&vdev->vdev);
+out_free:
 	kfree(vdev);
 	return ret;
 }

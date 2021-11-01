@@ -118,7 +118,10 @@ static int vfio_mdev_probe(struct mdev_device *mdev)
 	if (!vdev)
 		return -ENOMEM;
 
-	vfio_init_group_dev(vdev, &mdev->dev, &vfio_mdev_dev_ops);
+	ret = vfio_init_group_dev(vdev, &mdev->dev, &vfio_mdev_dev_ops);
+	if (ret)
+		goto out_free;
+
 	ret = vfio_register_emulated_iommu_dev(vdev);
 	if (ret)
 		goto out_uninit;
@@ -128,6 +131,7 @@ static int vfio_mdev_probe(struct mdev_device *mdev)
 
 out_uninit:
 	vfio_uninit_group_dev(vdev);
+out_free:
 	kfree(vdev);
 	return ret;
 }

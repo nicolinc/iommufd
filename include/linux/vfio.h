@@ -14,6 +14,7 @@
 #include <linux/workqueue.h>
 #include <linux/poll.h>
 #include <uapi/linux/vfio.h>
+#include <linux/cdev.h>
 
 /*
  * VFIO devices can be placed in a set, this allows all devices to share this
@@ -35,6 +36,9 @@ struct vfio_device {
 	struct list_head dev_set_list;
 
 	/* Members below here are private, not for driver use */
+	struct device device;
+	struct cdev cdev;
+	int minor;
 	refcount_t refcount;
 	unsigned int open_count;
 	struct completion comp;
@@ -71,8 +75,8 @@ struct vfio_device_ops {
 	int	(*match)(struct vfio_device *vdev, char *buf);
 };
 
-void vfio_init_group_dev(struct vfio_device *device, struct device *dev,
-			 const struct vfio_device_ops *ops);
+int vfio_init_group_dev(struct vfio_device *device, struct device *dev,
+			const struct vfio_device_ops *ops);
 void vfio_uninit_group_dev(struct vfio_device *device);
 int vfio_register_group_dev(struct vfio_device *device);
 int vfio_register_emulated_iommu_dev(struct vfio_device *device);

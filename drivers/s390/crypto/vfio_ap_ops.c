@@ -341,8 +341,11 @@ static int vfio_ap_mdev_probe(struct mdev_device *mdev)
 		ret = -ENOMEM;
 		goto err_dec_available;
 	}
-	vfio_init_group_dev(&matrix_mdev->vdev, &mdev->dev,
-			    &vfio_ap_matrix_dev_ops);
+
+	ret = vfio_init_group_dev(&matrix_mdev->vdev, &mdev->dev,
+				  &vfio_ap_matrix_dev_ops);
+	if (ret)
+		goto err_free;
 
 	matrix_mdev->mdev = mdev;
 	vfio_ap_matrix_init(&matrix_dev->info, &matrix_mdev->matrix);
@@ -362,6 +365,7 @@ err_list:
 	list_del(&matrix_mdev->node);
 	mutex_unlock(&matrix_dev->lock);
 	vfio_uninit_group_dev(&matrix_mdev->vdev);
+err_free:
 	kfree(matrix_mdev);
 err_dec_available:
 	atomic_inc(&matrix_dev->available_instances);

@@ -644,7 +644,9 @@ int vfio_platform_probe_common(struct vfio_platform_device *vdev,
 {
 	int ret;
 
-	vfio_init_group_dev(&vdev->vdev, dev, &vfio_platform_ops);
+	ret = vfio_init_group_dev(&vdev->vdev, dev, &vfio_platform_ops);
+	if (ret)
+		return ret;
 
 	ret = vfio_platform_acpi_probe(vdev, dev);
 	if (ret)

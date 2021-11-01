@@ -148,16 +148,20 @@ static int vfio_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	vdev = kzalloc(sizeof(*vdev), GFP_KERNEL);
 	if (!vdev)
 		return -ENOMEM;
-	vfio_pci_core_init_device(vdev, pdev, &vfio_pci_ops);
+
+	ret = vfio_pci_core_init_device(vdev, pdev, &vfio_pci_ops);
+	if (ret)
+		goto out_free;
 
 	ret = vfio_pci_core_register_device(vdev);
 	if (ret)
-		goto out_free;
+		goto out_uninit;
 	dev_set_drvdata(&pdev->dev, vdev);
 	return 0;
 
-out_free:
+out_uninit:
 	vfio_pci_core_uninit_device(vdev);
+out_free:
 	kfree(vdev);
 	return ret;
 }

@@ -523,8 +523,9 @@ static int mbochs_probe(struct mdev_device *mdev)
 	mdev_state = kzalloc(sizeof(struct mdev_state), GFP_KERNEL);
 	if (mdev_state == NULL)
 		goto err_avail;
-	vfio_init_group_dev(&mdev_state->vdev, &mdev->dev, &mbochs_dev_ops);
-
+	ret = vfio_init_group_dev(&mdev_state->vdev, &mdev->dev, &mbochs_dev_ops);
+	if (ret)
+		goto err_state;
 	mdev_state->vconfig = kzalloc(MBOCHS_CONFIG_SPACE_SIZE, GFP_KERNEL);
 	if (mdev_state->vconfig == NULL)
 		goto err_mem;
@@ -562,6 +563,7 @@ err_mem:
 	vfio_uninit_group_dev(&mdev_state->vdev);
 	kfree(mdev_state->pages);
 	kfree(mdev_state->vconfig);
+err_state:
 	kfree(mdev_state);
 err_avail:
 	atomic_add(type->mbytes, &mbochs_avail_mbytes);

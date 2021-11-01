@@ -1774,11 +1774,16 @@ static void vfio_pci_vga_uninit(struct vfio_pci_core_device *vdev)
 					      VGA_RSRC_LEGACY_MEM);
 }
 
-void vfio_pci_core_init_device(struct vfio_pci_core_device *vdev,
-			       struct pci_dev *pdev,
-			       const struct vfio_device_ops *vfio_pci_ops)
+int vfio_pci_core_init_device(struct vfio_pci_core_device *vdev,
+			      struct pci_dev *pdev,
+			      const struct vfio_device_ops *vfio_pci_ops)
 {
-	vfio_init_group_dev(&vdev->vdev, &pdev->dev, vfio_pci_ops);
+	int ret;
+
+	ret = vfio_init_group_dev(&vdev->vdev, &pdev->dev, vfio_pci_ops);
+	if (ret)
+		return ret;
+
 	vdev->pdev = pdev;
 	vdev->irq_type = VFIO_PCI_NUM_IRQS;
 	mutex_init(&vdev->igate);
@@ -1789,6 +1794,8 @@ void vfio_pci_core_init_device(struct vfio_pci_core_device *vdev,
 	mutex_init(&vdev->vma_lock);
 	INIT_LIST_HEAD(&vdev->vma_list);
 	init_rwsem(&vdev->memory_lock);
+
+	return 0;
 }
 EXPORT_SYMBOL_GPL(vfio_pci_core_init_device);
 

@@ -231,12 +231,14 @@ static int mdpy_probe(struct mdev_device *mdev)
 	mdev_state = kzalloc(sizeof(struct mdev_state), GFP_KERNEL);
 	if (mdev_state == NULL)
 		return -ENOMEM;
-	vfio_init_group_dev(&mdev_state->vdev, &mdev->dev, &mdpy_dev_ops);
+	ret = vfio_init_group_dev(&mdev_state->vdev, &mdev->dev, &mdpy_dev_ops);
+	if (ret)
+		goto err_state;
 
 	mdev_state->vconfig = kzalloc(MDPY_CONFIG_SPACE_SIZE, GFP_KERNEL);
 	if (mdev_state->vconfig == NULL) {
 		ret = -ENOMEM;
-		goto err_state;
+		goto err_init;
 	}
 
 	fbsize = roundup_pow_of_two(type->width * type->height * type->bytepp);
@@ -267,8 +269,9 @@ err_mem:
 	vfree(mdev_state->memblk);
 err_vconfig:
 	kfree(mdev_state->vconfig);
-err_state:
+err_init:
 	vfio_uninit_group_dev(&mdev_state->vdev);
+err_state:
 	kfree(mdev_state);
 	return ret;
 }
