@@ -54,6 +54,7 @@ struct iommufd_ioas {
 	struct rw_semaphore device_lock;
 	struct xarray device;
 	struct iommu_domain *domain;
+	struct vfio_iommu *vfio_iommu; /* FIXME: added for reusing vfio_iommu_type1 code */
 };
 
 /*
@@ -133,6 +134,7 @@ static void ioas_put(struct iommufd_ioas *ioas)
 
 	WARN_ON(!xa_empty(&ioas->device));
 	xa_erase(&ictx->ioas_xa, ioas_id);
+	vfio_iommu_type1_release(ioas->vfio_iommu); /* FIXME: reused vfio code */
 	kfree(ioas);
 }
 
@@ -157,6 +159,7 @@ static int iommufd_ioas_alloc(struct iommufd_ctx *ictx, unsigned long arg)
 {
 	struct iommu_ioas_alloc req;
 	struct iommufd_ioas *ioas;
+	struct vfio_iommu *vfio_iommu;
 	unsigned long minsz;
 	int ret;
 
@@ -184,16 +187,28 @@ static int iommufd_ioas_alloc(struct iommufd_ctx *ictx, unsigned long arg)
 	init_rwsem(&ioas->device_lock);
 	xa_init_flags(&ioas->device, XA_FLAGS_ALLOC1);
 
+	/* FIXME: get a vfio_iommu object for dma map/unmap management */
+	vfio_iommu = vfio_iommu_type1_open(VFIO_TYPE1v2_IOMMU);
+	if (IS_ERR(vfio_iommu)) {
+		pr_debug("Failed to get vfio_iommu object\n");
+		kfree(ioas);
+		return PTR_ERR(vfio_iommu);
+	}
+	ioas->vfio_iommu = vfio_iommu;
+
 	refcount_set(&ioas->refs, 1);
 
 	ret = xa_alloc(&ictx->ioas_xa, &ioas->ioas_id, ioas,
 		       xa_limit_32b, GFP_KERNEL);
-	if (ret)
+	if (ret) {
+		vfio_iommu_type1_release(vfio_iommu); /* FIXME: reused vfio code */
 		kfree(ioas);
+	}
 
 	if (copy_to_user((void __user *)arg + minsz,
 			 &ioas->ioas_id, sizeof(ioas->ioas_id))) {
 		xa_erase(&ictx->ioas_xa, ioas->ioas_id);
+		vfio_iommu_type1_release(vfio_iommu); /* FIXME: reused vfio code */
 		kfree(ioas);
 		ret = -EFAULT;
 	}
@@ -308,6 +323,50 @@ static int iommufd_get_device_info(struct iommufd_ctx *ictx,
 	return copy_to_user((void __user *)arg, &info, minsz) ? -EFAULT : 0;
 }
 
+static int iommufd_process_dma_op(struct iommufd_ctx *ictx,
+				  unsigned long arg, bool map)
+{
+	struct iommu_ioas_dma_op dma;
+	unsigned long minsz;
+	struct iommufd_ioas *ioas = NULL;
+	int ret;
+
+	minsz = offsetofend(struct iommu_ioas_dma_op, padding);
+
+	if (copy_from_user(&dma, (void __user *)arg, minsz))
+		return -EFAULT;
+
+	if (dma.argsz < minsz || dma.flags || dma.ioas < 0)
+		return -EINVAL;
+
+	ioas = ioasid_get_ioas(ictx, dma.ioas);
+	if (!ioas) {
+		pr_err_ratelimited("unkonwn IOASID %u\n", dma.ioas);
+		return -EINVAL;
+	}
+
+	down_read(&ioas->device_lock);
+
+	/*
+	 * Needs to block map/unmap request from userspace before IOAS
+	 * is attached to any device.
+	 */
+	if (xa_empty(&ioas->device)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (map)
+		ret = vfio_iommu_type1_map_dma(ioas->vfio_iommu, arg + minsz);
+	else
+		ret = vfio_iommu_type1_unmap_dma(ioas->vfio_iommu, arg + minsz);
+out:
+	up_read(&ioas->device_lock);
+	ioas_put(ioas);
+
+	return ret;
+};
+
 static long iommufd_fops_unl_ioctl(struct file *filp,
 				   unsigned int cmd, unsigned long arg)
 {
@@ -330,6 +389,12 @@ static long iommufd_fops_unl_ioctl(struct file *filp,
 		break;
 	case IOMMU_IOAS_FREE:
 		ret = iommufd_ioas_free(ictx, arg);
+		break;
+	case IOMMU_IOAS_MAP_DMA:
+		ret = iommufd_process_dma_op(ictx, arg, true);
+		break;
+	case IOMMU_IOAS_UNMAP_DMA:
+		ret = iommufd_process_dma_op(ictx, arg, false);
 		break;
 	default:
 		break;
@@ -359,6 +424,39 @@ static void ioas_free_domain_if_empty(struct iommufd_ioas *ioas)
 		iommu_domain_free(ioas->domain);
 		ioas->domain = NULL;
 	}
+}
+
+/* HACK:
+ * vfio_iommu_add/remove_device() is hacky implementation for
+ * this version to add the device/group to vfio iommu type1.
+ */
+static int vfio_iommu_add_device(struct vfio_iommu *vfio_iommu,
+				 struct device *dev,
+				 struct iommu_domain *domain)
+{
+	struct iommu_group *group;
+	int ret;
+
+	group = iommu_group_get(dev);
+	if (!group)
+		return -EINVAL;
+
+	ret = vfio_iommu_add_group(vfio_iommu, group, domain);
+	iommu_group_put(group);
+	return ret;
+}
+
+static void vfio_iommu_remove_device(struct vfio_iommu *vfio_iommu,
+				     struct device *dev)
+{
+	struct iommu_group *group;
+
+	group = iommu_group_get(dev);
+	if (!group)
+		return;
+
+	vfio_iommu_remove_group(vfio_iommu, group);
+	iommu_group_put(group);
 }
 
 static int ioas_check_device_compatibility(struct iommufd_ioas *ioas,
@@ -444,16 +542,22 @@ int iommufd_device_attach_ioas(struct iommufd_device *idev, u32 ioas_id)
 	if (ret)
 		goto out_domain;
 
+	ret = vfio_iommu_add_device(ioas->vfio_iommu, idev->dev, domain);
+	if (ret)
+		goto out_detach;
+
 	ioas_dev->idev = idev;
 
 	ret = xa_alloc(&ioas->device, &id, ioas_dev,
 		       XA_LIMIT(idev->devid, idev->devid), GFP_KERNEL);
 	if (ret)
-		goto out_detach;
+		goto out_remove;
 
 	up_write(&ioas->device_lock);
 
 	return 0;
+out_remove:
+	vfio_iommu_remove_device(ioas->vfio_iommu, idev->dev);
 out_detach:
 	iommu_detach_device(domain, idev->dev);
 out_domain:
@@ -490,6 +594,7 @@ void iommufd_device_detach_ioas(struct iommufd_device *idev, u32 ioas_id)
 		up_write(&ioas->device_lock);
 		goto out;
 	}
+	vfio_iommu_remove_device(ioas->vfio_iommu, idev->dev);
 	iommu_detach_device(ioas->domain, idev->dev);
 	ioas_free_domain_if_empty(ioas);
 	kfree(ioas_dev);
