@@ -1942,6 +1942,7 @@ int iommu_attach_device(struct iommu_domain *domain, struct device *dev)
 	    iommu_group_device_count(group) != 1)
 		goto out_unlock;
 
+	ret = 0;
 	if (!refcount_inc_not_zero(&group->attach_cnt)) {
 		ret = __iommu_attach_group(domain, group);
 		if (!ret)
