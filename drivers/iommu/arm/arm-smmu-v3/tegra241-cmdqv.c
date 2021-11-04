@@ -266,6 +266,7 @@ struct tegra241_vcmdq {
  * struct tegra241_vintf - Virtual Interface
  * @idx: Global index in the CMDQV HW
  * @status: cached status register
+ * @hyp_own: Owned by hypervisor (in-kernel)
  * @cmdqv: CMDQV HW pointer
  * @vcmdqs: List of VCMDQ pointers
  * @base: MMIO base address
@@ -274,6 +275,7 @@ struct tegra241_vintf {
 	u16 idx;
 
 	atomic_t status;
+	bool hyp_own;
 
 	struct tegra241_cmdqv *cmdqv;
 	struct tegra241_vcmdq **vcmdqs;
@@ -372,7 +374,32 @@ static irqreturn_t tegra241_cmdqv_isr(int irq, void *devid)
 	return IRQ_HANDLED;
 }
 
-struct arm_smmu_cmdq *tegra241_cmdqv_get_cmdq(struct arm_smmu_device *smmu)
+static bool tegra241_vintf_support_cmds(struct tegra241_vintf *vintf,
+					u64 *cmds, int n)
+{
+	int i;
+
+	/* VINTF owned by hypervisor can execute any command */
+	if (vintf->hyp_own)
+		return true;
+
+	/* Guest-owned VINTF must Check against the list of supported CMDs */
+	for (i = 0; i < n; i++) {
+		switch (FIELD_GET(CMDQ_0_OP, cmds[i * CMDQ_ENT_DWORDS])) {
+		case CMDQ_OP_TLBI_NH_ASID:
+		case CMDQ_OP_TLBI_NH_VA:
+		case CMDQ_OP_ATC_INV:
+			continue;
+		default:
+			return false;
+		}
+	}
+
+	return true;
+}
+
+struct arm_smmu_cmdq *tegra241_cmdqv_get_cmdq(struct arm_smmu_device *smmu,
+					      u64 *cmds, int n)
 {
 	struct tegra241_cmdqv *cmdqv = smmu->tegra241_cmdqv;
 	struct tegra241_vintf *vintf = cmdqv->vintfs[0];
@@ -388,6 +415,10 @@ struct arm_smmu_cmdq *tegra241_cmdqv_get_cmdq(struct arm_smmu_device *smmu)
 
 	/* Use SMMU CMDQ if vintfs[0] has error status */
 	if (FIELD_GET(VINTF_STATUS, atomic_read(&vintf->status)))
+		return &smmu->cmdq;
+
+	/* Unsupported CMDs go for smmu->cmdq pathway */
+	if (!tegra241_vintf_support_cmds(vintf, cmds, n))
 		return &smmu->cmdq;
 
 	/*
@@ -590,12 +621,23 @@ int tegra241_cmdqv_device_reset(struct arm_smmu_device *smmu)
 		}
 	}
 
+	/*
+	 * Note that HYP_OWN bit is wired to zero when running in guest kernel
+	 * regardless of enabling it here, as !HYP_OWN cmdqs have a restricted
+	 * set of supported commands, by following the HW design.
+	 */
 	regval = FIELD_PREP(VINTF_HYP_OWN, 1);
 	vintf_writel(regval, CONFIG);
 
 	ret = vintf_write_config(regval | VINTF_EN);
 	if (ret)
 		return ret;
+
+	/*
+	 * As being mentioned above, HYP_OWN bit is wired to zero for a guest
+	 * kernel, so read it back from HW to ensure that reflects in hyp_own
+	 */
+	vintf->hyp_own = !!(VINTF_HYP_OWN & vintf_readl(CONFIG));
 
 	/* Build an arm_smmu_cmdq for each vcmdq allocated to vintf */
 	vintf->vcmdqs = devm_kcalloc(cmdqv->dev, cmdqv->num_vcmdqs_per_vintf,
