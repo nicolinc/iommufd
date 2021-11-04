@@ -836,7 +836,8 @@ struct acpi_iort_smmu_v3;
 struct tegra241_cmdqv *
 tegra241_cmdqv_acpi_probe(struct arm_smmu_device *smmu, int id);
 int tegra241_cmdqv_device_reset(struct arm_smmu_device *smmu);
-struct arm_smmu_cmdq *tegra241_cmdqv_get_cmdq(struct arm_smmu_device *smmu);
+struct arm_smmu_cmdq *tegra241_cmdqv_get_cmdq(struct arm_smmu_device *smmu,
+					      u64 *cmds, int n);
 #else /* CONFIG_TEGRA241_CMDQV */
 static inline struct tegra241_cmdqv *
 tegra241_cmdqv_acpi_probe(struct arm_smmu_device *smmu, int id)
@@ -850,7 +851,7 @@ static inline int tegra241_cmdqv_device_reset(struct arm_smmu_device *smmu)
 }
 
 static inline struct arm_smmu_cmdq *
-tegra241_cmdqv_get_cmdq(struct arm_smmu_device *smmu)
+tegra241_cmdqv_get_cmdq(struct arm_smmu_device *smmu, u64 *cmds, int n)
 {
 	return NULL;
 }
