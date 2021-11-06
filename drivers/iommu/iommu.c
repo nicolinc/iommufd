@@ -26,6 +26,7 @@
 #include <linux/fsl/mc.h>
 #include <linux/module.h>
 #include <linux/cc_platform.h>
+#include <linux/file.h>
 #include <trace/events/iommu.h>
 
 static struct kset *iommu_group_kset;
@@ -48,6 +49,9 @@ struct iommu_group {
 	struct iommu_domain *default_domain;
 	struct iommu_domain *domain;
 	struct list_head entry;
+	enum iommu_dma_owner dma_owner;
+	refcount_t owner_cnt;
+	struct file *owner_user_file;
 };
 
 struct group_device {
@@ -621,6 +625,7 @@ struct iommu_group *iommu_group_alloc(void)
 	INIT_LIST_HEAD(&group->devices);
 	INIT_LIST_HEAD(&group->entry);
 	BLOCKING_INIT_NOTIFIER_HEAD(&group->notifier);
+	group->dma_owner = DMA_OWNER_NONE;
 
 	ret = ida_simple_get(&iommu_group_ida, 0, 0, GFP_KERNEL);
 	if (ret < 0) {
@@ -3351,3 +3356,104 @@ out:
 
 	return ret;
 }
+
+static int __iommu_group_set_dma_owner(struct iommu_group *group,
+				       enum iommu_dma_owner owner,
+				       struct file *user_file)
+{
+	if (group->dma_owner != DMA_OWNER_NONE && group->dma_owner != owner)
+		return -EBUSY;
+
+	if (owner == DMA_OWNER_USER) {
+		if (!user_file)
+			return -EINVAL;
+
+		if (group->owner_user_file && group->owner_user_file != user_file)
+			return -EPERM;
+	}
+
+	if (!refcount_inc_not_zero(&group->owner_cnt)) {
+		group->dma_owner = owner;
+		refcount_set(&group->owner_cnt, 1);
+
+		if (owner == DMA_OWNER_USER) {
+			get_file(user_file);
+			group->owner_user_file = user_file;
+		}
+	}
+
+	return 0;
+}
+
+static void __iommu_group_release_dma_owner(struct iommu_group *group,
+					    enum iommu_dma_owner owner)
+{
+	if (WARN_ON(group->dma_owner != owner))
+		return;
+
+	if (refcount_dec_and_test(&group->owner_cnt)) {
+		group->dma_owner = DMA_OWNER_NONE;
+
+		if (owner == DMA_OWNER_USER) {
+			fput(group->owner_user_file);
+			group->owner_user_file = NULL;
+		}
+	}
+}
+
+/**
+ * iommu_device_set_dma_owner() - Set DMA ownership of a device
+ * @dev: The device.
+ * @owner: DMA_OWNER_KERNEL or DMA_OWNER_USER.
+ * @user_file: The device fd when DMA_OWNER_USER is about to set.
+ *
+ * Set the DMA ownership of a device. The KERNEL and USER ownership are
+ * exclusive. For DMA_OWNER_USER, the caller should also specify the fd
+ * through which the I/O address spaces are managed for the target device.
+ * This interface guarantees that the USER DMA ownership is only assigned
+ * to the same fd.
+ */
+int iommu_device_set_dma_owner(struct device *dev, enum iommu_dma_owner owner,
+			       struct file *user_file)
+{
+	struct iommu_group *group = iommu_group_get(dev);
+	int ret;
+
+	if (!group) {
+		if (owner == DMA_OWNER_KERNEL)
+			return 0;
+		else
+			return -ENODEV;
+	}
+
+	mutex_lock(&group->mutex);
+	ret = __iommu_group_set_dma_owner(group, owner, user_file);
+	mutex_unlock(&group->mutex);
+	iommu_group_put(group);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(iommu_device_set_dma_owner);
+
+/**
+ * iommu_device_release_dma_owner() - Release DMA ownership of a device
+ * @dev: The device.
+ * @owner: DMA_OWNER_KERNEL or DMA_OWNER_USER.
+ *
+ * Release the DMA ownership claimed by iommu_device_set_dma_owner().
+ */
+void iommu_device_release_dma_owner(struct device *dev, enum iommu_dma_owner owner)
+{
+	struct iommu_group *group = iommu_group_get(dev);
+
+	if (!group) {
+		WARN_ON(owner != DMA_OWNER_KERNEL);
+		return;
+	}
+
+	mutex_lock(&group->mutex);
+	__iommu_group_release_dma_owner(group, owner);
+	mutex_unlock(&group->mutex);
+	iommu_group_put(group);
+}
+EXPORT_SYMBOL_GPL(iommu_device_release_dma_owner);
