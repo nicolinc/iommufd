@@ -293,7 +293,11 @@ int iommu_probe_device(struct device *dev)
 	mutex_lock(&group->mutex);
 	iommu_alloc_default_domain(group, dev);
 
-	if (group->default_domain) {
+	/*
+	 * If any device in the group has been initialized for user dma,
+	 * avoid attaching the default domain.
+	 */
+	if (group->default_domain && group->dma_owner != DMA_OWNER_USER) {
 		ret = __iommu_attach_device(group->default_domain, dev);
 		if (ret) {
 			mutex_unlock(&group->mutex);
@@ -2325,7 +2329,7 @@ static int __iommu_attach_group(struct iommu_domain *domain,
 {
 	int ret;
 
-	if (group->default_domain && group->domain != group->default_domain)
+	if (group->domain && group->domain != group->default_domain)
 		return -EBUSY;
 
 	ret = __iommu_group_for_each_dev(group, domain,
@@ -2362,7 +2366,11 @@ static void __iommu_detach_group(struct iommu_domain *domain,
 {
 	int ret;
 
-	if (!group->default_domain) {
+	/*
+	 * If any device in the group has been initialized for user dma,
+	 * avoid re-attaching the default domain.
+	 */
+	if (!group->default_domain || group->dma_owner == DMA_OWNER_USER) {
 		__iommu_group_for_each_dev(group, domain,
 					   iommu_group_do_detach_device);
 		group->domain = NULL;
@@ -3377,6 +3385,21 @@ static int __iommu_group_set_dma_owner(struct iommu_group *group,
 		refcount_set(&group->owner_cnt, 1);
 
 		if (owner == DMA_OWNER_USER) {
+			/*
+			 * The UNMANAGED domain shouldn't be attached before
+			 * claiming the USER ownership for the first time.
+			 */
+			if (group->domain) {
+				if (group->domain != group->default_domain) {
+					group->dma_owner = DMA_OWNER_NONE;
+					refcount_set(&group->owner_cnt, 0);
+
+					return -EBUSY;
+				}
+
+				__iommu_detach_group(group->domain, group);
+			}
+
 			get_file(user_file);
 			group->owner_user_file = user_file;
 		}
@@ -3397,6 +3420,13 @@ static void __iommu_group_release_dma_owner(struct iommu_group *group,
 		if (owner == DMA_OWNER_USER) {
 			fput(group->owner_user_file);
 			group->owner_user_file = NULL;
+
+			/*
+			 * The UNMANAGED domain should be detached before all USER
+			 * owners have been released.
+			 */
+			if (!WARN_ON(group->domain) && group->default_domain)
+				__iommu_attach_group(group->default_domain, group);
 		}
 	}
 }
