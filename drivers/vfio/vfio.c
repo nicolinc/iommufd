@@ -495,6 +495,57 @@ static struct vfio_device *vfio_group_get_device(struct vfio_group *group,
 /**
  * VFIO driver API
  */
+static void vfio_device_release(struct device *dev)
+{
+	struct vfio_device *device = container_of(dev, struct vfio_device, device);
+
+	kfree(device);
+}
+
+/**
+ * _vfio_alloc_device - allocate a vfio_device struct
+ * @size: size of structure to allocate
+ *
+ * Drivers using vfio_device should use vfio_alloc_device() to allocate
+ * &struct vfio_device. @size is the size of the structure to be allocated,
+ * including any private data used by the driver.
+ * vfio_dealloc_device() must be used to free structures allocated with
+ * vfio_alloc_device().
+ */
+struct vfio_device *_vfio_alloc_device(size_t size)
+{
+	struct vfio_device *device;
+
+	if (WARN_ON(size < sizeof(struct vfio_device)))
+		return NULL;
+
+	device = kzalloc(size, GFP_KERNEL);
+	if (!device)
+		return NULL;
+
+	device_initialize(&device->device);
+	device->device.release = vfio_device_release;
+
+	return device;
+}
+EXPORT_SYMBOL(_vfio_alloc_device);
+
+/**
+ * vfio_dealloc_device - free a vfio_device struct
+ * @device: structure to free
+ *
+ * Free a structure allocated with vfio_alloc_device().
+ */
+void vfio_dealloc_device(struct vfio_device *device)
+{
+	if (device->ops && device->ops->release)
+		device->ops->release(device);
+
+	/* Balances with device_initialize */
+	put_device(&device->device);
+}
+EXPORT_SYMBOL(vfio_dealloc_device);
+
 void vfio_init_group_dev(struct vfio_device *device, struct device *dev,
 			 const struct vfio_device_ops *ops)
 {

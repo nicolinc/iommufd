@@ -35,6 +35,7 @@ struct vfio_device {
 	struct list_head dev_set_list;
 
 	/* Members below here are private, not for driver use */
+	struct device device;
 	refcount_t refcount;
 	unsigned int open_count;
 	struct completion comp;
@@ -46,6 +47,7 @@ struct vfio_device {
  *
  * @open_device: Called when the first file descriptor is opened for this device
  * @close_device: Opposite of open_device
+ * @release: Reclaim private fields in device state structure
  * @read: Perform read(2) on device file descriptor
  * @write: Perform write(2) on device file descriptor
  * @ioctl: Perform ioctl(2) on device file descriptor, supporting VFIO_DEVICE_*
@@ -60,6 +62,7 @@ struct vfio_device_ops {
 	char	*name;
 	int	(*open_device)(struct vfio_device *vdev);
 	void	(*close_device)(struct vfio_device *vdev);
+	void	(*release)(struct vfio_device *vdev);
 	ssize_t	(*read)(struct vfio_device *vdev, char __user *buf,
 			size_t count, loff_t *ppos);
 	ssize_t	(*write)(struct vfio_device *vdev, const char __user *buf,
@@ -71,6 +74,14 @@ struct vfio_device_ops {
 	int	(*match)(struct vfio_device *vdev, char *buf);
 };
 
+struct vfio_device *_vfio_alloc_device(size_t size);
+#define vfio_alloc_device(drv_struct, member)					\
+	container_of(_vfio_alloc_device(sizeof(struct drv_struct) +		\
+					BUILD_BUG_ON_ZERO(offsetof(		\
+						struct drv_struct, member))),	\
+		     struct drv_struct, member)
+
+void vfio_dealloc_device(struct vfio_device *device);
 void vfio_init_group_dev(struct vfio_device *device, struct device *dev,
 			 const struct vfio_device_ops *ops);
 void vfio_uninit_group_dev(struct vfio_device *device);
