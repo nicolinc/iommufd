@@ -1792,14 +1792,22 @@ void vfio_pci_core_init_device(struct vfio_pci_core_device *vdev,
 }
 EXPORT_SYMBOL_GPL(vfio_pci_core_init_device);
 
+void vfio_pci_core_release(struct vfio_device *vfio_dev)
+{
+	struct vfio_pci_core_device *vdev =
+		container_of(vfio_dev, struct vfio_pci_core_device, vdev);
+
+	kfree(vdev->region);
+	kfree(vdev->pm_save);
+}
+EXPORT_SYMBOL_GPL(vfio_pci_core_release);
+
 void vfio_pci_core_uninit_device(struct vfio_pci_core_device *vdev)
 {
 	mutex_destroy(&vdev->igate);
 	mutex_destroy(&vdev->ioeventfds_lock);
 	mutex_destroy(&vdev->vma_lock);
 	vfio_uninit_group_dev(&vdev->vdev);
-	kfree(vdev->region);
-	kfree(vdev->pm_save);
 }
 EXPORT_SYMBOL_GPL(vfio_pci_core_uninit_device);
 
