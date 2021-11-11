@@ -20,6 +20,7 @@
 #include <linux/slab.h>
 #include <linux/miscdevice.h>
 #include <linux/mutex.h>
+#include <linux/iommufd.h>
 #include <linux/bug.h>
 #include <uapi/linux/iommufd.h>
 
@@ -196,7 +197,6 @@ union ucmd_buffer {
 	struct iommu_ioas_pagetable_iova_ranges iova_ranges;
 	struct iommu_ioas_pagetable_map map;
 	struct iommu_ioas_pagetable_unmap unmap;
-	struct iommu_destroy destroy;
 };
 
 struct iommufd_ioctl_op {
@@ -299,6 +299,9 @@ struct iommufd_ctx *iommufd_fget(int fd)
 }
 
 static struct iommufd_object_ops iommufd_object_ops[] = {
+	[IOMMUFD_OBJ_DEVICE] = {
+		.destroy = iommufd_device_destroy,
+	},
 	[IOMMUFD_OBJ_IOAS_PAGETABLE] = {
 		.destroy = iommufd_ioas_pagetable_destroy,
 	},
