@@ -45,7 +45,7 @@ static int vfio_amba_probe(struct amba_device *adev, const struct amba_id *id)
 	struct vfio_platform_device *vdev;
 	int ret;
 
-	vdev = kzalloc(sizeof(*vdev), GFP_KERNEL);
+	vdev = vfio_alloc_device(vfio_platform_device, vdev);
 	if (!vdev)
 		return -ENOMEM;
 
@@ -77,8 +77,7 @@ static void vfio_amba_remove(struct amba_device *adev)
 	struct vfio_platform_device *vdev = dev_get_drvdata(&adev->dev);
 
 	vfio_platform_remove_common(vdev);
-	kfree(vdev->name);
-	kfree(vdev);
+	vfio_dealloc_device(&vdev->vdev);
 }
 
 static const struct amba_id pl330_ids[] = {

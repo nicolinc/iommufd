@@ -599,8 +599,17 @@ static int vfio_platform_mmap(struct vfio_device *core_vdev, struct vm_area_stru
 	return -EINVAL;
 }
 
+static void vfio_platform_release(struct vfio_device *vdev)
+{
+	struct vfio_platform_device *vpdev =
+		container_of(vdev, struct vfio_platform_device, vdev);
+
+	kfree(vpdev->name);
+}
+
 static const struct vfio_device_ops vfio_platform_ops = {
 	.name		= "vfio-platform",
+	.release	= vfio_platform_release,
 	.open_device	= vfio_platform_open_device,
 	.close_device	= vfio_platform_close_device,
 	.ioctl		= vfio_platform_ioctl,

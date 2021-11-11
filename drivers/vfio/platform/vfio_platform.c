@@ -41,7 +41,7 @@ static int vfio_platform_probe(struct platform_device *pdev)
 	struct vfio_platform_device *vdev;
 	int ret;
 
-	vdev = kzalloc(sizeof(*vdev), GFP_KERNEL);
+	vdev = vfio_alloc_device(vfio_platform_device, vdev);
 	if (!vdev)
 		return -ENOMEM;
 
@@ -54,7 +54,8 @@ static int vfio_platform_probe(struct platform_device *pdev)
 
 	ret = vfio_platform_probe_common(vdev, &pdev->dev);
 	if (ret) {
-		kfree(vdev);
+		vdev->name = NULL;
+		vfio_dealloc_device(&vdev->vdev);
 		return ret;
 	}
 	dev_set_drvdata(&pdev->dev, vdev);
@@ -66,7 +67,8 @@ static int vfio_platform_remove(struct platform_device *pdev)
 	struct vfio_platform_device *vdev = dev_get_drvdata(&pdev->dev);
 
 	vfio_platform_remove_common(vdev);
-	kfree(vdev);
+	vdev->name = NULL;
+	vfio_dealloc_device(&vdev->vdev);
 	return 0;
 }
 
