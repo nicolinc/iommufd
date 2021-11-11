@@ -72,8 +72,7 @@ void iommufd_object_finalize(struct iommufd_ctx *ictx,
 }
 
 /* Undo _iommufd_object_alloc() if iommufd_object_finalize() was not called */
-static void iommufd_object_abort(struct iommufd_ctx *ictx,
-				 struct iommufd_object *obj)
+void iommufd_object_abort(struct iommufd_ctx *ictx, struct iommufd_object *obj)
 {
 	void *old;
 
@@ -301,6 +300,9 @@ struct iommufd_ctx *iommufd_fget(int fd)
 static struct iommufd_object_ops iommufd_object_ops[] = {
 	[IOMMUFD_OBJ_IOAS_PAGETABLE] = {
 		.destroy = iommufd_ioas_pagetable_destroy,
+	},
+	[IOMMUFD_OBJ_HW_PAGETABLE] = {
+		.destroy = iommufd_hw_pagetable_destroy,
 	},
 };
 
