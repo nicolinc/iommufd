@@ -524,7 +524,7 @@ static int vfio_fsl_mc_probe(struct fsl_mc_device *mc_dev)
 	struct device *dev = &mc_dev->dev;
 	int ret;
 
-	vdev = kzalloc(sizeof(*vdev), GFP_KERNEL);
+	vdev = vfio_alloc_device(vfio_fsl_mc_device, vdev);
 	if (!vdev)
 		return -ENOMEM;
 
@@ -561,7 +561,7 @@ out_device:
 	vfio_fsl_uninit_device(vdev);
 out_uninit:
 	vfio_uninit_group_dev(&vdev->vdev);
-	kfree(vdev);
+	vfio_dealloc_device(&vdev->vdev);
 	return ret;
 }
 
@@ -577,7 +577,7 @@ static int vfio_fsl_mc_remove(struct fsl_mc_device *mc_dev)
 	vfio_fsl_uninit_device(vdev);
 
 	vfio_uninit_group_dev(&vdev->vdev);
-	kfree(vdev);
+	vfio_dealloc_device(&vdev->vdev);
 	return 0;
 }
 
