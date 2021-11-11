@@ -11,6 +11,9 @@
 #include <linux/refcount.h>
 #include <linux/uaccess.h>
 
+struct iommu_domain;
+struct iommu_group;
+
 /*
  * The IOVA to PFN map. The mapper auotmatically copies the PFNs into multiple
  * domains and permits sharing of PFNs between io_pagetable instances. This
@@ -25,7 +28,36 @@ struct io_pagetable {
 	unsigned int next_domain_id;
 	struct rb_root_cached area_itree;
 	struct rb_root_cached reserved_iova_itree;
+	unsigned long iova_alignment;
 };
+
+int iopt_init_table(struct io_pagetable *iopt);
+void iopt_destroy_table(struct io_pagetable *iopt);
+int iopt_alloc_iova(struct io_pagetable *iopt, unsigned long *iova,
+		    unsigned long uptr, unsigned long length);
+struct iopt_pages *iopt_get_pages(struct io_pagetable *iopt, unsigned long iova,
+				  unsigned long length);
+int iopt_map_user_pages(struct io_pagetable *iopt, unsigned long iova,
+			void __user *uptr, unsigned long length, int iommu_prot);
+int iopt_copy_iova(struct io_pagetable *dst, struct iopt_pages *pages,
+		   unsigned long dst_iova, unsigned long length, int iommu_prot);
+int iopt_unmap_iova(struct io_pagetable *iopt, unsigned long iova,
+		    unsigned long length);
+int iopt_unmap_all(struct io_pagetable *iopt);
+
+int iopt_access_pages(struct io_pagetable *iopt, unsigned long iova,
+		      size_t npages, struct page **out_pages, bool write);
+void iopt_unaccess_pages(struct io_pagetable *iopt, unsigned long iova,
+			 size_t npages);
+int iopt_table_add_domain(struct io_pagetable *iopt,
+			  struct iommu_domain *domain);
+void iopt_table_remove_domain(struct io_pagetable *iopt,
+			      struct iommu_domain *domain);
+int iopt_table_enforce_group_iova(struct io_pagetable *iopt,
+				  struct iommu_group *group);
+int iopt_reserve_iova(struct io_pagetable *iopt, unsigned long start,
+		      unsigned long last, void *owner);
+void iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner);
 
 struct iommufd_ctx {
 	struct file *filp;

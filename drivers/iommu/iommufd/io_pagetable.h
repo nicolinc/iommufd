@@ -33,6 +33,7 @@ struct iopt_area {
 	struct iommu_domain *storage_domain;
 	/* IOMMU_READ, IOMMU_WRITE, etc */
 	int iommu_prot;
+	atomic_t num_users;
 };
 
 int iopt_area_fill_domains(struct iopt_area *area);
