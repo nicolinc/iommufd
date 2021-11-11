@@ -134,4 +134,59 @@ struct iommu_vfio_ioas {
 	__u16 reserved;
 };
 #define IOMMU_VFIO_IOAS _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VFIO_IOAS)
+
+// FIXME: Below here is only an example:
+enum {
+	IOMMU_DRIVER_DATA_NONE = 0,
+	IOMMU_DRIVER_DATA_INTEL_xxx,
+	IOMMU_DRIVER_DATA_ARM_xxx,
+};
+
+struct iommu_hw_pt_alloc_arm_smmuv3_dd
+{
+	__u32 flags;
+	__u32 type;
+	union {
+		struct {} type1;
+		struct {} type2;
+	};
+};
+
+struct iommu_hw_pagetable_alloc
+{
+	__u32 size;
+	__u32 flags;
+	__u32 ioas_id;
+	__u32 out_hw_pt_id;
+	__u32 nested_hw_pt_id;
+	__u32 device_id;
+	__u32 driver_data_type; // of IOMMU_DRIVER_DATA_*
+	__u32 driver_data_len;
+	__u32 __reserved;
+	__aligned_u64 driver_data;
+};
+
+#define IOMMU_HW_PAGETABLE_ALLOC                                               \
+	_IO(IOMMUFD_TYPE, IOMMUFD_CMD_HW_PAGETABLE_ALLOC)
+
+struct iommu_hw_device_info_intel_xxx
+{
+	__u32 intel_thing1;
+	__u32 intel_thing2;
+};
+
+struct iommu_hw_device_info
+{
+	__u32 size;
+	__u32 flags;
+	__u32 device_id;
+	__u32 drvier_data_type;
+	__u32 driver_data_len;
+	__u32 __reserved;
+	__aligned_u64 driver_data;
+	__u32 general_thing1;
+	__u32 general_thing2;
+	__u32 general_thing3;
+};
+
 #endif

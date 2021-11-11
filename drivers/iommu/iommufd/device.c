@@ -117,6 +117,21 @@ static bool iommufd_hw_pagetable_has_group(struct iommufd_hw_pagetable *hwpt,
 	return false;
 }
 
+static int iommufd_device_attach_sw(struct iommufd_device *idev, u32 *pt_id)
+{
+	struct iommufd_ioas_pagetable *ioaspt;
+	struct iommufd_object *obj;
+
+	obj = iommufd_get_object(idev->ictx, *pt_id,
+				 IOMMUFD_OBJ_IOAS_PAGETABLE);
+	if (IS_ERR(obj))
+		return PTR_ERR(obj);
+	ioaspt = container_of(obj, struct iommufd_ioas_pagetable, obj);
+	iommufd_put_object_keep_user(obj);
+	//idev->ioaspt = ioaspt;
+	return 0;
+}
+
 /**
  * iommufd_device_attach - Connect a device to a page table
  * @idev: device to attach
@@ -136,6 +151,12 @@ int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id)
 	int rc;
 
 	refcount_inc(&idev->obj.users);
+
+	if (!idev->dev) {
+		rc = iommufd_device_attach_sw(idev, pt_id);
+		if (rc)
+			goto out_users;
+	}
 
 	hwpt = iommufd_hw_pagetable_from_id(idev->ictx, *pt_id, idev->dev);
 	if (IS_ERR(hwpt)) {
