@@ -716,7 +716,7 @@ static int mtty_probe(struct mdev_device *mdev)
 	} while (!atomic_try_cmpxchg(&mdev_avail_ports,
 				     &avail_ports, avail_ports - nr_ports));
 
-	mdev_state = kzalloc(sizeof(struct mdev_state), GFP_KERNEL);
+	mdev_state = vfio_alloc_device(mdev_state, vdev);
 	if (mdev_state == NULL) {
 		ret = -ENOMEM;
 		goto err_nr_ports;
@@ -733,7 +733,7 @@ static int mtty_probe(struct mdev_device *mdev)
 
 	if (mdev_state->vconfig == NULL) {
 		ret = -ENOMEM;
-		goto err_state;
+		goto err_out;
 	}
 
 	mutex_init(&mdev_state->ops_lock);
@@ -743,15 +743,13 @@ static int mtty_probe(struct mdev_device *mdev)
 
 	ret = vfio_register_emulated_iommu_dev(&mdev_state->vdev);
 	if (ret)
-		goto err_vconfig;
+		goto err_out;
 	dev_set_drvdata(&mdev->dev, mdev_state);
 	return 0;
 
-err_vconfig:
-	kfree(mdev_state->vconfig);
-err_state:
+err_out:
 	vfio_uninit_group_dev(&mdev_state->vdev);
-	kfree(mdev_state);
+	vfio_dealloc_device(&mdev_state->vdev);
 err_nr_ports:
 	atomic_add(nr_ports, &mdev_avail_ports);
 	return ret;
@@ -766,7 +764,7 @@ static void mtty_remove(struct mdev_device *mdev)
 
 	kfree(mdev_state->vconfig);
 	vfio_uninit_group_dev(&mdev_state->vdev);
-	kfree(mdev_state);
+	vfio_dealloc_device(&mdev_state->vdev);
 	atomic_add(nr_ports, &mdev_avail_ports);
 }
 
@@ -775,6 +773,14 @@ static int mtty_reset(struct mdev_state *mdev_state)
 	pr_info("%s: called\n", __func__);
 
 	return 0;
+}
+
+static void mtty_release(struct vfio_device *vdev)
+{
+	struct mdev_state *mdev_state =
+		container_of(vdev, struct mdev_state, vdev);
+
+	kfree(mdev_state->vconfig);
 }
 
 static ssize_t mtty_read(struct vfio_device *vdev, char __user *buf,
@@ -1305,6 +1311,7 @@ static struct attribute_group *mdev_type_groups[] = {
 
 static const struct vfio_device_ops mtty_dev_ops = {
 	.name = "vfio-mtty",
+	.release = mtty_release,
 	.read = mtty_read,
 	.write = mtty_write,
 	.ioctl = mtty_ioctl,
