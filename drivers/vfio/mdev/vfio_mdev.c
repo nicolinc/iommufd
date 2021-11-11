@@ -17,6 +17,10 @@
 
 #include "mdev_private.h"
 
+struct vfio_mdev_state {
+	struct vfio_device	vdev;
+};
+
 static int vfio_mdev_open_device(struct vfio_device *core_vdev)
 {
 	struct mdev_device *mdev = to_mdev_device(core_vdev->dev);
@@ -111,24 +115,24 @@ static const struct vfio_device_ops vfio_mdev_dev_ops = {
 
 static int vfio_mdev_probe(struct mdev_device *mdev)
 {
-	struct vfio_device *vdev;
+	struct vfio_mdev_state *vdev;
 	int ret;
 
-	vdev = kzalloc(sizeof(*vdev), GFP_KERNEL);
+	vdev = vfio_alloc_device(vfio_mdev_state, vdev);
 	if (!vdev)
 		return -ENOMEM;
 
-	vfio_init_group_dev(vdev, &mdev->dev, &vfio_mdev_dev_ops);
-	ret = vfio_register_emulated_iommu_dev(vdev);
+	vfio_init_group_dev(&vdev->vdev, &mdev->dev, &vfio_mdev_dev_ops);
+	ret = vfio_register_emulated_iommu_dev(&vdev->vdev);
 	if (ret)
 		goto out_uninit;
 
-	dev_set_drvdata(&mdev->dev, vdev);
+	dev_set_drvdata(&mdev->dev, &vdev->vdev);
 	return 0;
 
 out_uninit:
-	vfio_uninit_group_dev(vdev);
-	kfree(vdev);
+	vfio_uninit_group_dev(&vdev->vdev);
+	vfio_dealloc_device(&vdev->vdev);
 	return ret;
 }
 
@@ -138,7 +142,7 @@ static void vfio_mdev_remove(struct mdev_device *mdev)
 
 	vfio_unregister_group_dev(vdev);
 	vfio_uninit_group_dev(vdev);
-	kfree(vdev);
+	vfio_dealloc_device(vdev);
 }
 
 struct mdev_driver vfio_mdev_driver = {
