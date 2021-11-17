@@ -36,6 +36,7 @@ struct vfio_device {
 
 	/* Members below here are private, not for driver use */
 	struct device device;
+	struct rcu_head rcu;
 	refcount_t refcount;
 	unsigned int open_count;
 	struct completion comp;

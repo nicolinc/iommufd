@@ -97,12 +97,29 @@ static void vfio_ccw_sch_irq(struct subchannel *sch)
 	vfio_device_put(&private->vdev);
 }
 
+static void vfio_ccw_release(struct vfio_device *vdev)
+{
+	struct vfio_ccw_private *private =
+		container_of(vdev, struct vfio_ccw_private, vdev);
+
+	if (private->crw_region)
+		kmem_cache_free(vfio_ccw_crw_region, private->crw_region);
+	if (private->schib_region)
+		kmem_cache_free(vfio_ccw_schib_region, private->schib_region);
+	if (private->cmd_region)
+		kmem_cache_free(vfio_ccw_cmd_region, private->cmd_region);
+	if (private->io_region)
+		kmem_cache_free(vfio_ccw_io_region, private->io_region);
+	kfree(private->cp.guest_cp);
+	mutex_destroy(&private->io_mutex);
+}
+
 struct vfio_ccw_private *vfio_ccw_alloc_private(struct mdev_device *mdev,
 						struct subchannel *sch)
 {
 	struct vfio_ccw_private *private;
 
-	private = kzalloc(sizeof(*private), GFP_KERNEL);
+	private = vfio_alloc_device(vfio_ccw_private, vdev);
 	if (!private)
 		return ERR_PTR(-ENOMEM);
 
@@ -118,43 +135,34 @@ struct vfio_ccw_private *vfio_ccw_alloc_private(struct mdev_device *mdev,
 	private->cp.guest_cp = kcalloc(CCWCHAIN_LEN_MAX, sizeof(struct ccw1),
 				       GFP_KERNEL);
 	if (!private->cp.guest_cp)
-		goto out_free_private;
+		goto err_out;
 
 	private->io_region = kmem_cache_zalloc(vfio_ccw_io_region,
 					       GFP_KERNEL | GFP_DMA);
 	if (!private->io_region)
-		goto out_free_cp;
+		goto err_out;
 
 	private->cmd_region = kmem_cache_zalloc(vfio_ccw_cmd_region,
 						GFP_KERNEL | GFP_DMA);
 	if (!private->cmd_region)
-		goto out_free_io;
+		goto err_out;
 
 	private->schib_region = kmem_cache_zalloc(vfio_ccw_schib_region,
 						  GFP_KERNEL | GFP_DMA);
 
 	if (!private->schib_region)
-		goto out_free_cmd;
+		goto err_out;
 
 	private->crw_region = kmem_cache_zalloc(vfio_ccw_crw_region,
 						GFP_KERNEL | GFP_DMA);
 
 	if (!private->crw_region)
-		goto out_free_schib;
+		goto err_out;
 	return private;
 
-out_free_schib:
-	kmem_cache_free(vfio_ccw_schib_region, private->schib_region);
-out_free_cmd:
-	kmem_cache_free(vfio_ccw_cmd_region, private->cmd_region);
-out_free_io:
-	kmem_cache_free(vfio_ccw_io_region, private->io_region);
-out_free_cp:
-	kfree(private->cp.guest_cp);
-out_free_private:
-	mutex_destroy(&private->io_mutex);
+err_out:
 	vfio_uninit_group_dev(&private->vdev);
-	kfree(private);
+	vfio_dealloc_device(&private->vdev);
 	return ERR_PTR(-ENOMEM);
 }
 
@@ -167,14 +175,8 @@ void vfio_ccw_free_private(struct vfio_ccw_private *private)
 		kfree(crw);
 	}
 
-	kmem_cache_free(vfio_ccw_crw_region, private->crw_region);
-	kmem_cache_free(vfio_ccw_schib_region, private->schib_region);
-	kmem_cache_free(vfio_ccw_cmd_region, private->cmd_region);
-	kmem_cache_free(vfio_ccw_io_region, private->io_region);
-	kfree(private->cp.guest_cp);
-	mutex_destroy(&private->io_mutex);
 	vfio_uninit_group_dev(&private->vdev);
-	kfree_rcu(private, rcu);
+	vfio_dealloc_device(&private->vdev);
 }
 
 static int vfio_ccw_sch_probe(struct subchannel *sch)

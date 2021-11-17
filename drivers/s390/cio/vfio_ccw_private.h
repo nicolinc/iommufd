@@ -94,7 +94,6 @@ struct vfio_ccw_crw {
  */
 struct vfio_ccw_private {
 	struct vfio_device vdev;
-	struct rcu_head rcu;
 	struct subchannel	*sch;
 	int			state;
 	struct completion	*completion;

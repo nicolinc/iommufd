@@ -499,7 +499,7 @@ static void vfio_device_release(struct device *dev)
 {
 	struct vfio_device *device = container_of(dev, struct vfio_device, device);
 
-	kfree(device);
+	kfree_rcu(device, rcu);
 }
 
 /**
