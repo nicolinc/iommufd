@@ -3275,4 +3275,5 @@ struct platform_driver tegra_dc_driver = {
 	},
 	.probe = tegra_dc_probe,
 	.remove = tegra_dc_remove,
+	.suppress_auto_claim_dma_owner = true,
 };
