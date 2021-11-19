@@ -7,4 +7,6 @@ iommufd-y := \
 	main.o \
 	pages.o
 
+iommufd-$(CONFIG_IOMMUFD_TEST) += selftest.o
+
 obj-$(CONFIG_IOMMUFD) += iommufd.o
