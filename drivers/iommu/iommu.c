@@ -2001,7 +2001,7 @@ static int __iommu_attach_device(struct iommu_domain *domain,
 int iommu_attach_device(struct iommu_domain *domain, struct device *dev)
 {
 	struct iommu_group *group;
-	int ret;
+	int ret = 0;
 
 	group = iommu_group_get(dev);
 	if (!group)
@@ -2012,13 +2012,30 @@ int iommu_attach_device(struct iommu_domain *domain, struct device *dev)
 	 * change while we are attaching
 	 */
 	mutex_lock(&group->mutex);
-	ret = -EINVAL;
-	if (iommu_group_device_count(group) != 1)
-		goto out_unlock;
+	if (group->dma_owner == DMA_OWNER_DMA_API &&
+	    refcount_read(&group->owner_cnt) == 1) {
+		ret = __iommu_attach_group(domain, group);
+		if (ret)
+			goto unlock_out;
 
-	ret = __iommu_attach_group(domain, group);
+		group->dma_owner = DMA_OWNER_PRIVATE_DOMAIN_AUTO;
+		group->owner_cookie = domain;
+	} else if (group->dma_owner == DMA_OWNER_PRIVATE_DOMAIN &&
+		   group->domain == domain) {
+		if (refcount_inc_not_zero(&group->owner_cnt))
+			goto unlock_out;
 
-out_unlock:
+		ret = __iommu_attach_group(domain, group);
+		if (ret)
+			goto unlock_out;
+
+		group->dma_owner = DMA_OWNER_PRIVATE_DOMAIN;
+		refcount_set(&group->owner_cnt, 1);
+	} else {
+		ret = -EBUSY;
+	}
+
+unlock_out:
 	mutex_unlock(&group->mutex);
 	iommu_group_put(group);
 
@@ -2268,14 +2285,21 @@ void iommu_detach_device(struct iommu_domain *domain, struct device *dev)
 		return;
 
 	mutex_lock(&group->mutex);
-	if (iommu_group_device_count(group) != 1) {
-		WARN_ON(1);
-		goto out_unlock;
+	if (WARN_ON(group->owner_cookie != domain ||
+		    (group->dma_owner != DMA_OWNER_PRIVATE_DOMAIN &&
+		     group->dma_owner != DMA_OWNER_PRIVATE_DOMAIN_AUTO)))
+		return;
+
+	if (group->dma_owner == DMA_OWNER_PRIVATE_DOMAIN) {
+		if (refcount_dec_and_test(&group->owner_cnt)) {
+			__iommu_detach_group(domain, group);
+			group->dma_owner = DMA_OWNER_NONE;
+		}
+	} else {
+		__iommu_detach_group(domain, group);
+		group->dma_owner = DMA_OWNER_DMA_API;
 	}
 
-	__iommu_detach_group(domain, group);
-
-out_unlock:
 	mutex_unlock(&group->mutex);
 	iommu_group_put(group);
 }
