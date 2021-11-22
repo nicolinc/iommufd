@@ -464,13 +464,12 @@ static int vfio_ap_mdev_probe(struct mdev_device *mdev)
 	if ((atomic_dec_if_positive(&matrix_dev->available_instances) < 0))
 		return -EPERM;
 
-	matrix_mdev = kzalloc(sizeof(*matrix_mdev), GFP_KERNEL);
+	matrix_mdev = vfio_alloc_device(ap_matrix_mdev, vdev,
+					&mdev->dev, &vfio_ap_matrix_dev_ops);
 	if (!matrix_mdev) {
 		ret = -ENOMEM;
 		goto err_dec_available;
 	}
-	vfio_init_group_dev(&matrix_mdev->vdev, &mdev->dev,
-			    &vfio_ap_matrix_dev_ops);
 
 	matrix_mdev->mdev = mdev;
 	vfio_ap_matrix_init(&matrix_dev->info, &matrix_mdev->matrix);
@@ -489,8 +488,7 @@ err_list:
 	mutex_lock(&matrix_dev->lock);
 	list_del(&matrix_mdev->node);
 	mutex_unlock(&matrix_dev->lock);
-	vfio_uninit_group_dev(&matrix_mdev->vdev);
-	kfree(matrix_mdev);
+	vfio_put_device(&matrix_mdev->vdev);
 err_dec_available:
 	atomic_inc(&matrix_dev->available_instances);
 	return ret;
@@ -506,8 +504,7 @@ static void vfio_ap_mdev_remove(struct mdev_device *mdev)
 	vfio_ap_mdev_reset_queues(matrix_mdev);
 	list_del(&matrix_mdev->node);
 	mutex_unlock(&matrix_dev->lock);
-	vfio_uninit_group_dev(&matrix_mdev->vdev);
-	kfree(matrix_mdev);
+	vfio_put_device(&matrix_mdev->vdev);
 	atomic_inc(&matrix_dev->available_instances);
 }
 
