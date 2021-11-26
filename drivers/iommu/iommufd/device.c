@@ -32,7 +32,7 @@ void iommufd_device_destroy(struct iommufd_object *obj)
 	struct iommufd_device *idev =
 		container_of(obj, struct iommufd_device, obj);
 
-	iommu_device_release_dma_owner(idev->dev, DMA_OWNER_USER);
+	iommu_device_release_dma_owner(idev->dev, DMA_OWNER_PRIVATE_DOMAIN_USER);
 	fput(idev->ictx->filp);
 }
 
@@ -64,7 +64,8 @@ struct iommufd_device *iommufd_bind_pci_device(int fd, struct pci_dev *pdev,
 	if (!ictx)
 		return ERR_PTR(-EINVAL);
 
-	rc = iommu_device_set_dma_owner(&pdev->dev, DMA_OWNER_USER, ictx->filp);
+	rc = iommu_device_set_dma_owner(&pdev->dev,
+			DMA_OWNER_PRIVATE_DOMAIN_USER, ictx->filp);
 	if (rc)
 		goto out_file_put;
 
@@ -89,7 +90,7 @@ struct iommufd_device *iommufd_bind_pci_device(int fd, struct pci_dev *pdev,
 	return idev;
 
 out_release_owner:
-	iommu_device_release_dma_owner(&pdev->dev, DMA_OWNER_USER);
+	iommu_device_release_dma_owner(&pdev->dev, DMA_OWNER_PRIVATE_DOMAIN_USER);
 out_file_put:
 	fput(ictx->filp);
 	return ERR_PTR(rc);
