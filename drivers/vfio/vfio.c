@@ -503,7 +503,7 @@ static void vfio_device_release(struct kref *kref)
 	if (device->ops && device->ops->release)
 		device->ops->release(device);
 
-	kfree(device);
+	kfree_rcu(device, rcu);
 }
 
 /*
