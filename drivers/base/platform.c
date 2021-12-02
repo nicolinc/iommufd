@@ -1454,8 +1454,7 @@ static void platform_shutdown(struct device *_dev)
 		drv->shutdown(dev);
 }
 
-
-int platform_dma_configure(struct device *dev)
+int firmware_dma_configure(struct device *dev)
 {
 	enum dev_dma_attr attr;
 	int ret = 0;
@@ -1483,7 +1482,7 @@ struct bus_type platform_bus_type = {
 	.probe		= platform_probe,
 	.remove		= platform_remove,
 	.shutdown	= platform_shutdown,
-	.dma_configure	= platform_dma_configure,
+	.dma_configure	= firmware_dma_configure,
 	.pm		= &platform_dev_pm_ops,
 };
 EXPORT_SYMBOL_GPL(platform_bus_type);
