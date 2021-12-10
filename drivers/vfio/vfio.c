@@ -32,6 +32,7 @@
 #include <linux/vfio.h>
 #include <linux/wait.h>
 #include <linux/sched/signal.h>
+#include <linux/iommufd.h>
 #include "vfio.h"
 
 #define DRIVER_VERSION	"0.3"
@@ -1245,12 +1246,17 @@ static bool vfio_assert_device_open(struct vfio_device *device)
 	return !WARN_ON_ONCE(!READ_ONCE(device->open_count));
 }
 
+static bool vfio_device_in_container(struct vfio_device *device)
+{
+	return device->group && device->group->container;
+}
+
 static void vfio_device_close_decount(struct vfio_device *device)
 {
 	vfio_assert_device_open(device);
 	mutex_lock(&device->dev_set->lock);
 	if (device->open_count == 1) {
-		if ((!device->group || !device->group->container) &&
+		if (!vfio_device_in_container(device) &&
 		    device->ops->unbind_iommufd)
 			device->ops->unbind_iommufd(device);
 		if (device->ops->close_device)
@@ -1823,6 +1829,63 @@ static long vfio_device_bind_iommufd(struct file *filep, unsigned long arg)
 			    sizeof(bind.out_devid)) ? -EFAULT : 0;
 }
 
+static long vfio_device_attach_ioas(struct vfio_device *device,
+				    unsigned long arg)
+{
+	struct vfio_device_attach_ioas attach;
+	unsigned long minsz;
+	int ret;
+
+	minsz = offsetofend(struct vfio_device_attach_ioas, ioas_id);
+	if (copy_from_user(&attach, (void __user *)arg, minsz))
+		return -EFAULT;
+
+	if (attach.argsz < minsz || attach.flags ||
+	    attach.iommufd < 0 || attach.ioas_id == IOMMUFD_INVALID_ID)
+		return -EINVAL;
+
+	/* not allowed if the device is opened in legacy interface */
+	if (vfio_device_in_container(device))
+		return -EBUSY;
+
+	if (unlikely(!device->ops->attach_ioas))
+		return -EINVAL;
+
+	ret = device->ops->attach_ioas(device, &attach);
+	if (ret)
+		return ret;
+
+	return copy_to_user((void __user *)arg + minsz,
+			    &attach.out_hwpt_id,
+			    sizeof(attach.out_hwpt_id)) ? -EFAULT : 0;
+}
+
+static long vfio_device_detach_ioas(struct vfio_device *device,
+				    unsigned long arg)
+{
+	struct vfio_device_detach_ioas detach;
+	unsigned long minsz;
+
+	minsz = offsetofend(struct vfio_device_detach_ioas, ioas_id);
+	if (copy_from_user(&detach, (void __user *)arg, minsz))
+		return -EFAULT;
+
+	if (detach.argsz < minsz || detach.flags ||
+	    detach.iommufd < 0 || detach.ioas_id == IOMMUFD_INVALID_ID)
+		return -EINVAL;
+
+	/* not allowed if the device is opened in legacy interface */
+	if (vfio_device_in_container(device))
+		return -EBUSY;
+
+	if (unlikely(!device->ops->detach_ioas))
+		return -EINVAL;
+
+	device->ops->detach_ioas(device, &detach);
+
+	return 0;
+}
+
 static long vfio_device_fops_unl_ioctl(struct file *filep,
 				       unsigned int cmd, unsigned long arg)
 {
@@ -1835,11 +1898,18 @@ static long vfio_device_fops_unl_ioctl(struct file *filep,
 	/* Pair with smp_store_release() in vfio_device_bind_iommufd() */
 	device = smp_load_acquire(&filep->private_data);
 
+	if (!device)
+		return -EINVAL;
+
 	switch (cmd) {
 	case VFIO_DEVICE_FEATURE:
 		return vfio_ioctl_device_feature(device, (void __user *)arg);
+	case VFIO_DEVICE_ATTACH_IOAS:
+		return vfio_device_attach_ioas(device, arg);
+	case VFIO_DEVICE_DETACH_IOAS:
+		return vfio_device_detach_ioas(device, arg);
 	default:
-		if (!device || unlikely(!device->ops->ioctl))
+		if (unlikely(!device->ops->ioctl))
 			return -EINVAL;
 		return device->ops->ioctl(device, cmd, arg);
 	}
