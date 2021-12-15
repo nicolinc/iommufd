@@ -5,7 +5,8 @@ iommufd-y := \
 	io_pagetable.o \
 	ioas_pt.o \
 	main.o \
-	pages.o
+	pages.o \
+	vfio_compat.o
 
 iommufd-$(CONFIG_IOMMUFD_TEST) += selftest.o
 
