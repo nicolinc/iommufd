@@ -62,6 +62,8 @@ void iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner);
 struct iommufd_ctx {
 	struct file *filp;
 	struct xarray objects;
+
+	struct iommufd_ioas_pagetable *vfio_ioaspt;
 };
 
 struct iommufd_ctx *iommufd_fget(int fd);
@@ -74,6 +76,9 @@ struct iommufd_ucmd
 	void *cmd;
 	struct iommufd_object *new_object;
 };
+
+int iommufd_vfio_ioctl(struct iommufd_ctx *ictx, unsigned int cmd,
+		       unsigned long arg);
 
 /* Copy the filled in cmd struct back to userspace. */
 static inline int iommufd_ucmd_respond(struct iommufd_ucmd *ucmd,
