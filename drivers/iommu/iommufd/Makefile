@@ -5,6 +5,7 @@ iommufd-y := \
 	io_pagetable.o \
 	ioas_pt.o \
 	main.o \
-	pages.o
+	pages.o \
+	vfio_compat.o
 
 obj-$(CONFIG_IOMMUFD) += iommufd.o

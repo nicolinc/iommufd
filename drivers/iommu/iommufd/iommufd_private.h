@@ -62,6 +62,8 @@ void iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner);
 struct iommufd_ctx {
 	struct file *filp;
 	struct xarray objects;
+
+	struct iommufd_ioas_pagetable *vfio_ioaspt;
 };
 
 struct iommufd_ctx *iommufd_fget(int fd);
@@ -73,6 +75,9 @@ struct iommufd_ucmd
 	u32 user_size;
 	void *cmd;
 };
+
+int iommufd_vfio_ioctl(struct iommufd_ctx *ictx, unsigned int cmd,
+		       unsigned long arg);
 
 /* Copy the filled in cmd struct back to userspace. */
 static inline int iommufd_ucmd_respond(struct iommufd_ucmd *ucmd,
@@ -175,6 +180,7 @@ int iommufd_ioas_pagetable_iova_ranges(struct iommufd_ucmd *ucmd);
 int iommufd_ioas_pagetable_map(struct iommufd_ucmd *ucmd);
 int iommufd_ioas_pagetable_copy(struct iommufd_ucmd *ucmd);
 int iommufd_ioas_pagetable_unmap(struct iommufd_ucmd *ucmd);
+int iommufd_vfio_ioas(struct iommufd_ucmd *ucmd);
 
 /*
  * A HW pagetable is called an iommu_domain inside the kernel. This user object

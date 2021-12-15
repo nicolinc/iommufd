@@ -17,6 +17,7 @@ enum {
 	IOMMUFD_CMD_IOAS_PAGETABLE_MAP,
 	IOMMUFD_CMD_IOAS_PAGETABLE_COPY,
 	IOMMUFD_CMD_IOAS_PAGETABLE_UNMAP,
+	IOMMUFD_CMD_VFIO_IOAS,
 };
 
 /*
@@ -115,4 +116,22 @@ struct iommu_ioas_pagetable_unmap
 };
 #define IOMMU_IOAS_PAGETABLE_UNMAP                                             \
 	_IO(IOMMUFD_TYPE, IOMMUFD_CMD_IOAS_PAGETABLE_UNMAP)
+
+/*
+ * The VFIO compatability support uses a single ioas because VFIO APIs do not
+ * support the ID field. Set or Get the IOAS that VFIO compatabilitiy will use.
+ * If no IOAS is assigned then VFIO compatability will auto-create an IOAS when
+ * needed and GET will return this ID. SET or CLEAR does not destroy the
+ * auto-created IOAS.
+ */
+#define IOMMU_VFIO_IOAS_GET 0
+#define IOMMU_VFIO_IOAS_SET 1
+#define IOMMU_VFIO_IOAS_CLEAR 2
+struct iommu_vfio_ioas {
+	__u32 size;
+	__u32 ioas_id;
+	__u16 op;
+	__u16 reserved;
+};
+#define IOMMU_VFIO_IOAS _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VFIO_IOAS)
 #endif
