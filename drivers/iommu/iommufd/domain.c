@@ -69,6 +69,8 @@ iommufd_hw_pagetable_auto_get(struct iommufd_ctx *ictx,
 	hwpt->ioaspt = ioaspt;
 	/* The calling driver is a user until iommufd_hw_pagetable_put() */
 	refcount_inc(&ioaspt->obj.users);
+	/* Balance with the first decrement in iommufd_object_destroy_user() */
+	refcount_inc(&hwpt->obj.users);
 
 	list_add_tail(&hwpt->auto_domains_item, &ioaspt->auto_domains);
 	/*
