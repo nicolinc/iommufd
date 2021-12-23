@@ -10,7 +10,6 @@ static struct iommufd_ioas_pagetable *get_compat_ioas(struct iommufd_ctx *ictx)
 {
 	struct iommufd_ioas_pagetable *ioaspt = NULL;
 	struct iommufd_ioas_pagetable *out_ioaspt;
-	int rc;
 
 	xa_lock(&ictx->objects);
 	if (ictx->vfio_ioaspt && lock_obj(&ictx->vfio_ioaspt->obj)) {
@@ -20,15 +19,9 @@ static struct iommufd_ioas_pagetable *get_compat_ioas(struct iommufd_ctx *ictx)
 	}
 	xa_unlock(&ictx->objects);
 
-	ioaspt = iommufd_object_alloc(ictx, ioaspt, IOMMUFD_OBJ_IOAS_PAGETABLE);
+	ioaspt = __iommufd_ioas_pagetable_alloc(ictx);
 	if (IS_ERR(ioaspt))
 		return ioaspt;
-
-	/* FIXME should probably share with iommufd_ioas_pagetable_alloc() */
-	rc = iopt_init_table(&ioaspt->iopt);
-	if (rc)
-		goto out_abort;
-	INIT_LIST_HEAD(&ioaspt->auto_domains);
 
 	xa_lock(&ictx->objects);
 	if (ictx->vfio_ioaspt && lock_obj(&ictx->vfio_ioaspt->obj))
@@ -42,10 +35,6 @@ static struct iommufd_ioas_pagetable *get_compat_ioas(struct iommufd_ctx *ictx)
 	else
 		iommufd_object_abort(ictx, &ioaspt->obj);
 	return out_ioaspt;
-
-out_abort:
-	iommufd_object_abort(ictx, &ioaspt->obj);
-	return ERR_PTR(rc);
 }
 
 static int vfio_map_dma(struct iommufd_ctx *ictx, unsigned int cmd,

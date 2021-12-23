@@ -20,6 +20,27 @@ void iommufd_ioas_pagetable_destroy(struct iommufd_object *obj)
 	iopt_destroy_table(&ioaspt->iopt);
 }
 
+struct iommufd_ioas_pagetable *
+__iommufd_ioas_pagetable_alloc(struct iommufd_ctx *ictx)
+{
+	struct iommufd_ioas_pagetable *ioaspt;
+	int rc;
+
+	ioaspt = iommufd_object_alloc(ictx, ioaspt, IOMMUFD_OBJ_IOAS_PAGETABLE);
+	if (IS_ERR(ioaspt))
+		return ioaspt;
+
+	rc = iopt_init_table(&ioaspt->iopt);
+	if (rc) {
+		iommufd_object_abort(ictx, &ioaspt->obj);
+		return ERR_PTR(rc);
+	}
+
+	INIT_LIST_HEAD(&ioaspt->auto_domains);
+
+	return ioaspt;
+}
+
 int iommufd_ioas_pagetable_alloc(struct iommufd_ucmd *ucmd)
 {
 	struct iommu_ioas_pagetable_alloc *cmd = ucmd->cmd;
@@ -29,16 +50,11 @@ int iommufd_ioas_pagetable_alloc(struct iommufd_ucmd *ucmd)
 	if (cmd->flags)
 		return -EOPNOTSUPP;
 
-	ioaspt = iommufd_object_alloc_ucmd(ucmd, ioaspt,
-					   IOMMUFD_OBJ_IOAS_PAGETABLE);
+	ioaspt = __iommufd_ioas_pagetable_alloc(ucmd->ictx);
 	if (IS_ERR(ioaspt))
 		return PTR_ERR(ioaspt);
 
-	rc = iopt_init_table(&ioaspt->iopt);
-	if (rc)
-		return rc;
-
-	INIT_LIST_HEAD(&ioaspt->auto_domains);
+	ucmd->new_object = &ioaspt->obj;
 	cmd->out_ioas_id = ioaspt->obj.id;
 
 	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
@@ -123,6 +139,32 @@ static int conv_iommu_prot(u32 map_flags)
 	return iommu_prot;
 }
 
+int __iommufd_ioas_pagetable_map(struct iommufd_ioas_pagetable *ioaspt,
+				 struct iommu_ioas_pagetable_map *cmd)
+{
+	int rc;
+
+	down_write(&ioaspt->iopt.rwsem);
+	if (!(cmd->flags & IOMMU_IOAS_PAGETABLE_MAP_FIXED_IOVA)) {
+		unsigned long iova;
+
+		rc = iopt_alloc_iova(&ioaspt->iopt, &iova, cmd->user_va,
+				     cmd->length);
+		if (rc)
+			goto out_unlock;
+		cmd->iova = iova;
+	}
+
+	rc = iopt_map_user_pages(&ioaspt->iopt, cmd->iova,
+				 u64_to_user_ptr(cmd->user_va), cmd->length,
+				 conv_iommu_prot(cmd->flags));
+	if (rc)
+		goto out_unlock;
+out_unlock:
+	up_write(&ioaspt->iopt.rwsem);
+	return rc;
+}
+
 int iommufd_ioas_pagetable_map(struct iommufd_ucmd *ucmd)
 {
 	struct iommu_ioas_pagetable_map *cmd = ucmd->cmd;
@@ -141,25 +183,12 @@ int iommufd_ioas_pagetable_map(struct iommufd_ucmd *ucmd)
 	if (IS_ERR(ioaspt))
 		return PTR_ERR(ioaspt);
 
-	down_write(&ioaspt->iopt.rwsem);
-	if (!(cmd->flags & IOMMU_IOAS_PAGETABLE_MAP_FIXED_IOVA)) {
-		unsigned long iova;
-
-		rc = iopt_alloc_iova(&ioaspt->iopt, &iova, cmd->user_va,
-				     cmd->length);
-		if (rc)
-			goto out_unlock;
-		cmd->iova = iova;
-	}
-
-	rc = iopt_map_user_pages(&ioaspt->iopt, cmd->iova,
-				 u64_to_user_ptr(cmd->user_va), cmd->length,
-				 conv_iommu_prot(cmd->flags));
+	rc = __iommufd_ioas_pagetable_map(ioaspt, cmd);
 	if (rc)
-		goto out_unlock;
+		goto out_put;
+
 	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
-out_unlock:
-	up_write(&ioaspt->iopt.rwsem);
+out_put:
 	iommufd_put_object(&ioaspt->obj);
 	return rc;
 }
