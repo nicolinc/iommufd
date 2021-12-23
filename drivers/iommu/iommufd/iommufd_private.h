@@ -11,6 +11,8 @@
 #include <linux/refcount.h>
 #include <linux/uaccess.h>
 
+#include <uapi/linux/iommufd.h>
+
 struct iommu_domain;
 struct iommu_group;
 
@@ -189,12 +191,17 @@ get_ioas_pagetable(struct iommufd_ucmd *ucmd, u32 id)
 			    struct iommufd_ioas_pagetable, obj);
 }
 
+struct iommufd_ioas_pagetable *
+__iommufd_ioas_pagetable_alloc(struct iommufd_ctx *ictx);
 int iommufd_ioas_pagetable_alloc(struct iommufd_ucmd *ucmd);
 void iommufd_ioas_pagetable_destroy(struct iommufd_object *obj);
 int iommufd_ioas_pagetable_iova_ranges(struct iommufd_ucmd *ucmd);
 int iommufd_ioas_pagetable_map(struct iommufd_ucmd *ucmd);
 int iommufd_ioas_pagetable_copy(struct iommufd_ucmd *ucmd);
 int iommufd_ioas_pagetable_unmap(struct iommufd_ucmd *ucmd);
+
+int __iommufd_ioas_pagetable_map(struct iommufd_ioas_pagetable *ioaspt,
+				 struct iommu_ioas_pagetable_map *cmd);
 
 /*
  * A HW pagetable is called an iommu_domain inside the kernel. This user object
