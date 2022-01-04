@@ -6,18 +6,6 @@
 
 #include "iommufd_private.h"
 
-static bool lock_obj(struct iommufd_object *obj)
-{
-	/* FIXME this could be in an inline and shared with iommufd_get_object */
-	if (!down_read_trylock(&obj->destroy_rwsem))
-		return false;
-	if (!refcount_inc_not_zero(&obj->users)) {
-		up_read(&obj->destroy_rwsem);
-		return false;
-	}
-	return true;
-}
-
 static struct iommufd_ioas_pagetable *get_compat_ioas(struct iommufd_ctx *ictx)
 {
 	struct iommufd_ioas_pagetable *ioaspt = NULL;
