@@ -93,15 +93,11 @@ struct iommufd_object *iommufd_get_object(struct iommufd_ctx *ictx, u32 id,
 		goto out_unlock;
 	if (type != IOMMUFD_OBJ_ANY && obj->type != type)
 		goto out_unlock;
-	if (!down_read_trylock(&obj->destroy_rwsem))
+	if (!lock_obj(obj))
 		goto out_unlock;
-	if (!refcount_inc_not_zero(&obj->users))
-		goto out_unlock_rwsem;
 	xa_unlock(&ictx->objects);
 	return obj;
 
-out_unlock_rwsem:
-	up_read(&obj->destroy_rwsem);
 out_unlock:
 	xa_unlock(&ictx->objects);
 	return ERR_PTR(-ENOENT);

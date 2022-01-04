@@ -116,6 +116,17 @@ struct iommufd_object
 	unsigned int id;
 };
 
+static inline bool lock_obj(struct iommufd_object *obj)
+{
+	if (!down_read_trylock(&obj->destroy_rwsem))
+		return false;
+	if (!refcount_inc_not_zero(&obj->users)) {
+		up_read(&obj->destroy_rwsem);
+		return false;
+	}
+	return true;
+}
+
 struct iommufd_object *iommufd_get_object(struct iommufd_ctx *ictx, u32 id,
 					   enum iommufd_object_type type);
 static inline void iommufd_put_object(struct iommufd_object *obj)
