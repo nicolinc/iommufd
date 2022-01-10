@@ -11,6 +11,7 @@
 
 #define __EXPORTED_HEADERS__
 #include <linux/iommufd.h>
+#include <linux/vfio.h>
 #include "../../../../drivers/iommu/iommufd/iommufd_test.h"
 
 static void *buffer;
@@ -799,9 +800,49 @@ static bool is_backed_by_huge(void *addr)
 		}                                                              \
 	})
 
+#define mock_domain_basic(vfio_compact, map_cmd, user_va, iova, length)        \
+	({                                                                     \
+		unsigned long IOCTL_CMD_MAP = vfio_compact ?                   \
+					      VFIO_IOMMU_MAP_DMA :             \
+					      IOMMU_IOAS_PAGETABLE_MAP;        \
+		size_t page_size = get_page_size(variant->hugepages);          \
+		int flags = MAP_SHARED | MAP_ANONYMOUS;                        \
+		int prot = PROT_READ | PROT_WRITE;                             \
+		uint8_t *buf;                                                  \
+		/* vfio_compact must provide iova for FIXED_IOVA */            \
+		if (vfio_compact)                                              \
+			*iova = MOCK_APERTURE_START;                           \
+		*user_va = (uintptr_t)buffer;                                  \
+		*length = page_size;                                           \
+		/* Simple one page map */                                      \
+		ASSERT_EQ(0, ioctl(self->fd, IOCTL_CMD_MAP, map_cmd));         \
+		check_mock_iova(buffer, *iova, page_size);                     \
+		/* Also MAP_POPULATE for pageflag check */                     \
+		if (variant->hugepages)                                        \
+			flags |= MAP_HUGETLB | MAP_POPULATE;                   \
+		/* EFAULT half way through mapping */                          \
+		buf = mmap(0, page_size * 8, prot, flags, -1, 0);              \
+		ASSERT_NE(MAP_FAILED, buf);                                    \
+		/* Ensure buf is backed by hugepages */                        \
+		if (variant->hugepages)                                        \
+			ASSERT_EQ(1, is_backed_by_huge(buf));                  \
+		ASSERT_EQ(0, munmap(buf + page_size * 4, page_size * 4));      \
+		if (vfio_compact)                                              \
+			*iova += *length;                                      \
+		*user_va = (uintptr_t)buf;                                     \
+		*length = page_size * 8;                                       \
+		EXPECT_ERRNO(EFAULT,                                           \
+			     ioctl(self->fd, IOCTL_CMD_MAP, map_cmd));         \
+		/* EFAULT on first page */                                     \
+		ASSERT_EQ(0, munmap(buf, page_size * 4));                      \
+		if (vfio_compact)                                              \
+			*iova += *length;                                      \
+		EXPECT_ERRNO(EFAULT,                                           \
+			     ioctl(self->fd, IOCTL_CMD_MAP, map_cmd));         \
+	})
+
 TEST_F(iommufd_mock_domain, basic)
 {
-	size_t page_size = get_page_size(variant->hugepages);
 	struct iommu_ioas_pagetable_map map_cmd = {
 		.size = sizeof(map_cmd),
 		.ioas_id = self->ioas_id,
@@ -810,38 +851,68 @@ TEST_F(iommufd_mock_domain, basic)
 		.size = sizeof(unmap_cmd),
 		.ioas_id = self->ioas_id,
 	};
-	int flags = MAP_SHARED | MAP_ANONYMOUS;
-	uint8_t *buf;
+	__u64 *user_va = &map_cmd.user_va;
+	__u64 *length = &map_cmd.length;
+	__u64 *iova = &map_cmd.iova;
 
-	/* Simple one page map */
-	map_cmd.user_va = (uintptr_t)buffer;
-	map_cmd.length = page_size;
-	ASSERT_EQ(0, ioctl(self->fd, IOMMU_IOAS_PAGETABLE_MAP, &map_cmd));
-	check_mock_iova(buffer, map_cmd.iova, page_size);
-
-	if (variant->hugepages) {
-		/* Also MAP_POPULATE for pageflag check */
-		flags |= MAP_HUGETLB | MAP_POPULATE;
-	}
-	/* EFAULT half way through mapping */
-	buf = mmap(0, page_size * 8, PROT_READ | PROT_WRITE, flags, -1, 0);
-	ASSERT_NE(MAP_FAILED, buf);
-
-	/* Ensure buf is backed by hugepages */
-	if (variant->hugepages)
-		ASSERT_EQ(1, is_backed_by_huge(buf));
-
-	ASSERT_EQ(0, munmap(buf + page_size * 4, page_size * 4));
-	map_cmd.user_va = (uintptr_t)buf;
-	map_cmd.length = page_size * 8;
-	EXPECT_ERRNO(EFAULT,
-		     ioctl(self->fd, IOMMU_IOAS_PAGETABLE_MAP, &map_cmd));
-
-	/* EFAULT on first page */
-	ASSERT_EQ(0, munmap(buf, page_size * 4));
-	EXPECT_ERRNO(EFAULT,
-		     ioctl(self->fd, IOMMU_IOAS_PAGETABLE_MAP, &map_cmd));
+	mock_domain_basic(false, &map_cmd, user_va, iova, length);
 }
+
+#define mock_domain_all_aligns(vfio_compact, map_cmd, unmap_cmd, user_va,      \
+			       map_iova, map_length, unmap_iova, unmap_length) \
+	({                                                                     \
+		unsigned long IOCTL_CMD_UNMAP = vfio_compact ?                 \
+					      VFIO_IOMMU_UNMAP_DMA :           \
+					      IOMMU_IOAS_PAGETABLE_UNMAP;      \
+		unsigned long IOCTL_CMD_MAP = vfio_compact ?                   \
+					      VFIO_IOMMU_MAP_DMA :             \
+					      IOMMU_IOAS_PAGETABLE_MAP;        \
+		int flags = MAP_SHARED | MAP_ANONYMOUS | MAP_POPULATE;         \
+		size_t mock_page_size = get_mock_page_size(variant->hugepages);\
+		size_t page_size = get_page_size(variant->hugepages);          \
+		size_t buf_size = page_size * 8;                               \
+		unsigned int start, end;                                       \
+		uint8_t *buf;                                                  \
+		if (variant->hugepages)                                        \
+			flags |= MAP_HUGETLB;                                  \
+		buf = mmap(0, buf_size, PROT_READ | PROT_WRITE, flags, -1, 0); \
+		ASSERT_NE(MAP_FAILED, buf);                                    \
+		check_refs(buf, buf_size, 0);                                  \
+		/* Ensure buf is backed by hugepages */                        \
+		if (variant->hugepages)                                        \
+			ASSERT_EQ(1, is_backed_by_huge(buf));                  \
+		/* vfio_compact must provide iova for FIXED_IOVA */            \
+		if (vfio_compact)                                              \
+			*map_iova = MOCK_APERTURE_START;                       \
+		/*                                                             \
+		 * Map every combination of page size and                      \
+		 * alignment within a big region                               \
+		 */                                                            \
+		for (start = 0; start != buf_size - mock_page_size;            \
+		     start += mock_page_size) {                                \
+			*user_va = (uintptr_t)buf + start;                     \
+			for (end = start + mock_page_size; end <= buf_size;    \
+			     end += mock_page_size) {                          \
+				*map_length = end - start;                     \
+				ASSERT_EQ(0, ioctl(self->fd, IOCTL_CMD_MAP,    \
+						   &map_cmd));                 \
+				check_mock_iova(buf + start, *map_iova,        \
+						*map_length);                  \
+				check_refs(buf + start / page_size * page_size,\
+					   end / page_size * page_size -       \
+					   start / page_size * page_size,      \
+					   1);                                 \
+				*unmap_iova = *map_iova;                       \
+				*unmap_length = end - start;                   \
+				ASSERT_EQ(0, ioctl(self->fd, IOCTL_CMD_UNMAP,  \
+						   &unmap_cmd));               \
+			}                                                      \
+			if (vfio_compact)                                      \
+				*map_iova += mock_page_size;                   \
+		}                                                              \
+		check_refs(buf, buf_size, 0);                                  \
+		ASSERT_EQ(0, munmap(buf, buf_size));                           \
+	})
 
 TEST_F(iommufd_mock_domain, all_aligns)
 {
@@ -853,50 +924,14 @@ TEST_F(iommufd_mock_domain, all_aligns)
 		.size = sizeof(unmap_cmd),
 		.ioas_id = self->ioas_id,
 	};
-	int flags = MAP_SHARED | MAP_ANONYMOUS | MAP_POPULATE;
-	size_t mock_page_size = get_mock_page_size(variant->hugepages);
-	size_t page_size = get_page_size(variant->hugepages);
-	size_t buf_size = page_size * 8;
-	unsigned int start;
-	unsigned int end;
-	uint8_t *buf;
+	__u64 *unmap_length = &unmap_cmd.length;
+	__u64 *unmap_iova = &unmap_cmd.iova;
+	__u64 *map_length = &map_cmd.length;
+	__u64 *map_iova = &map_cmd.iova;
+	__u64 *user_va = &map_cmd.user_va;
 
-	if (variant->hugepages)
-		flags |= MAP_HUGETLB;
-	buf = mmap(0, buf_size, PROT_READ | PROT_WRITE, flags, -1, 0);
-	ASSERT_NE(MAP_FAILED, buf);
-	check_refs(buf, buf_size, 0);
-
-	/* Ensure buf is backed by hugepages */
-	if (variant->hugepages)
-		ASSERT_EQ(1, is_backed_by_huge(buf));
-
-	/*
-	 * Map every combination of page size and alignment within a big region
-	 */
-	for (start = 0; start != buf_size - mock_page_size;
-	     start += mock_page_size) {
-		map_cmd.user_va = (uintptr_t)buf + start;
-		for (end = start + mock_page_size; end <= buf_size;
-		     end += mock_page_size) {
-			map_cmd.length = end - start;
-			ASSERT_EQ(0, ioctl(self->fd, IOMMU_IOAS_PAGETABLE_MAP,
-					   &map_cmd));
-			check_mock_iova(buf + start, map_cmd.iova,
-					map_cmd.length);
-			check_refs(buf + start / page_size * page_size,
-				   end / page_size * page_size -
-					   start / page_size * page_size,
-				   1);
-
-			unmap_cmd.iova = map_cmd.iova;
-			unmap_cmd.length = end - start;
-			ASSERT_EQ(0, ioctl(self->fd, IOMMU_IOAS_PAGETABLE_UNMAP,
-					   &unmap_cmd));
-		}
-	}
-	check_refs(buf, buf_size, 0);
-	ASSERT_EQ(0, munmap(buf, buf_size));
+	mock_domain_all_aligns(false, map_cmd, unmap_cmd, user_va,
+			       map_iova, map_length, unmap_iova, unmap_length);
 }
 
 TEST_F(iommufd_mock_domain, all_aligns_copy)
@@ -1029,5 +1064,121 @@ TEST_F(iommufd_mock_domain, user_copy)
 
 /* FIXME manipulate TEMP_MEMORY_LIMIT to test edge cases */
 /* FIXME use fault injection to test memory failure paths */
+
+FIXTURE(vfio_compact_mock_domain) {
+	int fd;
+	int fd_hugepages;
+	uint32_t domain_id;
+	uint32_t domain_ids[2];
+	uint32_t nr_hugepages;
+};
+
+FIXTURE_VARIANT(vfio_compact_mock_domain) {
+	unsigned int mock_domains;
+	bool hugepages;
+};
+
+FIXTURE_VARIANT_ADD(vfio_compact_mock_domain, one_domain){
+	.mock_domains = 1,
+	.hugepages = false,
+};
+
+FIXTURE_VARIANT_ADD(vfio_compact_mock_domain, one_domain_hugepage){
+	.mock_domains = 1,
+	.hugepages = true,
+};
+
+FIXTURE_VARIANT_ADD(vfio_compact_mock_domain, two_domain){
+	.mock_domains = 2,
+	.hugepages = false,
+};
+
+FIXTURE_VARIANT_ADD(vfio_compact_mock_domain, two_domain_hugepage){
+	.mock_domains = 2,
+	.hugepages = true,
+};
+
+FIXTURE_SETUP(vfio_compact_mock_domain) {
+	struct iommu_test_cmd test_cmd = {
+		.size = sizeof(test_cmd),
+		.op = IOMMU_TEST_OP_MOCK_DOMAIN,
+		.id = 0,
+	};
+	int i;
+
+	ASSERT_EQ(0, init_nr_hugepages_if_lt("32", &self->fd_hugepages,
+					     &self->nr_hugepages));
+
+	self->fd = open("/dev/iommu", O_RDWR);
+	ASSERT_NE(-1, self->fd);
+
+	ASSERT_EQ(VFIO_API_VERSION, ioctl(self->fd, VFIO_GET_API_VERSION));
+	ASSERT_EQ(1, ioctl(self->fd, VFIO_CHECK_EXTENSION, VFIO_TYPE1_IOMMU));
+
+	ASSERT_GE(ARRAY_SIZE(self->domain_ids), variant->mock_domains);
+
+	for (i = 0; i != variant->mock_domains; i++) {
+		test_cmd.fd = self->fd;
+		ASSERT_EQ(0, ioctl(self->fd,
+				   _IOMMU_TEST_CMD(IOMMU_TEST_OP_MOCK_DOMAIN),
+				   &test_cmd));
+		EXPECT_NE(0, test_cmd.id);
+		self->domain_ids[i] = test_cmd.id;
+	}
+	self->domain_id = self->domain_ids[0];
+
+	ASSERT_EQ(0, ioctl(self->fd, VFIO_SET_IOMMU, VFIO_TYPE1_IOMMU));
+}
+
+FIXTURE_TEARDOWN(vfio_compact_mock_domain) {
+	ASSERT_EQ(0, close(self->fd));
+
+	self->fd = open("/dev/iommu", O_RDWR);
+	ASSERT_NE(-1, self->fd);
+	check_refs(buffer, BUFFER_SIZE, 0);
+	ASSERT_EQ(0, close(self->fd));
+
+	ASSERT_EQ(0, restore_nr_hugepges(self->fd_hugepages,
+					 self->nr_hugepages));
+}
+
+TEST_F(vfio_compact_mock_domain, simple_close)
+{
+}
+
+TEST_F(vfio_compact_mock_domain, basic)
+{
+	struct vfio_iommu_type1_dma_unmap unmap_cmd = {
+		.argsz = sizeof(unmap_cmd),
+	};
+	struct vfio_iommu_type1_dma_map map_cmd = {
+		.argsz = sizeof(map_cmd),
+	};
+
+	__u64 *user_va = &map_cmd.vaddr;
+	__u64 *length = &map_cmd.size;
+	__u64 *iova = &map_cmd.iova;
+
+	mock_domain_basic(true, &map_cmd, user_va, iova, length);
+}
+
+TEST_F(vfio_compact_mock_domain, all_aligns)
+{
+	struct vfio_iommu_type1_dma_unmap unmap_cmd = {
+		.argsz = sizeof(unmap_cmd),
+	};
+	struct vfio_iommu_type1_dma_map map_cmd = {
+		.argsz = sizeof(map_cmd),
+	};
+
+	__u64 *unmap_length = &unmap_cmd.size;
+	__u64 *unmap_iova = &unmap_cmd.iova;
+	__u64 *map_length = &map_cmd.size;
+	__u64 *map_iova = &map_cmd.iova;
+	__u64 *user_va = &map_cmd.vaddr;
+
+	mock_domain_all_aligns(true, map_cmd, unmap_cmd, user_va,
+			       map_iova, map_length, unmap_iova, unmap_length);
+};
 
 TEST_HARNESS_MAIN

@@ -231,5 +231,6 @@ void iommufd_device_destroy(struct iommufd_object *obj);
 
 int iommufd_test(struct iommufd_ucmd *ucmd);
 void iommufd_selftest_destroy(struct iommufd_object *obj);
+struct iommufd_ioas_pagetable *get_compat_ioas(struct iommufd_ctx *ictx);
 
 #endif
