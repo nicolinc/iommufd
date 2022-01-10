@@ -12,7 +12,7 @@
 
 #include "iommufd_private.h"
 
-static struct iommufd_ioas_pagetable *get_compat_ioas(struct iommufd_ctx *ictx)
+struct iommufd_ioas_pagetable *get_compat_ioas(struct iommufd_ctx *ictx)
 {
 	struct iommufd_ioas_pagetable *ioaspt = NULL;
 	struct iommufd_ioas_pagetable *out_ioaspt;
@@ -42,6 +42,7 @@ static struct iommufd_ioas_pagetable *get_compat_ioas(struct iommufd_ctx *ictx)
 		iommufd_object_abort(ictx, &ioaspt->obj);
 	return out_ioaspt;
 }
+EXPORT_SYMBOL_GPL(get_compat_ioas);
 
 static int vfio_dma_do_map(struct iommufd_ioas_pagetable *ioaspt,
 			   struct vfio_iommu_type1_dma_map *map)
@@ -105,7 +106,7 @@ static int vfio_map_dma(struct iommufd_ctx *ictx, unsigned int cmd,
 out_put:
 	iommufd_put_object(&ioaspt->obj);
 
-	return rc;
+	return rc ? -EFAULT : 0;
 }
 
 static int vfio_dma_do_unmap(struct iommufd_ioas_pagetable *ioaspt,
