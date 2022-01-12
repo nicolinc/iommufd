@@ -29,6 +29,7 @@ struct iommu_test_cmd {
 	__u32 op;
 	__u32 id;
 	__u32 fd;
+	__u64 memory_limit;
 	union {
 		struct {
 			__aligned_u64 start;
