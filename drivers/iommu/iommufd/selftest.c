@@ -214,6 +214,15 @@ static int __iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 				    struct iommu_test_cmd *cmd)
 {
+	int rc;
+
+	if (cmd->memory_limit > 0 &&
+	    cmd->memory_limit <= TEMP_MEMORY_LIMIT_DEFAULT) {
+		rc = set_temp_memory_limit(cmd->memory_limit);
+		if (rc)
+			return rc;
+	}
+
 	/* VFIO compact pathway cannot know ioas->id but only fd */
 	if (cmd->fd > 0 && cmd->id == 0) {
 		struct iommufd_ctx *ictx = ucmd->ictx;
@@ -223,7 +232,11 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 		cmd->id = ictx->vfio_ioaspt->obj.id;
 	}
 
-	return __iommufd_test_mock_domain(ucmd, cmd);
+	rc = __iommufd_test_mock_domain(ucmd, cmd);
+
+	set_temp_memory_limit(TEMP_MEMORY_LIMIT_DEFAULT);
+
+	return rc;
 }
 
 /* Add an additional reserved IOVA to the IOAS */

@@ -613,6 +613,7 @@ FIXTURE(iommufd_mock_domain) {
 };
 
 FIXTURE_VARIANT(iommufd_mock_domain) {
+	unsigned long memory_limit;
 	unsigned int mock_domains;
 	bool hugepages;
 };
@@ -679,6 +680,7 @@ FIXTURE_SETUP(iommufd_mock_domain)
 	struct iommu_test_cmd test_cmd = {
 		.size = sizeof(test_cmd),
 		.op = IOMMU_TEST_OP_MOCK_DOMAIN,
+		.memory_limit = variant->memory_limit,
 	};
 	unsigned int i;
 
@@ -717,21 +719,37 @@ FIXTURE_TEARDOWN(iommufd_mock_domain) {
 }
 
 FIXTURE_VARIANT_ADD(iommufd_mock_domain, one_domain){
+	.memory_limit = 65536,
 	.mock_domains = 1,
 	.hugepages = false,
 };
 
 FIXTURE_VARIANT_ADD(iommufd_mock_domain, two_domains){
+	.memory_limit = 65536,
 	.mock_domains = 2,
 	.hugepages = false,
 };
 
 FIXTURE_VARIANT_ADD(iommufd_mock_domain, one_domain_hugepage){
+	.memory_limit = 65536,
+	.mock_domains = 1,
+	.hugepages = true,
+};
+
+FIXTURE_VARIANT_ADD(iommufd_mock_domain, one_domain_hugepage_half_limit){
+	.memory_limit = 32768,
 	.mock_domains = 1,
 	.hugepages = true,
 };
 
 FIXTURE_VARIANT_ADD(iommufd_mock_domain, two_domains_hugepage){
+	.memory_limit = 65536,
+	.mock_domains = 2,
+	.hugepages = true,
+};
+
+FIXTURE_VARIANT_ADD(iommufd_mock_domain, two_domains_hugepage_half_limit){
+	.memory_limit = 32768,
 	.mock_domains = 2,
 	.hugepages = true,
 };
@@ -947,6 +965,7 @@ TEST_F(iommufd_mock_domain, all_aligns_copy)
 	struct iommu_test_cmd add_mock_pt = {
 		.size = sizeof(add_mock_pt),
 		.op = IOMMU_TEST_OP_MOCK_DOMAIN,
+		.memory_limit = variant->memory_limit,
 	};
 	struct iommu_destroy destroy_cmd = {
 		.size = sizeof(destroy_cmd),
@@ -1062,7 +1081,6 @@ TEST_F(iommufd_mock_domain, user_copy)
 	ASSERT_EQ(0, ioctl(self->fd, IOMMU_DESTROY, &destroy_cmd));
 }
 
-/* FIXME manipulate TEMP_MEMORY_LIMIT to test edge cases */
 /* FIXME use fault injection to test memory failure paths */
 
 FIXTURE(vfio_compact_mock_domain) {
