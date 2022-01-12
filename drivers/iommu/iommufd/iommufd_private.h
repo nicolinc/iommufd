@@ -233,4 +233,7 @@ int iommufd_test(struct iommufd_ucmd *ucmd);
 void iommufd_selftest_destroy(struct iommufd_object *obj);
 struct iommufd_ioas_pagetable *get_compat_ioas(struct iommufd_ctx *ictx);
 
+#define TEMP_MEMORY_LIMIT_DEFAULT 65536
+size_t get_temp_memory_limit(void);
+int set_temp_memory_limit(size_t limit);
 #endif

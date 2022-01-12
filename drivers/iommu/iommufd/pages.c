@@ -48,8 +48,23 @@
 
 #include "io_pagetable.h"
 
-#define TEMP_MEMORY_LIMIT 65536
 #define BATCH_BACKUP_SIZE 32
+
+static size_t TEMP_MEMORY_LIMIT = TEMP_MEMORY_LIMIT_DEFAULT;
+size_t get_temp_memory_limit(void)
+{
+	return TEMP_MEMORY_LIMIT;
+}
+EXPORT_SYMBOL_GPL(get_temp_memory_limit);
+
+int set_temp_memory_limit(size_t limit)
+{
+	if (limit > TEMP_MEMORY_LIMIT_DEFAULT || limit == 0)
+		return -EINVAL;
+	TEMP_MEMORY_LIMIT = limit;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(set_temp_memory_limit);
 
 /*
  * More memory makes the algorithms more efficient, but as this is only a
