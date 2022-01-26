@@ -692,7 +692,7 @@ int iopt_table_add_domain(struct io_pagetable *iopt,
 		if (rc)
 			goto out_reserved;
 	}
-	if (geometry->aperture_end != ULONG_MAX) {
+	if (0 < geometry->aperture_end && geometry->aperture_end < ULONG_MAX) {
 		if (iopt_area_iter_first(iopt, geometry->aperture_end + 1,
 					 ULONG_MAX))
 			return -EADDRINUSE;
