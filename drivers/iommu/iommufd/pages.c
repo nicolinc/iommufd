@@ -179,7 +179,7 @@ static void batch_clear(struct pfn_batch *batch)
 static int __batch_init(struct pfn_batch *batch, size_t max_pages, void *backup,
 			size_t backup_len)
 {
-	const size_t elmsz = sizeof(*batch->pfns) + sizeof(batch->npfns);
+	const size_t elmsz = sizeof(*batch->pfns) + sizeof(*batch->npfns);
 	size_t size = max_pages * elmsz;
 
 	batch->pfns = temp_kmalloc(&size, backup, backup_len);
