@@ -761,7 +761,8 @@ void iopt_table_remove_domain(struct io_pagetable *iopt,
 
 /* Narrow the valid_iova_itree to include reserved ranges from a group. */
 int iopt_table_enforce_group_iova(struct io_pagetable *iopt,
-				  struct iommu_group *group)
+				  struct iommu_group *group,
+				  bool *msi, phys_addr_t *resv_msi_base)
 {
 	struct iommu_resv_region *resv;
 	LIST_HEAD(group_resv_regions);
@@ -775,6 +776,10 @@ int iopt_table_enforce_group_iova(struct io_pagetable *iopt,
 	list_for_each_entry (resv, &group_resv_regions, list) {
 		if (resv->type == IOMMU_RESV_DIRECT_RELAXABLE)
 			continue;
+		if (resv->type == IOMMU_RESV_MSI) {
+			*resv_msi_base = resv->start;
+			*msi = true;
+		}
 		if (iopt_area_iter_first(iopt, resv->start,
 					 resv->length - 1 + resv->start)) {
 			rc = -EADDRINUSE;

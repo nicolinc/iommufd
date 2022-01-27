@@ -4,6 +4,7 @@
  */
 #include <linux/iommufd.h>
 #include <linux/slab.h>
+#include <linux/dma-iommu.h>
 #include <linux/iommu.h>
 #include <linux/file.h>
 #include <linux/pci.h>
@@ -154,6 +155,9 @@ int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id)
 
 	mutex_lock(&hwpt->devices_lock);
 	if (!iommufd_hw_pagetable_has_group(hwpt, group)) {
+		phys_addr_t resv_msi_base = 0;
+		bool resv_msi = false;
+
 		rc = iommu_attach_group(hwpt->domain, group);
 		if (rc)
 			goto out_unlock;
@@ -162,9 +166,16 @@ int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id)
 		 * hwpt is now the exclusive owner of the group, thus there now
 		 * is no other reserved entries using group in the iopt
 		 */
-		rc = iopt_table_enforce_group_iova(&hwpt->ioaspt->iopt, group);
+		rc = iopt_table_enforce_group_iova(&hwpt->ioaspt->iopt, group,
+						   &resv_msi, &resv_msi_base);
 		if (rc)
 			goto out_detach;
+
+		if (resv_msi) {
+			rc = iommu_get_msi_cookie(hwpt->domain, resv_msi_base);
+			if (rc && rc != -ENODEV)
+				goto out_remove;
+		}
 	}
 
 	idev->hwpt = hwpt;
@@ -183,8 +194,6 @@ int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id)
 	}
 
 	mutex_unlock(&hwpt->devices_lock);
-
-	/* FIXME: For PCI devices need to check the MSI like VFIO does */
 
 	*pt_id = idev->hwpt->obj.id;
 	return 0;

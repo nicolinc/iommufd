@@ -56,7 +56,8 @@ int iopt_table_add_domain(struct io_pagetable *iopt,
 void iopt_table_remove_domain(struct io_pagetable *iopt,
 			      struct iommu_domain *domain);
 int iopt_table_enforce_group_iova(struct io_pagetable *iopt,
-				  struct iommu_group *group);
+				  struct iommu_group *group,
+				  bool *msi, phys_addr_t *resv_msi_base);
 int iopt_reserve_iova(struct io_pagetable *iopt, unsigned long start,
 		      unsigned long last, void *owner);
 void iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner);
