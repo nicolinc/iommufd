@@ -44,6 +44,21 @@ struct iommufd_ioas_pagetable *get_compat_ioas(struct iommufd_ctx *ictx)
 }
 EXPORT_SYMBOL_GPL(get_compat_ioas);
 
+/*
+ * FIXME if (map->flags & VFIO_DMA_MAP_FLAG_VADDR)
+ * https://lore.kernel.org/kvm/1611939252-7240-1-git-send-email-steven.sistare@oracle.com/
+ * Wow, what a wild feature. This should be implemetned by allowing a iopt_pages
+ * to be associated with a memfd. It can then source mapping requests directly
+ * from a memfd without going through a mm_struct and thus doesn't care that the
+ * original qemu exec'd itself. The idea that userspace can flip a flag and
+ * cause kernerl users to block indefinately is unacceptable.
+ *
+ * For VFIO compat we implement this in a slightly different way, creating a
+ * access_user that spans the whole area will immediately stop  new faults as
+ * they will be handled from the xarray. We can then reparent the iopt_pages to
+ * the new mm_struct and undo the access_user. No blockage of kernel users
+ * required, does require filling the xarray with pages though.
+ */
 static int vfio_dma_do_map(struct iommufd_ioas_pagetable *ioaspt,
 			   struct vfio_iommu_type1_dma_map *map)
 {
@@ -59,7 +74,6 @@ static int vfio_dma_do_map(struct iommufd_ioas_pagetable *ioaspt,
 		cmd.flags |= IOMMU_IOAS_PAGETABLE_MAP_READABLE;
 	if (map->flags & VFIO_DMA_MAP_FLAG_WRITE)
 		cmd.flags |= IOMMU_IOAS_PAGETABLE_MAP_WRITEABLE;
-	/* FIXME if (map->flags & VFIO_DMA_MAP_FLAG_VADDR) ?*/
 	cmd.flags |= IOMMU_IOAS_PAGETABLE_MAP_FIXED_IOVA;
 
 	rc = __iommufd_ioas_pagetable_map(ioaspt, &cmd);
@@ -120,6 +134,13 @@ static int vfio_dma_do_unmap(struct iommufd_ioas_pagetable *ioaspt,
 		return iopt_unmap_iova(&ioaspt->iopt, unmap->iova, unmap->size);
 }
 
+/*
+ * FIXME: VFIO_DMA_UNMAP_FLAG_GET_DIRTY_BITMAP I think everything with dirty
+ * tracking should be in its own ioctl, not muddled in unmap. If we want to
+ * atomically unmap and get the dirty bitmap it should be a flag in the dirty
+ * tracking ioctl, not here in unmap. Overall dirty tracking needs a careful
+ * review along side HW drivers implementing it.
+ */
 static int vfio_unmap_dma(struct iommufd_ctx *ictx, unsigned int cmd,
 			  unsigned long arg)
 {
