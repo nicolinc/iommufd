@@ -218,6 +218,7 @@ struct iommufd_hw_pagetable {
 	struct list_head auto_domains_item;
 	struct mutex devices_lock;
 	struct list_head devices;
+	refcount_t domain_attaches;
 };
 
 struct iommufd_hw_pagetable *

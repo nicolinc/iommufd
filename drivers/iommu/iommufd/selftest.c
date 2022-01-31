@@ -194,6 +194,7 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 	struct bus_type mock_bus = { .iommu_ops = &domain_mock_ops };
 	struct device mock_dev = { .bus = &mock_bus };
 	struct iommufd_hw_pagetable *hwpt;
+	int rc;
 
 	hwpt = iommufd_hw_pagetable_from_id(ucmd->ictx, cmd->id, &mock_dev);
 	if (IS_ERR(hwpt))
@@ -201,6 +202,18 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 	if (WARN_ON(refcount_read(&hwpt->obj.users) != 2)) {
 		iommufd_hw_pagetable_put(ucmd->ictx, hwpt);
 		return -EINVAL;
+	}
+
+	if (!refcount_inc_not_zero(&hwpt->domain_attaches)) {
+		down_write(&hwpt->ioaspt->iopt.rwsem);
+		rc = iopt_table_add_domain(&hwpt->ioaspt->iopt, hwpt->domain);
+		if (rc) {
+			up_write(&hwpt->ioaspt->iopt.rwsem);
+			iommufd_hw_pagetable_put(ucmd->ictx, hwpt);
+			return rc;
+		}
+		refcount_set(&hwpt->domain_attaches, 1);
+		up_write(&hwpt->ioaspt->iopt.rwsem);
 	}
 
 	/* Convert auto domain to user created */

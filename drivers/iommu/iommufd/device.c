@@ -170,6 +170,18 @@ int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id)
 	idev->hwpt = hwpt;
 	idev->group = group;
 	list_add(&idev->devices_item, &hwpt->devices);
+
+	if (!refcount_inc_not_zero(&hwpt->domain_attaches)) {
+		down_write(&hwpt->ioaspt->iopt.rwsem);
+		rc = iopt_table_add_domain(&hwpt->ioaspt->iopt, hwpt->domain);
+		if (rc) {
+			up_write(&hwpt->ioaspt->iopt.rwsem);
+			goto out_remove;
+		}
+		refcount_set(&hwpt->domain_attaches, 1);
+		up_write(&hwpt->ioaspt->iopt.rwsem);
+	}
+
 	mutex_unlock(&hwpt->devices_lock);
 
 	/* FIXME: For PCI devices need to check the MSI like VFIO does */
@@ -177,6 +189,8 @@ int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id)
 	*pt_id = idev->hwpt->obj.id;
 	return 0;
 
+out_remove:
+	iopt_remove_reserved_iova(&hwpt->ioaspt->iopt, idev->group);
 out_detach:
 	iommu_detach_group(hwpt->domain, group);
 out_unlock:
@@ -193,6 +207,13 @@ EXPORT_SYMBOL_GPL(iommufd_device_attach);
 void iommufd_device_detach(struct iommufd_device *idev)
 {
 	mutex_lock(&idev->hwpt->devices_lock);
+
+	down_write(&idev->hwpt->ioaspt->iopt.rwsem);
+	if (refcount_dec_and_test(&idev->hwpt->domain_attaches))
+		iopt_table_remove_domain(&idev->hwpt->ioaspt->iopt,
+					 idev->hwpt->domain);
+	up_write(&idev->hwpt->ioaspt->iopt.rwsem);
+
 	list_del(&idev->devices_item);
 	if (!iommufd_hw_pagetable_has_group(idev->hwpt, idev->group)) {
 		iopt_remove_reserved_iova(&idev->hwpt->ioaspt->iopt,
