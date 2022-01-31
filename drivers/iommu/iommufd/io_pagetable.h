@@ -103,6 +103,7 @@ struct iopt_pages {
 	size_t npages;
 	size_t npinned;
 	struct mm_struct *source_mm;
+	struct task_struct *source_task;
 	void __user *uptr;
 	bool writable;
 
