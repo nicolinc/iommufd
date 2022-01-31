@@ -14,7 +14,8 @@ void iommufd_hw_pagetable_destroy(struct iommufd_object *obj)
 
 	down_write(&ioaspt->iopt.rwsem);
 	list_del(&hwpt->auto_domains_item);
-	iopt_table_remove_domain(&hwpt->ioaspt->iopt, hwpt->domain);
+	if (refcount_read(&hwpt->domain_attaches))
+		iopt_table_remove_domain(&ioaspt->iopt, hwpt->domain);
 	up_write(&ioaspt->iopt.rwsem);
 
 	iommu_domain_free(hwpt->domain);
@@ -60,13 +61,12 @@ iommufd_hw_pagetable_auto_get(struct iommufd_ctx *ictx,
 		rc = -ENOMEM;
 		goto out_abort;
 	}
-	rc = iopt_table_add_domain(&ioaspt->iopt, hwpt->domain);
-	if (rc)
-		goto out_domain;
 
 	INIT_LIST_HEAD(&hwpt->devices);
 	mutex_init(&hwpt->devices_lock);
 	hwpt->ioaspt = ioaspt;
+	/* Delay domain adding to device attaching stage */
+	refcount_set(&hwpt->domain_attaches, 0);
 	/* The calling driver is a user until iommufd_hw_pagetable_put() */
 	refcount_inc(&ioaspt->obj.users);
 
@@ -82,8 +82,6 @@ iommufd_hw_pagetable_auto_get(struct iommufd_ctx *ictx,
 	up_write(&ioaspt->iopt.rwsem);
 	return hwpt;
 
-out_domain:
-	iommu_domain_free(hwpt->domain);
 out_abort:
 	iommufd_object_abort(ictx, &hwpt->obj);
 out_unlock:
