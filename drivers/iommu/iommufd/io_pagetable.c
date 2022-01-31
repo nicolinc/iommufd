@@ -75,6 +75,7 @@ static struct iopt_pages *iopt_alloc_pages(void __user *uptr,
 	kref_init(&pages->kref);
 	xa_init(&pages->pinned_pfns);
 	mutex_init(&pages->mutex);
+	pages->source_task = current;
 	pages->source_mm = current->mm;
 	mmgrab(pages->source_mm);
 	pages->uptr = (void __user *)ALIGN_DOWN((uintptr_t)uptr, PAGE_SIZE);
