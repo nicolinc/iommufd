@@ -409,6 +409,18 @@ static void batch_unpin(struct pfn_batch *batch, struct iopt_pages *pages,
 		unpin_user_page_range_dirty_lock(
 			pfn_to_page(batch->pfns[cur] + offset), to_unpin,
 			pages->writable);
+
+		if (to_unpin) {
+			int rc = mmap_write_trylock(pages->source_mm);
+
+			__account_locked_vm(
+				pages->source_mm, to_unpin, false,
+				pages->source_task, capable(CAP_IPC_LOCK));
+
+			if (rc)
+				mmap_write_unlock(pages->source_mm);
+		}
+
 		iopt_pages_sub_npinned(pages, to_unpin);
 		cur++;
 		offset = 0;
@@ -467,14 +479,13 @@ static int pfn_reader_pin_pages(struct pfn_reader *pfns)
 			kfree(pfns->upages);
 			return -EINVAL;
 		}
-		mmap_read_lock(pages->source_mm);
+		mmap_write_lock(pages->source_mm);
 	}
 
 	npages = min_t(unsigned long,
 		       pfns->span.last_hole - pfns->fill_index + 1,
 		       pfns->upages_len / sizeof(*pfns->upages));
 
-	/* FIXME memlock */
 	rc = pin_user_pages_remote(
 		pages->source_mm,
 		(uintptr_t)(pages->uptr + pfns->fill_index * PAGE_SIZE), npages,
@@ -486,6 +497,18 @@ static int pfn_reader_pin_pages(struct pfn_reader *pfns)
 	iopt_pages_add_npinned(pages, rc);
 	pfns->upages_start = pfns->fill_index;
 	pfns->upages_end = pfns->fill_index + rc;
+
+	rc = __account_locked_vm(
+			pages->source_mm,
+			pfns->upages_end - pfns->fill_index, true,
+			pages->source_task, capable(CAP_IPC_LOCK));
+	if (rc) {
+		unpin_user_pages(
+			pfns->upages + (pfns->fill_index - pfns->upages_start),
+			pfns->upages_end - pfns->fill_index);
+		return rc;
+	}
+
 	return 0;
 }
 
@@ -624,13 +647,18 @@ static int pfn_reader_init(struct pfn_reader *pfns, struct iopt_pages *pages,
 static void pfn_reader_destroy(struct pfn_reader *pfns)
 {
 	if (pfns->upages) {
-		mmap_read_unlock(pfns->pages->source_mm);
-		mmput(pfns->pages->source_mm);
-
 		/* Any pages not transfered to the batch are just unpinned */
 		unpin_user_pages(
 			pfns->upages + (pfns->fill_index - pfns->upages_start),
 			pfns->upages_end - pfns->fill_index);
+
+		__account_locked_vm(
+			pfns->pages->source_mm,
+			pfns->upages_end - pfns->fill_index, false,
+			pfns->pages->source_task, capable(CAP_IPC_LOCK));
+
+		mmap_write_unlock(pfns->pages->source_mm);
+		mmput(pfns->pages->source_mm);
 		kfree(pfns->upages);
 		pfns->upages = NULL;
 	}
