@@ -234,14 +234,18 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 	/* VFIO compact pathway cannot know ioas->id but only fd */
 	if (cmd->fd > 0 && cmd->id == 0) {
 		struct iommufd_ctx *ictx = ucmd->ictx;
+		struct iommufd_ioas_pagetable *ioaspt;
 
-		ictx->vfio_ioaspt = get_compat_ioas(ictx);
-		if (IS_ERR(ictx->vfio_ioaspt)) {
+		ioaspt = alloc_compat_ioas(ictx);
+		if (IS_ERR(ioaspt)) {
 			rc = PTR_ERR(ictx->vfio_ioaspt);
 			return rc;
 		}
 
-		cmd->id = ictx->vfio_ioaspt->obj.id;
+		xa_lock(&ictx->objects);
+		ictx->vfio_ioaspt = ioaspt;
+		cmd->id = ioaspt->obj.id;
+		xa_unlock(&ictx->objects);
 	}
 
 	rc = __iommufd_test_mock_domain(ucmd, cmd);

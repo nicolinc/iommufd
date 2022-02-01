@@ -234,7 +234,7 @@ void iommufd_device_destroy(struct iommufd_object *obj);
 #ifdef CONFIG_IOMMUFD_TEST
 int iommufd_test(struct iommufd_ucmd *ucmd);
 void iommufd_selftest_destroy(struct iommufd_object *obj);
-struct iommufd_ioas_pagetable *get_compat_ioas(struct iommufd_ctx *ictx);
+struct iommufd_ioas_pagetable *alloc_compat_ioas(struct iommufd_ctx *ictx);
 extern size_t iommufd_test_memory_limit;
 #endif
 
