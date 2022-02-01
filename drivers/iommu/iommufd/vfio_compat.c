@@ -13,7 +13,7 @@
 
 #include "iommufd_private.h"
 
-static struct iommufd_ioas_pagetable *get_compat_ioas(struct iommufd_ctx *ictx)
+struct iommufd_ioas_pagetable *get_compat_ioas(struct iommufd_ctx *ictx)
 {
 	struct iommufd_ioas_pagetable *ioaspt = NULL;
 	struct iommufd_ioas_pagetable *out_ioaspt;

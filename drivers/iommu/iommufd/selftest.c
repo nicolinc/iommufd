@@ -190,8 +190,8 @@ get_md_pagetable(struct iommufd_ucmd *ucmd, u32 mockpt_id,
 }
 
 /* Create an hw_pagetable with the mock domain so we can test the domain ops */
-static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
-				    struct iommu_test_cmd *cmd)
+static int __iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
+				      struct iommu_test_cmd *cmd)
 {
 	struct bus_type mock_bus = { .iommu_ops = &domain_mock_ops };
 	struct device mock_dev = { .bus = &mock_bus };
@@ -224,6 +224,29 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 	iommufd_hw_pagetable_put(ucmd->ictx, hwpt);
 
 	return iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+}
+
+static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
+				    struct iommu_test_cmd *cmd)
+{
+	int rc;
+
+	/* VFIO compact pathway cannot know ioas->id but only fd */
+	if (cmd->fd > 0 && cmd->id == 0) {
+		struct iommufd_ctx *ictx = ucmd->ictx;
+
+		ictx->vfio_ioaspt = get_compat_ioas(ictx);
+		if (IS_ERR(ictx->vfio_ioaspt)) {
+			rc = PTR_ERR(ictx->vfio_ioaspt);
+			return rc;
+		}
+
+		cmd->id = ictx->vfio_ioaspt->obj.id;
+	}
+
+	rc = __iommufd_test_mock_domain(ucmd, cmd);
+
+	return rc;
 }
 
 /* Add an additional reserved IOVA to the IOAS */
