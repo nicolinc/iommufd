@@ -226,8 +226,6 @@ static int vfio_iommu_get_info(struct iommufd_ctx *ictx, unsigned long arg)
 	/* Calculate how many iova_ranges user space allows us to return */
 	if (info.argsz > sizeof(info) + sizeof(*cap_iovas)) {
 		max_iovas = info.argsz - sizeof(info) - sizeof(*cap_iovas);
-		if (max_iovas % sizeof(cap_iovas->iova_ranges[0]))
-			return -EINVAL;
 		max_iovas /= sizeof(cap_iovas->iova_ranges[0]);
 	}
 
