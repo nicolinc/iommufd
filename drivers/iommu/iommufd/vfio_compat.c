@@ -146,7 +146,6 @@ static int vfio_check_extension(unsigned long type)
 	 * is a bunch of extra code that is only for supporting this case.
 	 */
 	case VFIO_TYPE1_IOMMU:
-		return 0;
 	case VFIO_TYPE1v2_IOMMU:
 	case VFIO_UNMAP_ALL:
 		return 1;
