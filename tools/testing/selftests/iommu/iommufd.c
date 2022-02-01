@@ -11,6 +11,7 @@
 
 #define __EXPORTED_HEADERS__
 #include <linux/iommufd.h>
+#include <linux/vfio.h>
 #include "../../../../drivers/iommu/iommufd/iommufd_test.h"
 
 static void *buffer;
@@ -936,5 +937,177 @@ TEST_F(iommufd_mock_domain, user_copy)
 }
 
 /* FIXME use fault injection to test memory failure paths */
+
+FIXTURE(vfio_compact_basic) {
+	int fd;
+};
+
+FIXTURE_SETUP(vfio_compact_basic) {
+	self->fd = open("/dev/iommu", O_RDWR);
+	ASSERT_NE(-1, self->fd);
+
+	ASSERT_EQ(VFIO_API_VERSION, ioctl(self->fd, VFIO_GET_API_VERSION));
+	ASSERT_EQ(1, ioctl(self->fd, VFIO_CHECK_EXTENSION, VFIO_TYPE1_IOMMU));
+}
+
+FIXTURE_TEARDOWN(vfio_compact_basic) {
+	ASSERT_EQ(0, close(self->fd));
+}
+
+TEST_F(vfio_compact_basic, simple_close)
+{
+}
+
+TEST_F(vfio_compact_basic, cmd_fail)
+{
+	struct vfio_iommu_type1_dma_unmap unmap_cmd = {
+		.iova = MOCK_APERTURE_START,
+		.size = PAGE_SIZE,
+	};
+	struct vfio_iommu_type1_dma_map map_cmd = {
+		.iova = MOCK_APERTURE_START,
+		.size = PAGE_SIZE,
+		.vaddr = (__u64)buffer,
+	};
+	struct vfio_iommu_type1_info info_cmd;
+
+	/* Invalid argsz */
+	map_cmd.argsz = 1;
+	info_cmd.argsz = 1;
+	unmap_cmd.argsz = 1;
+	EXPECT_ERRNO(EINVAL, ioctl(self->fd, VFIO_IOMMU_MAP_DMA, &map_cmd));
+	EXPECT_ERRNO(EINVAL, ioctl(self->fd, VFIO_IOMMU_GET_INFO, &info_cmd));
+	EXPECT_ERRNO(EINVAL, ioctl(self->fd, VFIO_IOMMU_UNMAP_DMA, &unmap_cmd));
+	map_cmd.argsz = sizeof(map_cmd);
+	info_cmd.argsz = sizeof(info_cmd);
+	unmap_cmd.argsz = sizeof(unmap_cmd);
+
+	/* Invalid Flags */
+	map_cmd.flags = 1 << 31;
+	unmap_cmd.flags = 1 << 31;
+	EXPECT_ERRNO(EINVAL, ioctl(self->fd, VFIO_IOMMU_MAP_DMA, &map_cmd));
+	EXPECT_ERRNO(EINVAL, ioctl(self->fd, VFIO_IOMMU_UNMAP_DMA, &unmap_cmd));
+	map_cmd.flags = VFIO_DMA_MAP_FLAG_READ | VFIO_DMA_MAP_FLAG_WRITE;
+	unmap_cmd.flags = 0;
+
+	/* These ioctls would not work until a test domain is attached */
+	EXPECT_ERRNO(EINVAL, ioctl(self->fd, VFIO_SET_IOMMU, VFIO_TYPE1_IOMMU));
+	EXPECT_ERRNO(EINVAL, ioctl(self->fd, VFIO_IOMMU_MAP_DMA, &map_cmd));
+	EXPECT_ERRNO(EINVAL, ioctl(self->fd, VFIO_IOMMU_UNMAP_DMA, &unmap_cmd));
+	EXPECT_ERRNO(EINVAL, ioctl(self->fd, VFIO_IOMMU_GET_INFO, &info_cmd));
+}
+
+FIXTURE(vfio_compact_mock_domain) {
+	int fd;
+	uint32_t domain_id;
+	uint32_t domain_ids[2];
+	struct vfio_iommu_type1_info *info;
+};
+
+FIXTURE_VARIANT(vfio_compact_mock_domain) {
+	unsigned int mock_domains;
+};
+
+FIXTURE_VARIANT_ADD(vfio_compact_mock_domain, one_domain){
+	.mock_domains = 1,
+};
+
+FIXTURE_SETUP(vfio_compact_mock_domain) {
+	struct iommu_test_cmd test_cmd = {
+		.size = sizeof(test_cmd),
+		.op = IOMMU_TEST_OP_MOCK_DOMAIN,
+		.id = 0,
+	};
+	int i;
+
+	self->fd = open("/dev/iommu", O_RDWR);
+	ASSERT_NE(-1, self->fd);
+
+	ASSERT_EQ(VFIO_API_VERSION, ioctl(self->fd, VFIO_GET_API_VERSION));
+	ASSERT_EQ(1, ioctl(self->fd, VFIO_CHECK_EXTENSION, VFIO_TYPE1_IOMMU));
+
+	ASSERT_GE(ARRAY_SIZE(self->domain_ids), variant->mock_domains);
+
+	for (i = 0; i != variant->mock_domains; i++) {
+		test_cmd.fd = self->fd;
+		ASSERT_EQ(0, ioctl(self->fd,
+				   _IOMMU_TEST_CMD(IOMMU_TEST_OP_MOCK_DOMAIN),
+				   &test_cmd));
+		EXPECT_NE(0, test_cmd.id);
+		self->domain_ids[i] = test_cmd.id;
+	}
+	self->domain_id = self->domain_ids[0];
+
+	ASSERT_EQ(0, ioctl(self->fd, VFIO_SET_IOMMU, VFIO_TYPE1_IOMMU));
+}
+
+FIXTURE_TEARDOWN(vfio_compact_mock_domain) {
+	if (self->info)
+		free(self->info);
+
+	ASSERT_EQ(0, close(self->fd));
+
+	self->fd = open("/dev/iommu", O_RDWR);
+	ASSERT_NE(-1, self->fd);
+	check_refs(buffer, BUFFER_SIZE, 0);
+	ASSERT_EQ(0, close(self->fd));
+}
+
+TEST_F(vfio_compact_mock_domain, simple_close)
+{
+}
+
+TEST_F(vfio_compact_mock_domain, get_info)
+{
+	uint32_t offset;
+	size_t test;
+
+	self->info = calloc(1, sizeof(*self->info));
+	EXPECT_NE(NULL, self->info);
+
+	self->info->argsz = sizeof(*self->info);
+	ASSERT_EQ(0, ioctl(self->fd, VFIO_IOMMU_GET_INFO, self->info));
+
+	ASSERT_LT(sizeof(*self->info), self->info->argsz);
+
+	self->info = realloc(self->info, self->info->argsz);
+	EXPECT_NE(NULL, self->info);
+
+	ASSERT_EQ(0, ioctl(self->fd, VFIO_IOMMU_GET_INFO, self->info));
+	ASSERT_NE(0, self->info->flags & VFIO_IOMMU_INFO_CAPS);
+
+	test = self->info->argsz - sizeof(*self->info);
+
+	offset = self->info->cap_offset;
+
+	while (offset) {
+		struct vfio_iommu_type1_info_cap_iova_range *cap_iovas;
+		struct vfio_iova_range *iova_ranges;
+		struct vfio_info_cap_header *h;
+		int i;
+
+		h = (struct vfio_info_cap_header *)self->info + offset;
+		if (h->id != VFIO_IOMMU_TYPE1_INFO_CAP_IOVA_RANGE) {
+			offset = h->next;
+			continue;
+		}
+
+		ASSERT_LE(sizeof(*cap_iovas), test);
+		test -= sizeof(*cap_iovas);
+		ASSERT_LE(sizeof(*iova_ranges), test);
+
+		cap_iovas = (struct vfio_iommu_type1_info_cap_iova_range *)h;
+		ASSERT_LE(0, cap_iovas->nr_iovas);
+
+		iova_ranges = cap_iovas->iova_ranges;
+		for (i = 0; i < cap_iovas->nr_iovas; i++) {
+			ASSERT_LE(iova_ranges[i].start, iova_ranges[i].end);
+			if (i == 0)
+				continue;
+			ASSERT_LE(iova_ranges[i-1].end, iova_ranges[i].start);
+		}
+		break;
+	}
+}
 
 TEST_HARNESS_MAIN
