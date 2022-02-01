@@ -28,9 +28,8 @@ out_unlock:
 /*
  * Only attaching a group should cause a default creation of the internal ioas,
  * this returns the existing ioas if it has already been assigned somehow
- * FIXME: maybe_unused
  */
-static __maybe_unused struct iommufd_ioas_pagetable *
+static struct iommufd_ioas_pagetable *
 create_compat_ioas(struct iommufd_ctx *ictx)
 {
 	struct iommufd_ioas_pagetable *ioaspt = NULL;
@@ -394,3 +393,103 @@ int iommufd_vfio_ioctl(struct iommufd_ctx *ictx, unsigned int cmd,
 	}
 	return -ENOIOCTLCMD;
 }
+
+#define vfio_device_detach_unbind(ictx, id, device, device_list)               \
+	({                                                                     \
+		list_for_each_entry(device, device_list, group_next) {         \
+			struct vfio_device_detach_ioaspt detach = {            \
+				.argsz = sizeof(detach),                       \
+				.ioaspt_id = id,                               \
+				.iommufd = ictx->vfio_fd,                      \
+			};                                                     \
+			if (device->ops->detach_ioaspt)                        \
+				device->ops->detach_ioaspt(device, &detach);   \
+			if (device->ops->unbind_iommufd)                       \
+				device->ops->unbind_iommufd(device);           \
+		}                                                              \
+	})
+
+struct iommufd_ctx *vfio_group_set_iommufd(int fd, struct list_head *device_list)
+{
+	struct vfio_device_attach_ioaspt attach = { .argsz = sizeof(attach) };
+	struct vfio_device_bind_iommufd bind = { .argsz = sizeof(bind) };
+	struct iommufd_ctx *ictx = iommufd_fget(fd);
+	struct iommufd_ioas_pagetable *ioaspt;
+	struct vfio_device *device;
+	int rc;
+
+	if (!ictx)
+		return ictx;
+
+	ictx->vfio_fd = fd;
+
+	/*
+	 * Note: bind.dev_cookie is designed for page fault, whose uAPI is TBD
+	 * on IOMMUFD. And VFIO does not support that either. So we here leave
+	 * the dev_cookie to 0 for now, until it is available in VFIO too.
+	 */
+	bind.dev_cookie = 0;
+	bind.iommufd = fd;
+	attach.iommufd = fd;
+
+	ioaspt = create_compat_ioas(ictx);
+	if (IS_ERR(ioaspt))
+		goto out_fput;
+
+	xa_lock(&ictx->objects);
+	ictx->vfio_ioaspt = ioaspt;
+	attach.ioaspt_id = ioaspt->obj.id;
+	xa_unlock(&ictx->objects);
+
+	iommufd_put_object(&ioaspt->obj);
+
+	list_for_each_entry(device, device_list, group_next) {
+		if (!device->ops->bind_iommufd || !device->ops->unbind_iommufd)
+			goto cleanup_ioaspt;
+
+		rc = device->ops->bind_iommufd(device, &bind);
+		if (rc)
+			goto cleanup_ioaspt;
+
+		if (unlikely(!device->ops->attach_ioaspt))
+			goto cleanup_ioaspt;
+
+		rc = device->ops->attach_ioaspt(device, &attach);
+		if (rc)
+			goto cleanup_ioaspt;
+	}
+
+	return ictx;
+
+cleanup_ioaspt:
+	vfio_device_detach_unbind(ictx, attach.ioaspt_id, device, device_list);
+	iommufd_ioas_pagetable_destroy(&ioaspt->obj);
+out_fput:
+	fput(ictx->filp);
+
+	return NULL;
+}
+EXPORT_SYMBOL_GPL(vfio_group_set_iommufd);
+
+void vfio_group_unset_iommufd(void *iommufd, struct list_head *device_list)
+{
+	struct iommufd_ctx *ictx = (struct iommufd_ctx *)iommufd;
+	struct iommufd_ioas_pagetable *ioaspt;
+	struct vfio_device *device;
+	unsigned int ioaspt_id;
+
+	if (!ictx)
+		return;
+
+	ioaspt = get_compat_ioas(ictx);
+	if (IS_ERR(ioaspt))
+		return;
+
+	ioaspt_id = ioaspt->obj.id;
+	iommufd_put_object(&ioaspt->obj);
+
+	vfio_device_detach_unbind(ictx, ioaspt_id, device, device_list);
+	iommufd_ioas_pagetable_destroy(&ioaspt->obj);
+	fput(ictx->filp);
+}
+EXPORT_SYMBOL_GPL(vfio_group_unset_iommufd);
