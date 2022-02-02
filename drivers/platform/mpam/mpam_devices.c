@@ -93,6 +93,38 @@ static DECLARE_WORK(mpam_broken_work, &mpam_disable);
  */
 LIST_HEAD(mpam_classes);
 
+static u64 __mpam_read64_reg(struct mpam_msc *msc, u16 reg)
+{
+	WARN_ON_ONCE(reg > msc->mapped_hwpage_sz);
+	WARN_ON_ONCE(!cpumask_test_cpu(smp_processor_id(), &msc->accessibility));
+
+	return readq_relaxed(msc->mapped_hwpage + reg);
+}
+
+static void __mpam_write64_reg(struct mpam_msc *msc, u16 reg, u64 val)
+{
+	WARN_ON_ONCE(reg > msc->mapped_hwpage_sz);
+	WARN_ON_ONCE(!cpumask_test_cpu(smp_processor_id(), &msc->accessibility));
+
+	writeq_relaxed(val, msc->mapped_hwpage + reg);
+}
+
+#define mpam_read64_monsel_reg(msc, reg)		\
+({							\
+	u64 ____ret;					\
+							\
+	lockdep_assert_held_once(&msc->mon_sel_lock);	\
+	____ret = __mpam_read64_reg(msc, MSMON_##reg);	\
+							\
+	____ret;					\
+})
+
+#define mpam_write64_monsel_reg(msc, reg, val)		\
+({							\
+	lockdep_assert_held_once(&msc->mon_sel_lock);	\
+	__mpam_write64_reg(msc, MSMON_##reg, val);	\
+})
+
 static u32 __mpam_read_reg(struct mpam_msc *msc, u16 reg)
 {
 	WARN_ON_ONCE(reg > msc->mapped_hwpage_sz);
@@ -646,8 +678,11 @@ static void mpam_ris_hw_probe(struct mpam_msc_ris *ris)
 			u32 mbwumonidr = mpam_read_partsel_reg(msc, MBWUMON_IDR);
 
 			props->num_mbwu_mon = FIELD_GET(MPAMF_MBWUMON_IDR_NUM_MON, mbwumonidr);
-			if (props->num_mbwu_mon)
+			if (props->num_mbwu_mon) {
 				mpam_set_feature(mpam_feat_msmon_mbwu, props);
+				if (FIELD_GET(MPAMF_MBWUMON_IDR_HAS_LONG, mbwumonidr))
+					props->mbwu_mon_long = true;
+			}
 		}
 	}
 
@@ -790,6 +825,7 @@ static void write_msmon_ctl_flt_vals(struct mon_read *m, u32 ctl_val,
 {
 	struct mpam_msc *msc = m->ris->msc;
 	struct msmon_mbwu_state *mbwu_state;
+	struct mpam_props *props = &m->ris->props;
 
 	/*
 	 * Write the ctl_val with the enable bit cleared, reset the counter,
@@ -805,7 +841,10 @@ static void write_msmon_ctl_flt_vals(struct mon_read *m, u32 ctl_val,
 	case mpam_feat_msmon_mbwu:
 		mpam_write_monsel_reg(msc, CFG_MBWU_FLT, flt_val);
 		mpam_write_monsel_reg(msc, CFG_MBWU_CTL, ctl_val);
-		mpam_write_monsel_reg(msc, MBWU, 0);
+		if (props->mbwu_mon_long)
+			mpam_write64_monsel_reg(msc, MBWU_L, 0);
+		else
+			mpam_write_monsel_reg(msc, MBWU, 0);
 		mpam_write_monsel_reg(msc, CFG_MBWU_CTL, ctl_val|MSMON_CFG_x_CTL_EN);
 
 		mbwu_state = &m->ris->mbwu_state[m->ctx->mon];
@@ -836,6 +875,7 @@ static void __ris_msmon_read(void *arg)
 	struct mpam_msc_ris *ris = m->ris;
 	struct mpam_msc *msc = m->ris->msc;
 	struct msmon_mbwu_state *mbwu_state;
+	struct mpam_props *props = &ris->props;
 	u32 mon_sel, ctl_val, flt_val, cur_ctl, cur_flt;
 
 	spin_lock_irqsave(&msc->mon_sel_lock, flags);
@@ -870,9 +910,15 @@ static void __ris_msmon_read(void *arg)
 		now = FIELD_GET(MSMON___VALUE, now);
 		break;
 	case mpam_feat_msmon_mbwu:
-		now = mpam_read_monsel_reg(msc, MBWU);
-		nrdy = now & MSMON___NRDY;
-		now = FIELD_GET(MSMON___VALUE, now);
+		if (props->mbwu_mon_long) {
+			now = mpam_read64_monsel_reg(msc, MBWU_L);
+			nrdy = now & MSMON___L_NRDY;
+			now = FIELD_GET(MSMON_MBWU_L_VALUE, now);
+		} else {
+			now = mpam_read_monsel_reg(msc, MBWU);
+			nrdy = now & MSMON___NRDY;
+			now = FIELD_GET(MSMON___VALUE, now);
+		}
 
 		if (nrdy)
 			break;
@@ -1151,6 +1197,7 @@ static int mpam_save_mbwu_state(void *arg)
 	struct mpam_msc_ris *ris = arg;
 	struct mpam_msc *msc = ris->msc;
 	struct msmon_mbwu_state *mbwu_state;
+	struct mpam_props *props = &ris->props;
 
 	lockdep_assert_held(&msc->lock);
 
@@ -1168,8 +1215,10 @@ static int mpam_save_mbwu_state(void *arg)
 		mpam_write_monsel_reg(msc, CFG_MBWU_CTL, 0);
 
 		val = mpam_read_monsel_reg(msc, MBWU);
-		mpam_write_monsel_reg(msc, MBWU, 0);
-
+		if (props->mbwu_mon_long)
+			mpam_write64_monsel_reg(msc, MBWU_L, 0);
+		else
+			mpam_write_monsel_reg(msc, MBWU, 0);
 		cfg->mon = i;
 		cfg->pmg = FIELD_GET(MSMON_CFG_MBWU_FLT_PMG, cur_flt);
 		cfg->match_pmg = FIELD_GET(MSMON_CFG_x_CTL_MATCH_PMG, cur_ctl);
@@ -1611,6 +1660,8 @@ static int mpam_msc_drv_probe(struct platform_device *pdev)
 		}
 		msc->mapped_hwpage_sz = msc_res->end - msc_res->start;
 		msc->mapped_hwpage = io;
+		pr_err("update max_partid from %d to 45\n", readl(msc->mapped_hwpage + 0x3000) >> 16);
+		writel(45 << 16, msc->mapped_hwpage + 0x3000);
 
 		msc->id = mpam_num_msc++;
 		list_add_rcu(&msc->glbl_list, &mpam_all_msc);
@@ -1766,11 +1817,8 @@ static irqreturn_t mpam_irq_handler(int irq, void *dev_id)
 {
 	u64 reg;
 	u16 partid;
-	struct mpam_msc *msc;
+	struct mpam_msc *msc = (struct mpam_msc *)dev_id;
 	u8 errcode, pmg, ris;
-	struct mpam_msc **msc_p = dev_id;
-
-	msc = *msc_p;
 
 	if (WARN_ON_ONCE(!msc) ||
 	    WARN_ON_ONCE(!cpumask_test_cpu(smp_processor_id(),
@@ -1840,7 +1888,6 @@ static int mpam_register_irqs(void)
 							"mpam:msc:error", msc);
 			if (err)
 				return err;
-			enable_irq(irq);
 		}
 
 		mutex_lock(&msc->lock);

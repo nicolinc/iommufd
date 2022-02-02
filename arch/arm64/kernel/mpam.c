@@ -13,9 +13,16 @@ DEFINE_PER_CPU(u64, arm64_mpam_current);
 
 static int __init arm64_mpam_register_cpus(void)
 {
-	u64 mpamidr = read_sanitised_ftr_reg(SYS_MPAMIDR_EL1);
-	u16 partid_max = FIELD_GET(MPAMIDR_PARTID_MAX, mpamidr);
-	u8 pmg_max = FIELD_GET(MPAMIDR_PMG_MAX, mpamidr);
+	u64 mpamidr;
+	u16 partid_max;
+	u8 pmg_max;
+
+	if (!mpam_cpus_have_feature())
+		return 0;
+
+	mpamidr = read_sanitised_ftr_reg(SYS_MPAMIDR_EL1);
+	partid_max = FIELD_GET(MPAMIDR_PARTID_MAX, mpamidr);
+	pmg_max = FIELD_GET(MPAMIDR_PMG_MAX, mpamidr);
 
 	return mpam_register_requestor(partid_max, pmg_max);
 }

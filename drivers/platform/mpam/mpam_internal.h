@@ -99,6 +99,7 @@ struct mpam_props
 	u16			cpbm_wd;
 	u16			mbw_pbm_bits;
 	u8			bwa_wd;
+	u8			mbwu_mon_long;
 	u16			cmax_wd;
 	u16			intpri_wd;
 	u16			dspri_wd;
@@ -328,6 +329,7 @@ void mpam_resctrl_exit(void);
 #define MSMON_CSU_CAPTURE       0x0848  /* last cache-usage value captured */
 #define MSMON_MBWU              0x0860  /* current mem-bw usage value */
 #define MSMON_MBWU_CAPTURE      0x0868  /* last mem-bw value captured */
+#define MSMON_MBWU_L            0x0880  /*  current mem-bw usage long value*/
 #define MSMON_CAPT_EVNT         0x0808  /* signal a capture event */
 #define MPAMF_ESR               0x00F8  /* error status register */
 #define MPAMF_ECR               0x00F0  /* error control register */
@@ -384,6 +386,7 @@ void mpam_resctrl_exit(void);
 /* MPAMF_MBWUMON_IDR - MPAM memory bandwidth usage monitor ID register */
 #define MPAMF_MBWUMON_IDR_NUM_MON       GENMASK(15, 0)
 #define MPAMF_MBWUMON_IDR_HAS_CAPTURE   BIT(31)
+#define MPAMF_MBWUMON_IDR_HAS_LONG	BIT(30)
 
 /* MPAMF_PARTID_NRW_IDR - MPAM PARTID narrowing ID register */
 #define MPAMF_PARTID_NRW_IDR_INTPARTID_MAX      GENMASK(15, 0)
@@ -527,6 +530,7 @@ void mpam_resctrl_exit(void);
  */
 #define MSMON___VALUE          GENMASK(30, 0)
 #define MSMON___NRDY           BIT(31)
+#define MSMON___L_NRDY         BIT(63)
 #define MSMON_MBWU_L_VALUE     GENMASK(62, 0)
 /*
  * MSMON_CAPT_EVNT - Memory system performance monitoring capture event

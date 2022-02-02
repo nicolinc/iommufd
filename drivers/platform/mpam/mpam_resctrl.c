@@ -388,6 +388,8 @@ void resctrl_arch_reset_rmid(struct rdt_resource *r, struct rdt_domain *d,
 	if (eventid != QOS_L3_MBM_LOCAL_EVENT_ID)
 		return;
 
+	dom = container_of(d, struct mpam_resctrl_dom, resctrl_dom);
+
 	cfg.mon = resctrl_arch_rmid_idx_encode(closid, rmid);
 	cfg.match_pmg = true;
 	cfg.pmg = rmid;
@@ -1088,6 +1090,7 @@ int mpam_resctrl_online_cpu(unsigned int cpu)
 		err = resctrl_online_domain(&res->resctrl_res, &dom->resctrl_dom);
 		if (err)
 			return err;
+		cancel_delayed_work(&(dom->resctrl_dom.mbm_over));
 	}
 
 	return resctrl_online_cpu(cpu);
