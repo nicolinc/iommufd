@@ -662,7 +662,6 @@ FIXTURE_SETUP(iommufd_mock_domain)
 	self->mmap_flags = MAP_SHARED | MAP_ANONYMOUS;
 	self->mmap_buf_size = PAGE_SIZE * 8;
 	if (variant->hugepages) {
-		/* MAP_POPULATE for is_backed_by_huge() */
 		self->mmap_flags |= MAP_HUGETLB | MAP_POPULATE;
 		self->mmap_buf_size = HUGEPAGE_SIZE * 2;
 	}
@@ -696,43 +695,6 @@ FIXTURE_VARIANT_ADD(iommufd_mock_domain, two_domains_hugepage){
 	.mock_domains = 2,
 	.hugepages = true,
 };
-
-/* Check if the user addr is backed by hugepages
- * FIXME: on my kernel at least this doesn't seem necessaryt as MAP_HUGETLB |
- * MAP_POPULATE will fail if we have no huge pages.
- */
-static bool is_backed_by_huge(void *addr)
-{
-	const uint64_t PAGEMAP_PRESENT = 1ULL << 63;
-	const uint64_t PAGEMAP_PFN = (1ULL << 55) - 1;
-	const uint64_t KPAGEFLAGS_HUGE = 1ULL << 15;
-	unsigned long pfn = (unsigned long)addr / PAGE_SIZE;
-	uint64_t entry;
-	uint64_t flags;
-	int fd, ret;
-
-	fd = open("/proc/self/pagemap", O_RDONLY);
-	if (fd < 0)
-		return false;
-
-	ret = pread(fd, &entry, sizeof(entry), pfn * sizeof(entry));
-	close(fd);
-	if (ret != sizeof(entry))
-		return false;
-
-	if (!(entry & PAGEMAP_PRESENT))
-		return false;
-	fd = open("/proc/kpageflags", O_RDONLY);
-	if (fd < 0)
-		return false;
-
-	pfn = entry & PAGEMAP_PFN;
-	ret = pread(fd, &flags, sizeof(flags), sizeof(flags) * pfn);
-	close(fd);
-	if (ret != sizeof(flags))
-		return false;
-	return flags & KPAGEFLAGS_HUGE;
-}
 
 /* Have the kernel check that the user pages made it to the iommu_domain */
 #define check_mock_iova(_ptr, _iova, _length)                                  \
@@ -781,8 +743,6 @@ TEST_F(iommufd_mock_domain, basic)
 	buf = mmap(0, buf_size, PROT_READ | PROT_WRITE, self->mmap_flags, -1,
 		   0);
 	ASSERT_NE(MAP_FAILED, buf);
-	if (variant->hugepages)
-		ASSERT_EQ(1, is_backed_by_huge(buf));
 
 	/* EFAULT half way through mapping */
 	ASSERT_EQ(0, munmap(buf + buf_size / 2, buf_size / 2));
@@ -817,8 +777,6 @@ TEST_F(iommufd_mock_domain, all_aligns)
 	buf = mmap(0, buf_size, PROT_READ | PROT_WRITE, self->mmap_flags, -1, 0);
 	ASSERT_NE(MAP_FAILED, buf);
 	check_refs(buf, buf_size, 0);
-	if (variant->hugepages)
-		ASSERT_EQ(1, is_backed_by_huge(buf));
 
 	/*
 	 * Map every combination of page size and alignment within a big region,
@@ -878,8 +836,6 @@ TEST_F(iommufd_mock_domain, all_aligns_copy)
 	buf = mmap(0, buf_size, PROT_READ | PROT_WRITE, self->mmap_flags, -1, 0);
 	ASSERT_NE(MAP_FAILED, buf);
 	check_refs(buf, buf_size, 0);
-	if (variant->hugepages)
-		ASSERT_EQ(1, is_backed_by_huge(buf));
 
 	/*
 	 * Map every combination of page size and alignment within a big region,
