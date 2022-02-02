@@ -246,6 +246,8 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 		ictx->vfio_ioaspt = ioaspt;
 		cmd->id = ioaspt->obj.id;
 		xa_unlock(&ictx->objects);
+
+		iommufd_put_object(&ioaspt->obj);
 	}
 
 	rc = __iommufd_test_mock_domain(ucmd, cmd);
