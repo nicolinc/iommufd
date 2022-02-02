@@ -385,6 +385,7 @@ static int iommufd_test_access_pages(struct iommufd_ucmd *ucmd,
 		goto out_unaccess;
 
 	iommufd_put_object_keep_user(&access->ioaspt->obj);
+	kvfree(access->pages);
 	return 0;
 out_unaccess:
 	iopt_unaccess_pages(&access->ioaspt->iopt, iova, length);
