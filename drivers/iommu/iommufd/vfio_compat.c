@@ -45,10 +45,13 @@ alloc_compat_ioas(struct iommufd_ctx *ictx)
 		out_ioaspt = ioaspt;
 	xa_unlock(&ictx->objects);
 
-	if (out_ioaspt == ioaspt)
+	if (out_ioaspt == ioaspt) {
+		if (!lock_obj(&out_ioaspt->obj))
+			WARN_ON(true);
 		iommufd_object_finalize(ictx, &ioaspt->obj);
-	else
+	} else {
 		iommufd_object_abort(ictx, &ioaspt->obj);
+	}
 	return out_ioaspt;
 }
 
@@ -390,6 +393,8 @@ struct iommufd_ctx *vfio_group_set_iommufd(int fd, struct list_head *device_list
 	ictx->vfio_ioaspt = ioaspt;
 	attach.ioaspt_id = ioaspt->obj.id;
 	xa_unlock(&ictx->objects);
+
+	iommufd_put_object(&ioaspt->obj);
 
 	list_for_each_entry(device, device_list, group_next) {
 		if (!device->ops->bind_iommufd || !device->ops->unbind_iommufd)
