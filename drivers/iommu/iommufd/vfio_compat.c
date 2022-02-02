@@ -379,7 +379,12 @@ struct iommufd_ctx *vfio_group_set_iommufd(int fd, struct list_head *device_list
 
 	ictx->vfio_fd = fd;
 
-	/* FIXME bind.dev_cookie */
+	/*
+	 * Note: bind.dev_cookie is designed for page fault, whose uAPI is TBD
+	 * on IOMMUFD. And VFIO does not support that either. So we here leave
+	 * the dev_cookie to 0 for now, until it is available in VFIO too.
+	 */
+	bind.dev_cookie = 0;
 	bind.iommufd = fd;
 	attach.iommufd = fd;
 
