@@ -409,6 +409,25 @@ out_free:
 	return rc;
 }
 
+static int iommufd_test_set_vfio_ioaspt(struct iommufd_ucmd *ucmd,
+					unsigned int mockpt_id)
+{
+	struct iommufd_ioas_pagetable *ioaspt;
+	struct iommufd_ctx *ictx = ucmd->ictx;
+	int rc;
+
+	ioaspt = get_ioas_pagetable(ucmd, mockpt_id);
+	if (IS_ERR(ioaspt))
+		return PTR_ERR(ioaspt);
+
+	xa_lock(&ictx->objects);
+	ictx->vfio_ioaspt = ioaspt;
+	xa_unlock(&ictx->objects);
+
+	iommufd_put_object(&ioaspt->obj);
+	return rc;
+}
+
 void iommufd_selftest_destroy(struct iommufd_object *obj)
 {
 	struct selftest_obj *access =
@@ -447,6 +466,9 @@ int iommufd_test(struct iommufd_ucmd *ucmd)
 			cmd->access_pages.flags);
 	case IOMMU_TEST_OP_SET_TEMP_MEMORY_LIMIT:
 		iommufd_test_memory_limit = cmd->memory_limit.limit;
+		return 0;
+	case IOMMU_TEST_OP_SET_VFIO_IOAS_PAGETABLE:
+		iommufd_test_set_vfio_ioaspt(ucmd, cmd->id);
 		return 0;
 	default:
 		return -EOPNOTSUPP;
