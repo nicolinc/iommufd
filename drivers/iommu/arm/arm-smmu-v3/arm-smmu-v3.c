@@ -379,8 +379,7 @@ static void arm_smmu_cmdq_build_sync_cmd(u64 *cmd, struct arm_smmu_device *smmu,
 	arm_smmu_cmdq_build_cmd(cmd, &ent);
 }
 
-static void __arm_smmu_cmdq_skip_err(struct arm_smmu_device *smmu,
-				     struct arm_smmu_queue *q)
+void __arm_smmu_cmdq_skip_err(struct device *dev, struct arm_smmu_queue *q)
 {
 	static const char * const cerror_str[] = {
 		[CMDQ_ERR_CERROR_NONE_IDX]	= "No error",
@@ -397,12 +396,12 @@ static void __arm_smmu_cmdq_skip_err(struct arm_smmu_device *smmu,
 		.opcode = CMDQ_OP_CMD_SYNC,
 	};
 
-	dev_err(smmu->dev, "CMDQ error (cons 0x%08x): %s\n", cons,
+	dev_err(dev, "CMDQ error (cons 0x%08x): %s\n", cons,
 		idx < ARRAY_SIZE(cerror_str) ?  cerror_str[idx] : "Unknown");
 
 	switch (idx) {
 	case CMDQ_ERR_CERROR_ABT_IDX:
-		dev_err(smmu->dev, "retrying command fetch\n");
+		dev_err(dev, "retrying command fetch\n");
 		return;
 	case CMDQ_ERR_CERROR_NONE_IDX:
 		return;
@@ -424,9 +423,12 @@ static void __arm_smmu_cmdq_skip_err(struct arm_smmu_device *smmu,
 	 * not to touch any of the shadow cmdq state.
 	 */
 	queue_read(cmd, Q_ENT(q, cons), q->ent_dwords);
-	dev_err(smmu->dev, "skipping command in error state:\n");
+	dev_err(dev, "skipping command in error state:\n");
 	for (i = 0; i < ARRAY_SIZE(cmd); ++i)
-		dev_err(smmu->dev, "\t0x%016llx\n", (unsigned long long)cmd[i]);
+		dev_err(dev, "\t0x%016llx\n", (unsigned long long)cmd[i]);
+
+	if (q->quirks & CMDQ_QUIRK_SYNC_CS_NONE_ONLY)
+		cmd_sync.sync.cs_none = true;
 
 	/* Convert the erroneous command into a CMD_SYNC */
 	arm_smmu_cmdq_build_cmd(cmd, &cmd_sync);
@@ -436,7 +438,7 @@ static void __arm_smmu_cmdq_skip_err(struct arm_smmu_device *smmu,
 
 static void arm_smmu_cmdq_skip_err(struct arm_smmu_device *smmu)
 {
-	__arm_smmu_cmdq_skip_err(smmu, &smmu->cmdq.q);
+	__arm_smmu_cmdq_skip_err(smmu->dev, &smmu->cmdq.q);
 }
 
 /*
