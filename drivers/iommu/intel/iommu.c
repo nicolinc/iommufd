@@ -4410,7 +4410,7 @@ static int intel_iommu_map(struct iommu_domain *domain,
 		prot |= DMA_PTE_READ;
 	if (iommu_prot & IOMMU_WRITE)
 		prot |= DMA_PTE_WRITE;
-	if (dmar_domain->force_snooping)
+	if (dmar_domain->force_snooping && !domain_use_first_level(dmar_domain))
 		prot |= DMA_PTE_SNP;
 
 	max_addr = iova + size;
