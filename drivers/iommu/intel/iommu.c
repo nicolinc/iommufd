@@ -4533,13 +4533,61 @@ static phys_addr_t intel_iommu_iova_to_phys(struct iommu_domain *domain,
 	return phys;
 }
 
+static bool domain_support_force_snooping(struct dmar_domain *domain)
+{
+	struct device_domain_info *info;
+	unsigned long flags;
+	bool support = true;
+
+	spin_lock_irqsave(&device_domain_lock, flags);
+	if (list_empty(&domain->devices))
+		goto out;
+
+	list_for_each_entry(info, &domain->devices, link) {
+		if (!ecap_sc_support(info->iommu->ecap)) {
+			support = false;
+			break;
+		}
+	}
+out:
+	spin_unlock_irqrestore(&device_domain_lock, flags);
+	return support;
+}
+
+static void domain_set_force_snooping(struct dmar_domain *domain)
+{
+	struct device_domain_info *info;
+	unsigned long flags;
+
+	/*
+	 * Second level page table supports per-PTE snoop control. The
+	 * iommu_map() interface will handle this by setting SNP bit.
+	 */
+	if (!domain_use_first_level(domain))
+		return;
+
+	spin_lock_irqsave(&device_domain_lock, flags);
+	if (list_empty(&domain->devices))
+		goto out_unlock;
+
+	list_for_each_entry(info, &domain->devices, link)
+		intel_pasid_setup_page_snoop_control(info->iommu, info->dev,
+						     PASID_RID2PASID);
+
+out_unlock:
+	spin_unlock_irqrestore(&device_domain_lock, flags);
+}
+
 static bool intel_iommu_enforce_cache_coherency(struct iommu_domain *domain)
 {
 	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
 
-	if (!domain_update_iommu_snooping(NULL))
+	if (!domain_support_force_snooping(dmar_domain))
 		return false;
+
+	domain_set_force_snooping(dmar_domain);
 	dmar_domain->force_snooping = true;
+
 	return true;
 }
 
