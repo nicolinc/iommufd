@@ -158,6 +158,12 @@ static inline int resctrl_arch_mon_ctx_alloc_no_wait(struct rdt_resource *r,
 static inline void resctrl_arch_mon_ctx_free(struct rdt_resource *r, int evtid,
 					     int ctx) { };
 
+/* Does the event count even when no context is allocated? */
+static inline bool resctrl_arch_event_is_free_running(enum resctrl_event_id evt)
+{
+	return true;
+}
+
 static inline bool resctrl_arch_alloc_capable(void)
 {
 	return rdt_alloc_capable;
