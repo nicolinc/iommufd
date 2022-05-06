@@ -31,7 +31,7 @@ void iommufd_device_detach(struct iommufd_device *idev);
 
 struct iommufd_ctx *vfio_group_set_iommufd(int fd, struct list_head *device_list);
 void vfio_group_unset_iommufd(void *iommufd, struct list_head *device_list);
-int iommufd_vfio_check_extension(unsigned long type);
+int iommufd_vfio_check_extension(void *iommufd, unsigned long type);
 #else /* !CONFIG_IOMMUFD */
 static inline struct iommufd_device *
 iommufd_bind_pci_device(int fd, struct pci_dev *pdev, u32 *id)
@@ -64,7 +64,7 @@ static inline void vfio_group_unset_iommufd(void *iommufd,
 {
 }
 
-static int iommufd_vfio_check_extension(unsigned long type)
+static int iommufd_vfio_check_extension(void *iommufd, unsigned long type)
 {
 	return -EOPNOTSUPP;
 }
