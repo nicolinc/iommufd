@@ -90,6 +90,7 @@ int iommufd_ioas_iova_ranges(struct iommufd_ucmd *ucmd)
 
 	down_read(&ioas->iopt.iova_rwsem);
 	cmd->out_num_iovas = 0;
+	cmd->iova_alignment = ioas->iopt.iova_alignment;
 	for (interval_tree_span_iter_first(
 		     &span, &ioas->iopt.reserved_iova_itree, 0, ULONG_MAX);
 	     !interval_tree_span_iter_done(&span);
