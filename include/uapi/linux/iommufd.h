@@ -80,6 +80,8 @@ struct iommu_ioas_alloc {
  * @ioas_id: IOAS ID to read ranges from
  * @out_num_iovas: Output total number of ranges in the IOAS
  * @__reserved: Must be 0
+ * @iova_alignment: IOVA alignment for the reported ranges
+ * @__reserved64: Must be 0
  * @out_valid_iovas: Array of valid IOVA ranges. The array length is the smaller
  *                   of out_num_iovas or the length implied by size.
  * @out_valid_iovas.start: First IOVA in the allowed range
@@ -95,6 +97,8 @@ struct iommu_ioas_iova_ranges {
 	__u32 ioas_id;
 	__u32 out_num_iovas;
 	__u32 __reserved;
+	__aligned_u64 iova_alignment;
+	__aligned_u64 __reserved64;
 	struct iommu_valid_iovas {
 		__aligned_u64 start;
 		__aligned_u64 last;
