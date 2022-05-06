@@ -157,12 +157,43 @@ static int iommufd_vfio_unmap_dma(struct iommufd_ctx *ictx, unsigned int cmd,
 	return rc;
 }
 
-int iommufd_vfio_check_extension(unsigned long type)
+static int iommufd_vfio_check_enforce_cache_coherency(struct io_pagetable *iopt)
 {
+	struct iommu_domain *iter_domain = NULL;
+	unsigned long index;
+	int ret = 1;
+
+	down_write(&iopt->domains_rwsem);
+
+	xa_for_each (&iopt->domains, index, iter_domain) {
+		if (!(iter_domain->ops->enforce_cache_coherency(iter_domain))) {
+			ret = 0;
+			break;
+		}
+	}
+
+	up_write(&iopt->domains_rwsem);
+
+	return ret;
+}
+
+int iommufd_vfio_check_extension(void *iommufd, unsigned long type)
+{
+	struct iommufd_ctx *ictx = (struct iommufd_ctx *)iommufd;
+	struct iommufd_ioas *ioas;
+	int ret;
+
 	switch (type) {
 	case VFIO_TYPE1v2_IOMMU:
 	case VFIO_UNMAP_ALL:
 		return 1;
+	case VFIO_DMA_CC_IOMMU:
+		ioas = get_compat_ioas(ictx);
+		if (IS_ERR(ioas))
+			return 0;
+		ret = iommufd_vfio_check_enforce_cache_coherency(&ioas->iopt);
+		iommufd_put_object(&ioas->obj);
+		return ret;
 	/*
 	 * FIXME: The type1 iommu allows splitting of maps, which can fail. This is doable but
 	 * is a bunch of extra code that is only for supporting this case.
@@ -175,11 +206,6 @@ int iommufd_vfio_check_extension(unsigned long type)
 	 * find any user implementation either.
 	 */
 	case VFIO_TYPE1_NESTING_IOMMU:
-	/*
-	 * FIXME: Easy to support, but needs rework in the Intel iommu driver
-	 * to expose the no snoop squashing to iommufd
-	 */
-	case VFIO_DMA_CC_IOMMU:
 	/*
 	 * FIXME: VFIO_DMA_MAP_FLAG_VADDR
 	 * https://lore.kernel.org/kvm/1611939252-7240-1-git-send-email-steven.sistare@oracle.com/
@@ -390,7 +416,7 @@ int iommufd_vfio_ioctl(struct iommufd_ctx *ictx, unsigned int cmd,
 	case VFIO_SET_IOMMU:
 		return iommufd_vfio_set_iommu(ictx, arg);
 	case VFIO_CHECK_EXTENSION:
-		return iommufd_vfio_check_extension(arg);
+		return iommufd_vfio_check_extension(ictx, arg);
 	case VFIO_IOMMU_GET_INFO:
 		return iommufd_vfio_iommu_get_info(ictx, uarg);
 	case VFIO_IOMMU_MAP_DMA:
