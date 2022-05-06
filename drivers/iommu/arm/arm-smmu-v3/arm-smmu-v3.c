@@ -2383,17 +2383,17 @@ static void arm_smmu_detach_dev(struct arm_smmu_master *master)
 	arm_smmu_install_ste_for_dev(master);
 }
 
-static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
+static bool arm_smmu_can_attach_dev(struct iommu_domain *domain,
+				    struct device *dev)
 {
-	int ret = 0;
-	unsigned long flags;
+	bool ret = true;
 	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
 	struct arm_smmu_device *smmu;
 	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
 	struct arm_smmu_master *master;
 
 	if (!fwspec)
-		return -ENOENT;
+		return false;
 
 	master = dev_iommu_priv_get(dev);
 	smmu = master->smmu;
@@ -2405,8 +2405,48 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 	 */
 	if (arm_smmu_master_sva_enabled(master)) {
 		dev_err(dev, "cannot attach - SVA enabled\n");
-		return -EBUSY;
+		return false;
 	}
+
+	mutex_lock(&smmu_domain->init_mutex);
+
+	if (!smmu_domain->smmu)
+		goto out_unlock;
+
+	if (smmu_domain->smmu != smmu) {
+		dev_err(dev,
+			"cannot attach to SMMU %s (upstream of %s)\n",
+			dev_name(smmu_domain->smmu->dev),
+			dev_name(smmu->dev));
+		ret = false;
+		goto out_unlock;
+	} else if (smmu_domain->stage == ARM_SMMU_DOMAIN_S1 &&
+		   master->ssid_bits != smmu_domain->s1_cfg.s1cdmax) {
+		dev_err(dev,
+			"cannot attach to incompatible domain (%u SSID bits != %u)\n",
+			smmu_domain->s1_cfg.s1cdmax, master->ssid_bits);
+		ret = false;
+		goto out_unlock;
+	} else if (smmu_domain->stage == ARM_SMMU_DOMAIN_S1 &&
+		   smmu_domain->stall_enabled != master->stall_enabled) {
+		dev_err(dev, "cannot attach to stall-%s domain\n",
+			smmu_domain->stall_enabled ? "enabled" : "disabled");
+		ret = false;
+		goto out_unlock;
+	}
+
+out_unlock:
+	mutex_unlock(&smmu_domain->init_mutex);
+	return ret;
+}
+
+static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
+{
+	int ret = 0;
+	unsigned long flags;
+	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+	struct arm_smmu_device *smmu = master->smmu;
 
 	arm_smmu_detach_dev(master);
 
@@ -2419,26 +2459,6 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 			smmu_domain->smmu = NULL;
 			goto out_unlock;
 		}
-	} else if (smmu_domain->smmu != smmu) {
-		dev_err(dev,
-			"cannot attach to SMMU %s (upstream of %s)\n",
-			dev_name(smmu_domain->smmu->dev),
-			dev_name(smmu->dev));
-		ret = -ENXIO;
-		goto out_unlock;
-	} else if (smmu_domain->stage == ARM_SMMU_DOMAIN_S1 &&
-		   master->ssid_bits != smmu_domain->s1_cfg.s1cdmax) {
-		dev_err(dev,
-			"cannot attach to incompatible domain (%u SSID bits != %u)\n",
-			smmu_domain->s1_cfg.s1cdmax, master->ssid_bits);
-		ret = -EINVAL;
-		goto out_unlock;
-	} else if (smmu_domain->stage == ARM_SMMU_DOMAIN_S1 &&
-		   smmu_domain->stall_enabled != master->stall_enabled) {
-		dev_err(dev, "cannot attach to stall-%s domain\n",
-			smmu_domain->stall_enabled ? "enabled" : "disabled");
-		ret = -EINVAL;
-		goto out_unlock;
 	}
 
 	master->domain = smmu_domain;
@@ -2860,6 +2880,7 @@ static struct iommu_ops arm_smmu_ops = {
 	.owner			= THIS_MODULE,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
 		.iommu_ops		= &arm_smmu_ops,
+		.can_attach_dev		= arm_smmu_can_attach_dev,
 		.attach_dev		= arm_smmu_attach_dev,
 		.map_pages		= arm_smmu_map_pages,
 		.unmap_pages		= arm_smmu_unmap_pages,
