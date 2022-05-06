@@ -171,6 +171,11 @@ static phys_addr_t mock_domain_iova_to_phys(struct iommu_domain *domain,
 	return (xa_to_value(ent) & MOCK_PFN_MASK) * MOCK_IO_PAGE_SIZE;
 }
 
+static bool mock_domain_enforce_cache_coherency(struct iommu_domain *domain)
+{
+	return true;
+}
+
 static const struct iommu_ops mock_ops = {
 	.owner = THIS_MODULE,
 	.pgsize_bitmap = MOCK_IO_PAGE_SIZE,
@@ -181,6 +186,8 @@ static const struct iommu_ops mock_ops = {
 			.map_pages = mock_domain_map_pages,
 			.unmap_pages = mock_domain_unmap_pages,
 			.iova_to_phys = mock_domain_iova_to_phys,
+			.enforce_cache_coherency =
+				mock_domain_enforce_cache_coherency,
 		},
 };
 

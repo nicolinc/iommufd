@@ -1005,6 +1005,7 @@ TEST_F(vfio_compat_nodev, simple_ioctls)
 {
 	ASSERT_EQ(VFIO_API_VERSION, ioctl(self->fd, VFIO_GET_API_VERSION));
 	ASSERT_EQ(1, ioctl(self->fd, VFIO_CHECK_EXTENSION, VFIO_TYPE1v2_IOMMU));
+	ASSERT_EQ(0, ioctl(self->fd, VFIO_CHECK_EXTENSION, VFIO_DMA_CC_IOMMU));
 }
 
 TEST_F(vfio_compat_nodev, unmap_cmd)
@@ -1132,6 +1133,7 @@ FIXTURE_SETUP(vfio_compat_mock_domain) {
 	vfio_ioas_cmd.ioas_id = self->ioas_id;
 	ASSERT_EQ(0, ioctl(self->fd, IOMMU_VFIO_IOAS, &vfio_ioas_cmd));
 	ASSERT_EQ(0, ioctl(self->fd, VFIO_SET_IOMMU, VFIO_TYPE1v2_IOMMU));
+	ASSERT_EQ(1, ioctl(self->fd, VFIO_CHECK_EXTENSION, VFIO_DMA_CC_IOMMU));
 }
 
 FIXTURE_TEARDOWN(vfio_compat_mock_domain) {
