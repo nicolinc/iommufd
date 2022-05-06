@@ -259,6 +259,7 @@ struct iommu_ops {
 
 /**
  * struct iommu_domain_ops - domain specific operations
+ * @can_attach_dev: sanity check for attaching an iommu domain to a device
  * @attach_dev: attach an iommu domain to a device
  * @detach_dev: detach an iommu domain from a device
  * @map: map a physically contiguous memory region to an iommu domain
@@ -279,6 +280,7 @@ struct iommu_ops {
  * @free: Release the domain after use.
  */
 struct iommu_domain_ops {
+	int (*can_attach_dev)(struct iommu_domain *domain, struct device *dev);
 	int (*attach_dev)(struct iommu_domain *domain, struct device *dev);
 	void (*detach_dev)(struct iommu_domain *domain, struct device *dev);
 
