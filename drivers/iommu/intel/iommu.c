@@ -4367,17 +4367,10 @@ static int prepare_domain_attach_device(struct iommu_domain *domain,
 	if (!iommu)
 		return -ENODEV;
 
-	/* check if this iommu agaw is sufficient for max mapped address */
 	addr_width = agaw_to_width(iommu->agaw);
 	if (addr_width > cap_mgaw(iommu->cap))
 		addr_width = cap_mgaw(iommu->cap);
 
-	if (dmar_domain->max_addr > (1LL << addr_width)) {
-		dev_err(dev, "%s: iommu width (%d) is not "
-		        "sufficient for the mapped address (%llx)\n",
-		        __func__, addr_width, dmar_domain->max_addr);
-		return -EFAULT;
-	}
 	dmar_domain->gaw = addr_width;
 
 	/*
@@ -4397,16 +4390,41 @@ static int prepare_domain_attach_device(struct iommu_domain *domain,
 	return 0;
 }
 
-static int intel_iommu_attach_device(struct iommu_domain *domain,
-				     struct device *dev)
+static int intel_iommu_can_attach_device(struct iommu_domain *domain,
+					 struct device *dev)
 {
-	int ret;
+	struct intel_iommu *iommu = device_to_iommu(dev, NULL, NULL);
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	int addr_width;
+
+	if (!iommu)
+		return -ENODEV;
 
 	if (domain->type == IOMMU_DOMAIN_UNMANAGED &&
 	    device_is_rmrr_locked(dev)) {
 		dev_warn(dev, "Device is ineligible for IOMMU domain attach due to platform RMRR requirement.  Contact your platform vendor.\n");
 		return -EPERM;
 	}
+
+	/* check if this iommu agaw is sufficient for max mapped address */
+	addr_width = agaw_to_width(iommu->agaw);
+	if (addr_width > cap_mgaw(iommu->cap))
+		addr_width = cap_mgaw(iommu->cap);
+
+	if (dmar_domain->max_addr > (1LL << addr_width)) {
+		dev_err(dev, "%s: iommu width (%d) is not "
+			"sufficient for the mapped address (%llx)\n",
+			__func__, addr_width, dmar_domain->max_addr);
+		return -EFAULT;
+	}
+
+	return 0;
+}
+
+static int intel_iommu_attach_device(struct iommu_domain *domain,
+				     struct device *dev)
+{
+	int ret;
 
 	/* normally dev is not mapped */
 	if (unlikely(domain_context_mapped(dev))) {
@@ -4920,6 +4938,7 @@ const struct iommu_ops intel_iommu_ops = {
 	.page_response		= intel_svm_page_response,
 #endif
 	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.can_attach_dev		= intel_iommu_can_attach_device,
 		.attach_dev		= intel_iommu_attach_device,
 		.detach_dev		= intel_iommu_detach_device,
 		.map_pages		= intel_iommu_map_pages,
