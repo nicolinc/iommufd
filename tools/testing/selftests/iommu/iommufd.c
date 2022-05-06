@@ -535,9 +535,11 @@ TEST_F(iommufd_ioas, iova_ranges)
 	ASSERT_EQ(0, ioctl(self->fd, IOMMU_IOAS_IOVA_RANGES, cmd));
 	EXPECT_EQ(1, cmd->out_num_iovas);
 	if (!self->domain_id) {
+		EXPECT_EQ(1, cmd->iova_alignment);
 		EXPECT_EQ(0, cmd->out_valid_iovas[0].start);
 		EXPECT_EQ(SIZE_MAX, cmd->out_valid_iovas[0].last);
 	} else {
+		EXPECT_EQ(MOCK_PAGE_SIZE, cmd->iova_alignment);
 		EXPECT_EQ(MOCK_APERTURE_START, cmd->out_valid_iovas[0].start);
 		EXPECT_EQ(MOCK_APERTURE_LAST, cmd->out_valid_iovas[0].last);
 	}
