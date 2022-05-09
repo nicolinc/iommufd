@@ -40,12 +40,7 @@ iommufd_hw_pagetable_auto_get(struct iommufd_ctx *ictx,
 	 */
 	mutex_lock(&ioas->mutex);
 	list_for_each_entry (hwpt, &ioas->auto_domains, auto_domains_item) {
-		/*
-		 * FIXME: We really need an op from the driver to test if a
-		 * device is compatible with a domain. This thing from VFIO
-		 * works sometimes.
-		 */
-		if (hwpt->domain->ops == dev_iommu_ops(dev)->default_domain_ops) {
+		if (iommu_can_attach_device(hwpt->domain, dev)) {
 			if (refcount_inc_not_zero(&hwpt->obj.users)) {
 				mutex_unlock(&ioas->mutex);
 				return hwpt;
