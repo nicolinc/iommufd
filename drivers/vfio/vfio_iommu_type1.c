@@ -2153,15 +2153,113 @@ static void vfio_iommu_iova_insert_copy(struct vfio_iommu *iommu,
 	list_splice_tail(iova_copy, iova);
 }
 
+static struct vfio_domain *
+vfio_iommu_alloc_and_attach_domain(struct bus_type *bus,
+				   struct vfio_iommu *iommu,
+				   struct iommu_group *iommu_group,
+				   struct list_head *group_resv_regions)
+{
+	bool new_enforce_cache_coherency = false;
+	struct vfio_domain *domain = NULL, *d;
+	struct iommu_domain *new_domain;
+	phys_addr_t resv_msi_base = 0;
+	bool resv_msi;
+	int ret = 0;
+
+	new_domain = iommu_domain_alloc(bus);
+	if (!new_domain)
+		return ERR_PTR(-EIO);
+
+	/*
+	 * If the IOMMU can block non-coherent operations (ie PCIe TLPs with
+	 * no-snoop set) then VFIO always turns this feature on because on Intel
+	 * platforms it optimizes KVM to disable wbinvd emulation.
+	 */
+	if (new_domain->ops->enforce_cache_coherency)
+		new_enforce_cache_coherency =
+			new_domain->ops->enforce_cache_coherency(new_domain);
+
+	resv_msi = vfio_iommu_has_sw_msi(group_resv_regions, &resv_msi_base);
+
+	/*
+	 * Try to match an existing compatible domain.  We don't want to
+	 * preclude an IOMMU driver supporting multiple bus_types and being
+	 * able to include different bus_types in the same IOMMU domain, so
+	 * we test whether the domains use the same iommu_ops rather than
+	 * testing if they're on the same bus_type.
+	 */
+	list_for_each_entry(d, &iommu->domain_list, next) {
+		if (d->domain->ops != new_domain->ops ||
+		    d->enforce_cache_coherency != new_enforce_cache_coherency)
+			continue;
+		if (iommu_attach_group(d->domain, iommu_group))
+			continue;
+		if (resv_msi && IS_ENABLED(CONFIG_IOMMU_DMA) &&
+		    iommu_get_msi_cookie(d->domain, resv_msi_base)) {
+			iommu_detach_group(d->domain, iommu_group);
+			continue;
+		}
+		iommu_domain_free(new_domain);
+		return d;
+	}
+
+	ret = -ENOMEM;
+	domain = kzalloc(sizeof(*d), GFP_KERNEL);
+	if (!domain)
+		goto out_free_iommu_domain;
+
+	domain->domain = new_domain;
+	domain->enforce_cache_coherency = new_enforce_cache_coherency;
+
+	if (iommu->nesting) {
+		ret = iommu_enable_nesting(domain->domain);
+		if (ret)
+			goto out_free_domain;
+	}
+
+	ret = iommu_attach_group(domain->domain, iommu_group);
+	if (ret)
+		goto out_free_domain;
+
+	INIT_LIST_HEAD(&domain->group_list);
+
+	/* Finalizing the new domain */
+	vfio_test_domain_fgsp(domain);
+
+	/* replay mappings on new domains */
+	ret = vfio_iommu_replay(iommu, domain);
+	if (ret)
+		goto out_detach;
+
+	if (resv_msi && IS_ENABLED(CONFIG_IOMMU_DMA)) {
+		ret = iommu_get_msi_cookie(domain->domain, resv_msi_base);
+		if (ret)
+			goto out_detach;
+	}
+
+	list_add(&domain->next, &iommu->domain_list);
+	vfio_update_pgsize_bitmap(iommu);
+
+	return domain;
+
+out_detach:
+	iommu_detach_group(domain->domain, iommu_group);
+out_free_domain:
+	kfree(domain);
+out_free_iommu_domain:
+	iommu_domain_free(new_domain);
+
+	return ERR_PTR(ret);
+}
+
 static int vfio_iommu_type1_attach_group(void *iommu_data,
 		struct iommu_group *iommu_group, enum vfio_group_type type)
 {
 	struct vfio_iommu *iommu = iommu_data;
 	struct vfio_iommu_group *group;
-	struct vfio_domain *domain, *d;
 	struct bus_type *bus = NULL;
-	bool resv_msi, msi_remap;
-	phys_addr_t resv_msi_base = 0;
+	struct vfio_domain *domain;
+	bool msi_remap, new_domain;
 	struct iommu_domain_geometry *geo;
 	LIST_HEAD(iova_copy);
 	LIST_HEAD(group_resv_regions);
@@ -2197,25 +2295,19 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 	if (ret)
 		goto out_free_group;
 
-	ret = -ENOMEM;
-	domain = kzalloc(sizeof(*domain), GFP_KERNEL);
-	if (!domain)
+	ret = iommu_get_group_resv_regions(iommu_group, &group_resv_regions);
+	if (ret)
 		goto out_free_group;
 
-	ret = -EIO;
-	domain->domain = iommu_domain_alloc(bus);
-	if (!domain->domain)
-		goto out_free_domain;
-
-	if (iommu->nesting) {
-		ret = iommu_enable_nesting(domain->domain);
-		if (ret)
-			goto out_domain;
+	domain = vfio_iommu_alloc_and_attach_domain(bus, iommu, iommu_group,
+						    &group_resv_regions);
+	if (IS_ERR(domain)) {
+		ret = PTR_ERR(domain);
+		goto out_free_group_resv;
 	}
 
-	ret = iommu_attach_group(domain->domain, group->iommu_group);
-	if (ret)
-		goto out_domain;
+	new_domain = list_empty(&domain->group_list);
+	list_add(&group->next, &domain->group_list);
 
 	/* Get aperture info */
 	geo = &domain->domain->geometry;
@@ -2224,10 +2316,6 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 		ret = -EINVAL;
 		goto out_detach;
 	}
-
-	ret = iommu_get_group_resv_regions(iommu_group, &group_resv_regions);
-	if (ret)
-		goto out_detach;
 
 	if (vfio_iommu_resv_conflict(iommu, &group_resv_regions)) {
 		ret = -EINVAL;
@@ -2252,11 +2340,6 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 	if (ret)
 		goto out_detach;
 
-	resv_msi = vfio_iommu_has_sw_msi(&group_resv_regions, &resv_msi_base);
-
-	INIT_LIST_HEAD(&domain->group_list);
-	list_add(&group->next, &domain->group_list);
-
 	msi_remap = irq_domain_check_msi_remap() ||
 		    iommu_capable(bus, IOMMU_CAP_INTR_REMAP);
 
@@ -2267,59 +2350,6 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 		goto out_detach;
 	}
 
-	/*
-	 * If the IOMMU can block non-coherent operations (ie PCIe TLPs with
-	 * no-snoop set) then VFIO always turns this feature on because on Intel
-	 * platforms it optimizes KVM to disable wbinvd emulation.
-	 */
-	if (domain->domain->ops->enforce_cache_coherency)
-		domain->enforce_cache_coherency =
-			domain->domain->ops->enforce_cache_coherency(
-				domain->domain);
-
-	/*
-	 * Try to match an existing compatible domain.  We don't want to
-	 * preclude an IOMMU driver supporting multiple bus_types and being
-	 * able to include different bus_types in the same IOMMU domain, so
-	 * we test whether the domains use the same iommu_ops rather than
-	 * testing if they're on the same bus_type.
-	 */
-	list_for_each_entry(d, &iommu->domain_list, next) {
-		if (d->domain->ops == domain->domain->ops &&
-		    d->enforce_cache_coherency ==
-			    domain->enforce_cache_coherency) {
-			iommu_detach_group(domain->domain, group->iommu_group);
-			if (!iommu_attach_group(d->domain,
-						group->iommu_group)) {
-				list_add(&group->next, &d->group_list);
-				iommu_domain_free(domain->domain);
-				kfree(domain);
-				goto done;
-			}
-
-			ret = iommu_attach_group(domain->domain,
-						 group->iommu_group);
-			if (ret)
-				goto out_domain;
-		}
-	}
-
-	vfio_test_domain_fgsp(domain);
-
-	/* replay mappings on new domains */
-	ret = vfio_iommu_replay(iommu, domain);
-	if (ret)
-		goto out_detach;
-
-	if (resv_msi) {
-		ret = iommu_get_msi_cookie(domain->domain, resv_msi_base);
-		if (ret && ret != -ENODEV)
-			goto out_detach;
-	}
-
-	list_add(&domain->next, &iommu->domain_list);
-	vfio_update_pgsize_bitmap(iommu);
-done:
 	/* Delete the old one and insert new iova list */
 	vfio_iommu_iova_insert_copy(iommu, &iova_copy);
 
@@ -2335,13 +2365,15 @@ done:
 	return 0;
 
 out_detach:
+	list_del(&group->next);
 	iommu_detach_group(domain->domain, group->iommu_group);
-out_domain:
-	iommu_domain_free(domain->domain);
 	vfio_iommu_iova_free(&iova_copy);
+	if (new_domain) {
+		iommu_domain_free(domain->domain);
+		kfree(domain);
+	}
+out_free_group_resv:
 	vfio_iommu_resv_free(&group_resv_regions);
-out_free_domain:
-	kfree(domain);
 out_free_group:
 	kfree(group);
 out_unlock:
