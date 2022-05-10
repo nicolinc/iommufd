@@ -2153,14 +2153,55 @@ static void vfio_iommu_iova_insert_copy(struct vfio_iommu *iommu,
 	list_splice_tail(iova_copy, iova);
 }
 
+static struct iommu_domain *
+vfio_iommu_type1_new_iommu_domain(struct iommu_group *iommu_group,
+				  bool nesting)
+{
+	struct bus_type *bus = NULL;
+	struct iommu_domain *domain;
+	bool msi_remap;
+	int ret;
+
+	/* Determine bus_type in order to allocate a domain */
+	ret = iommu_group_for_each_dev(iommu_group, &bus, vfio_bus_type);
+	if (ret)
+		return ERR_PTR(ret);
+
+	domain = iommu_domain_alloc(bus);
+	if (!domain)
+		return ERR_PTR(-EIO);
+
+	if (nesting) {
+		ret = iommu_enable_nesting(domain);
+		if (ret)
+			goto out_free_domain;
+	}
+
+	msi_remap = irq_domain_check_msi_remap() ||
+		    iommu_capable(bus, IOMMU_CAP_INTR_REMAP);
+
+	if (!allow_unsafe_interrupts && !msi_remap) {
+		pr_warn("%s: No interrupt remapping support.  Use the module param \"allow_unsafe_interrupts\" to enable VFIO IOMMU support on this platform\n",
+		       __func__);
+		ret = -EPERM;
+		goto out_free_domain;
+	}
+
+	return domain;
+
+out_free_domain:
+	iommu_domain_free(domain);
+	return ERR_PTR(ret);
+}
+
 static int vfio_iommu_type1_attach_group(void *iommu_data,
 		struct iommu_group *iommu_group, enum vfio_group_type type)
 {
+	bool resv_msi, enforce_cache_coherency = false;
+	struct iommu_domain *new_domain = NULL;
 	struct vfio_iommu *iommu = iommu_data;
 	struct vfio_iommu_group *group;
 	struct vfio_domain *domain, *d;
-	struct bus_type *bus = NULL;
-	bool resv_msi, msi_remap;
 	phys_addr_t resv_msi_base = 0;
 	struct iommu_domain_geometry *geo;
 	LIST_HEAD(iova_copy);
@@ -2192,30 +2233,48 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 		goto out_unlock;
 	}
 
-	/* Determine bus_type in order to allocate a domain */
-	ret = iommu_group_for_each_dev(iommu_group, &bus, vfio_bus_type);
-	if (ret)
+	new_domain = vfio_iommu_type1_new_iommu_domain(iommu_group,
+						       iommu->nesting);
+	if (IS_ERR(new_domain)) {
+		ret = PTR_ERR(new_domain);
 		goto out_free_group;
+	}
 
-	ret = -ENOMEM;
-	domain = kzalloc(sizeof(*domain), GFP_KERNEL);
-	if (!domain)
-		goto out_free_group;
+	/*
+	 * If the IOMMU can block non-coherent operations (ie PCIe TLPs with
+	 * no-snoop set) then VFIO always turns this feature on because on Intel
+	 * platforms it optimizes KVM to disable wbinvd emulation.
+	 */
+	if (new_domain->ops->enforce_cache_coherency)
+		enforce_cache_coherency =
+			new_domain->ops->enforce_cache_coherency(new_domain);
 
-	ret = -EIO;
-	domain->domain = iommu_domain_alloc(bus);
-	if (!domain->domain)
-		goto out_free_domain;
+	/* Try to match an existing compatible domain */
+	list_for_each_entry(d, &iommu->domain_list, next) {
+		if (iommu_can_attach_group(d->domain, iommu_group) &&
+		    enforce_cache_coherency == d->enforce_cache_coherency) {
+			iommu_domain_free(new_domain);
+			new_domain = NULL;
+			domain = d;
+			break;
+		}
+	}
 
-	if (iommu->nesting) {
-		ret = iommu_enable_nesting(domain->domain);
-		if (ret)
-			goto out_domain;
+	if (new_domain) {
+		domain = kzalloc(sizeof(*d), GFP_KERNEL);
+		if (!domain) {
+			ret = -ENOMEM;
+			goto out_free_group;
+		}
+
+		domain->domain = new_domain;
+
+		INIT_LIST_HEAD(&domain->group_list);
 	}
 
 	ret = iommu_attach_group(domain->domain, group->iommu_group);
 	if (ret)
-		goto out_domain;
+		goto out_free_domain;
 
 	/* Get aperture info */
 	geo = &domain->domain->geometry;
@@ -2254,72 +2313,26 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 
 	resv_msi = vfio_iommu_has_sw_msi(&group_resv_regions, &resv_msi_base);
 
-	INIT_LIST_HEAD(&domain->group_list);
+	if (new_domain) {
+		vfio_test_domain_fgsp(domain);
+
+		/* replay mappings on new domains */
+		ret = vfio_iommu_replay(iommu, domain);
+		if (ret)
+			goto out_detach;
+
+		if (resv_msi) {
+			ret = iommu_get_msi_cookie(domain->domain, resv_msi_base);
+			if (ret && ret != -ENODEV)
+				goto out_detach;
+		}
+
+		list_add(&domain->next, &iommu->domain_list);
+		vfio_update_pgsize_bitmap(iommu);
+	}
+
 	list_add(&group->next, &domain->group_list);
 
-	msi_remap = irq_domain_check_msi_remap() ||
-		    iommu_capable(bus, IOMMU_CAP_INTR_REMAP);
-
-	if (!allow_unsafe_interrupts && !msi_remap) {
-		pr_warn("%s: No interrupt remapping support.  Use the module param \"allow_unsafe_interrupts\" to enable VFIO IOMMU support on this platform\n",
-		       __func__);
-		ret = -EPERM;
-		goto out_detach;
-	}
-
-	/*
-	 * If the IOMMU can block non-coherent operations (ie PCIe TLPs with
-	 * no-snoop set) then VFIO always turns this feature on because on Intel
-	 * platforms it optimizes KVM to disable wbinvd emulation.
-	 */
-	if (domain->domain->ops->enforce_cache_coherency)
-		domain->enforce_cache_coherency =
-			domain->domain->ops->enforce_cache_coherency(
-				domain->domain);
-
-	/*
-	 * Try to match an existing compatible domain.  We don't want to
-	 * preclude an IOMMU driver supporting multiple bus_types and being
-	 * able to include different bus_types in the same IOMMU domain, so
-	 * we test whether the domains use the same iommu_ops rather than
-	 * testing if they're on the same bus_type.
-	 */
-	list_for_each_entry(d, &iommu->domain_list, next) {
-		if (d->domain->ops == domain->domain->ops &&
-		    d->enforce_cache_coherency ==
-			    domain->enforce_cache_coherency) {
-			iommu_detach_group(domain->domain, group->iommu_group);
-			if (!iommu_attach_group(d->domain,
-						group->iommu_group)) {
-				list_add(&group->next, &d->group_list);
-				iommu_domain_free(domain->domain);
-				kfree(domain);
-				goto done;
-			}
-
-			ret = iommu_attach_group(domain->domain,
-						 group->iommu_group);
-			if (ret)
-				goto out_domain;
-		}
-	}
-
-	vfio_test_domain_fgsp(domain);
-
-	/* replay mappings on new domains */
-	ret = vfio_iommu_replay(iommu, domain);
-	if (ret)
-		goto out_detach;
-
-	if (resv_msi) {
-		ret = iommu_get_msi_cookie(domain->domain, resv_msi_base);
-		if (ret && ret != -ENODEV)
-			goto out_detach;
-	}
-
-	list_add(&domain->next, &iommu->domain_list);
-	vfio_update_pgsize_bitmap(iommu);
-done:
 	/* Delete the old one and insert new iova list */
 	vfio_iommu_iova_insert_copy(iommu, &iova_copy);
 
@@ -2336,12 +2349,13 @@ done:
 
 out_detach:
 	iommu_detach_group(domain->domain, group->iommu_group);
-out_domain:
-	iommu_domain_free(domain->domain);
 	vfio_iommu_iova_free(&iova_copy);
 	vfio_iommu_resv_free(&group_resv_regions);
 out_free_domain:
-	kfree(domain);
+	if (new_domain) {
+		iommu_domain_free(domain->domain);
+		kfree(domain);
+	}
 out_free_group:
 	kfree(group);
 out_unlock:
