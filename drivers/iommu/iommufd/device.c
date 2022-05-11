@@ -5,6 +5,7 @@
 #include <linux/slab.h>
 #include <linux/iommu.h>
 #include <linux/irqdomain.h>
+#include <uapi/linux/iommufd.h>
 
 #include "io_pagetable.h"
 #include "iommufd_private.h"
@@ -131,6 +132,47 @@ void iommufd_device_unbind(struct iommufd_device *idev)
 	WARN_ON(!was_destroyed);
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_device_unbind, IOMMUFD);
+
+int iommufd_device_get_info(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_device_info *cmd = ucmd->cmd;
+	struct iommufd_object *obj;
+	struct iommufd_device *idev;
+	void *data;
+	int rc;
+
+	if (cmd->flags || cmd->__reserved || !cmd->data_len ||
+	    cmd->data_len > PAGE_SIZE)
+		return -EOPNOTSUPP;
+
+	obj = iommufd_get_object(ucmd->ictx, cmd->dev_id, IOMMUFD_OBJ_DEVICE);
+	if (IS_ERR(obj))
+		return PTR_ERR(obj);
+
+	idev = container_of(obj, struct iommufd_device, obj);
+
+	data = kzalloc(cmd->data_len, GFP_KERNEL);
+	if (!data)
+		goto out_put;
+
+	rc = iommu_get_hw_info(idev->dev, cmd->out_device_type,
+			       data, cmd->data_len);
+	if (rc < 0)
+		goto out_free_data;
+
+	if (copy_to_user((void __user *)cmd->data_ptr, data, cmd->data_len)) {
+		rc = -EFAULT;
+		goto out_free_data;
+	}
+
+	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+
+out_free_data:
+	kfree(data);
+out_put:
+	iommufd_put_object(obj);
+	return rc;
+}
 
 static int iommufd_device_setup_msi(struct iommufd_device *idev,
 				    struct iommufd_hw_pagetable *hwpt,

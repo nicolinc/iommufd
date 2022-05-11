@@ -47,6 +47,7 @@ enum {
 	IOMMUFD_CMD_IOAS_UNMAP,
 	IOMMUFD_CMD_OPTION,
 	IOMMUFD_CMD_VFIO_IOAS,
+	IOMMUFD_CMD_DEVICE_GET_INFO,
 };
 
 /**
@@ -366,4 +367,25 @@ struct iommu_device_info_vtd {
 	__aligned_u64 cap_reg;
 	__aligned_u64 ecap_reg;
 };
+
+/**
+ * struct iommu_device_info - ioctl(IOMMU_DEVICE_GET_INFO)
+ * @size: sizeof(struct iommu_device_info)
+ * @flags: Must be 0
+ * @dev_id: the device being attached to the IOMMU
+ * @__reserved: Must be 0
+ * @out_data_type: type of the output data, i.e. enum iommu_device_data_type
+ * @data_len: length of the type specific data
+ * @data_ptr: pointer to the type specific data
+ */
+struct iommu_device_info {
+	__u32 size;
+	__u32 flags;
+	__u32 dev_id;
+	__u32 __reserved;
+	__u32 out_device_type;
+	__u32 data_len;
+	__aligned_u64 data_ptr;
+};
+#define IOMMU_DEVICE_GET_INFO _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DEVICE_GET_INFO)
 #endif
