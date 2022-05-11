@@ -5,6 +5,7 @@
 #include <linux/slab.h>
 #include <linux/iommu.h>
 #include <linux/irqdomain.h>
+#include <uapi/linux/iommufd.h>
 
 #include "io_pagetable.h"
 #include "iommufd_private.h"
@@ -15,23 +16,6 @@ MODULE_PARM_DESC(
 	allow_unsafe_interrupts,
 	"Allow IOMMUFD to bind to devices even if the platform cannot isolate "
 	"the MSI interrupt window. Enabling this is a security weakness.");
-
-/*
- * A iommufd_device object represents the binding relationship between a
- * consuming driver and the iommufd. These objects are created/destroyed by
- * external drivers, not by userspace.
- */
-struct iommufd_device {
-	struct iommufd_object obj;
-	struct iommufd_ctx *ictx;
-	struct iommufd_hw_pagetable *hwpt;
-	/* Head at iommufd_hw_pagetable::devices */
-	struct list_head devices_item;
-	/* always the physical device */
-	struct device *dev;
-	struct iommu_group *group;
-	bool enforce_cache_coherency;
-};
 
 void iommufd_device_destroy(struct iommufd_object *obj)
 {
@@ -131,6 +115,46 @@ void iommufd_device_unbind(struct iommufd_device *idev)
 	WARN_ON(!was_destroyed);
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_device_unbind, IOMMUFD);
+
+int iommufd_device_get_info(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_device_info *cmd = ucmd->cmd;
+	struct iommufd_device *idev;
+	void *data;
+	int rc;
+
+	if (cmd->flags || cmd->__reserved || !cmd->data_len ||
+	    cmd->data_len > PAGE_SIZE)
+		return -EOPNOTSUPP;
+
+	idev = iommufd_get_device(ucmd->ictx, cmd->dev_id);
+	if (IS_ERR(idev))
+		return PTR_ERR(idev);
+
+	data = kzalloc(cmd->data_len, GFP_KERNEL);
+	if (!data) {
+		rc = -ENOMEM;
+		goto out_put;
+	}
+
+	rc = iommu_get_hw_info(idev->dev, cmd->device_type,
+			       data, cmd->data_len);
+	if (rc < 0)
+		goto out_free_data;
+
+	if (copy_to_user((void __user *)cmd->data_ptr, data, cmd->data_len)) {
+		rc = -EFAULT;
+		goto out_free_data;
+	}
+
+	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+
+out_free_data:
+	kfree(data);
+out_put:
+	iommufd_put_object(&idev->obj);
+	return rc;
+}
 
 static int iommufd_device_setup_msi(struct iommufd_device *idev,
 				    struct iommufd_hw_pagetable *hwpt,

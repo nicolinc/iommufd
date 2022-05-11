@@ -47,6 +47,7 @@ enum {
 	IOMMUFD_CMD_IOAS_UNMAP,
 	IOMMUFD_CMD_OPTION,
 	IOMMUFD_CMD_VFIO_IOAS,
+	IOMMUFD_CMD_DEVICE_GET_INFO,
 };
 
 /**
@@ -368,4 +369,33 @@ struct iommu_device_info_vtd {
 	__aligned_u64 cap_reg;
 	__aligned_u64 ecap_reg;
 };
+
+/**
+ * struct iommu_device_info - ioctl(IOMMU_DEVICE_GET_INFO)
+ * @size: sizeof(struct iommu_device_info)
+ * @flags: Must be 0
+ * @dev_id: The device being attached to the IOMMU
+ * @data_type: One of enum iommu_device_data_type
+ * @data_len: Length of the type specific data buffer. It cannot be
+ *	      higher than the system PAGE_SIZE.
+ * @__reserved: Must be 0
+ * @data_ptr: Pointer to the type specific structure (e.g.
+ *	      struct iommu_device_info_vtd)
+ *
+ * Query the hardware iommu capability for given device which has been
+ * bound to iommufd. @device_type is the desired iommu hardware type.
+ * If underlying iommu hardware supports this type, the hardware iommu
+ * capability info would be written to the buffer specified by @data_ptr
+ * and return 0. Otherwise, error would be returned.
+ */
+struct iommu_device_info {
+	__u32 size;
+	__u32 flags;
+	__u32 dev_id;
+	__u32 device_type;
+	__u32 data_len;
+	__u32 __reserved;
+	__aligned_u64 data_ptr;
+};
+#define IOMMU_DEVICE_GET_INFO _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DEVICE_GET_INFO)
 #endif
