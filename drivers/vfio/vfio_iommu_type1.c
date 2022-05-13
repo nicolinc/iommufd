@@ -2154,6 +2154,13 @@ static void vfio_iommu_iova_insert_copy(struct vfio_iommu *iommu,
 	list_splice_tail(iova_copy, iova);
 }
 
+static int vfio_domain_can_attach_device(struct device *dev, void *data)
+{
+	struct iommu_domain *domain = (struct iommu_domain *)data;
+
+	return iommu_can_attach_device(domain, dev) ? 0 : -EINVAL;
+}
+
 static struct vfio_domain *
 vfio_iommu_alloc_attach_domain(struct bus_type *bus, struct vfio_iommu *iommu,
 			       struct vfio_iommu_group *group)
@@ -2161,10 +2168,6 @@ vfio_iommu_alloc_attach_domain(struct bus_type *bus, struct vfio_iommu *iommu,
 	struct vfio_domain *domain;
 	struct iommu_domain *new_domain;
 	int ret = 0;
-
-	new_domain = iommu_domain_alloc(bus);
-	if (!new_domain)
-		return ERR_PTR(-EIO);
 
 	/*
 	 * Try to match an existing compatible domain.  We don't want to
@@ -2174,14 +2177,18 @@ vfio_iommu_alloc_attach_domain(struct bus_type *bus, struct vfio_iommu *iommu,
 	 * testing if they're on the same bus_type.
 	 */
 	list_for_each_entry (domain, &iommu->domain_list, next) {
-		if (domain->domain->ops != new_domain->ops)
+		if (iommu_group_for_each_dev(group->iommu_group, domain->domain,
+					     vfio_domain_can_attach_device))
 			continue;
 		if (iommu_attach_group(domain->domain, group->iommu_group))
 			continue;
-		iommu_domain_free(new_domain);
 		list_add(&group->next, &domain->group_list);
 		return domain;
 	}
+
+	new_domain = iommu_domain_alloc(bus);
+	if (!new_domain)
+		return ERR_PTR(-EIO);
 
 	if (iommu->nesting) {
 		ret = iommu_enable_nesting(new_domain);
