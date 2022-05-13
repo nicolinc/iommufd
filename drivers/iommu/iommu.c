@@ -99,6 +99,9 @@ static int bus_iommu_probe(const struct bus_type *bus);
 static int iommu_bus_notifier(struct notifier_block *nb,
 			      unsigned long action, void *data);
 static void iommu_release_device(struct device *dev);
+static int __iommu_domain_test_device(struct iommu_domain *domain,
+				      struct device *dev, ioasid_t pasid,
+				      struct iommu_domain *old);
 static int __iommu_attach_device(struct iommu_domain *domain,
 				 struct device *dev, struct iommu_domain *old);
 static int __iommu_attach_group(struct iommu_domain *domain,
@@ -616,6 +619,10 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 	if (group->default_domain)
 		iommu_create_device_direct_mappings(group->default_domain, dev);
 	if (group->domain) {
+		ret = __iommu_domain_test_device(group->domain, dev,
+						 IOMMU_NO_PASID, NULL);
+		if (ret)
+			goto err_remove_gdev;
 		ret = __iommu_device_set_domain(group, dev, group->domain, NULL,
 						0);
 		if (ret)
@@ -2159,6 +2166,8 @@ EXPORT_SYMBOL_GPL(iommu_attach_device);
 
 int iommu_deferred_attach(struct device *dev, struct iommu_domain *domain)
 {
+	int ret;
+
 	/*
 	 * This is called on the dma mapping fast path so avoid locking. This is
 	 * racy, but we have an expectation that the driver will setup its DMAs
@@ -2168,6 +2177,10 @@ int iommu_deferred_attach(struct device *dev, struct iommu_domain *domain)
 		return 0;
 
 	guard(mutex)(&dev->iommu_group->mutex);
+
+	ret = __iommu_domain_test_device(domain, dev, IOMMU_NO_PASID, NULL);
+	if (ret)
+		return ret;
 
 	return __iommu_attach_device(domain, dev, NULL);
 }
@@ -2236,6 +2249,53 @@ static bool domain_iommu_ops_compatible(const struct iommu_ops *ops,
 	return false;
 }
 
+/*
+ * Test if a future attach for a domain to the device will always fail. This may
+ * indicate that the device and the domain are incompatible in some way. Actual
+ * attach may still fail for some temporary failure like out of memory.
+ *
+ * If pasid != IOMMU_NO_PASID, it is meant to test a future set_dev_pasid call.
+ */
+static int __iommu_domain_test_device(struct iommu_domain *domain,
+				      struct device *dev, ioasid_t pasid,
+				      struct iommu_domain *old)
+{
+	const struct iommu_ops *ops = dev_iommu_ops(dev);
+	struct iommu_group *group = dev->iommu_group;
+
+	lockdep_assert_held(&group->mutex);
+
+	if (!domain_iommu_ops_compatible(ops, domain))
+		return -EINVAL;
+
+	if (pasid != IOMMU_NO_PASID) {
+		struct group_device *gdev;
+
+		if (!domain->ops->set_dev_pasid || !ops->blocked_domain ||
+		    !ops->blocked_domain->ops->set_dev_pasid)
+			return -EOPNOTSUPP;
+		/*
+		 * Skip PASID validation for devices without PASID support
+		 * (max_pasids = 0). These devices cannot issue transactions
+		 * with PASID, so they don't affect group's PASID usage.
+		 */
+		for_each_group_device(group, gdev) {
+			if ((gdev->dev->iommu->max_pasids > 0) &&
+			    (pasid >= gdev->dev->iommu->max_pasids))
+				return -EINVAL;
+		}
+	}
+
+	/*
+	 * Domains that don't implement a test_dev callback function must have a
+	 * simple domain attach behavior. The sanity above should be enough.
+	 */
+	if (!domain->ops->test_dev)
+		return 0;
+
+	return domain->ops->test_dev(domain, dev, pasid, old);
+}
+
 static int __iommu_attach_group(struct iommu_domain *domain,
 				struct iommu_group *group)
 {
@@ -2246,8 +2306,7 @@ static int __iommu_attach_group(struct iommu_domain *domain,
 		return -EBUSY;
 
 	dev = iommu_group_first_dev(group);
-	if (!dev_has_iommu(dev) ||
-	    !domain_iommu_ops_compatible(dev_iommu_ops(dev), domain))
+	if (!dev_has_iommu(dev))
 		return -EINVAL;
 
 	return __iommu_group_set_domain(group, domain);
@@ -2354,6 +2413,13 @@ static int __iommu_group_set_domain_internal(struct iommu_group *group,
 
 	if (WARN_ON(!new_domain))
 		return -EINVAL;
+
+	for_each_group_device(group, gdev) {
+		ret = __iommu_domain_test_device(new_domain, gdev->dev,
+						 IOMMU_NO_PASID, group->domain);
+		if (ret)
+			return ret;
+	}
 
 	/*
 	 * Changing the domain is done by calling attach_dev() on the new
@@ -3453,38 +3519,19 @@ int iommu_attach_device_pasid(struct iommu_domain *domain,
 {
 	/* Caller must be a probed driver on dev */
 	struct iommu_group *group = dev->iommu_group;
-	struct group_device *device;
-	const struct iommu_ops *ops;
 	void *entry;
 	int ret;
 
 	if (!group)
 		return -ENODEV;
-
-	ops = dev_iommu_ops(dev);
-
-	if (!domain->ops->set_dev_pasid ||
-	    !ops->blocked_domain ||
-	    !ops->blocked_domain->ops->set_dev_pasid)
-		return -EOPNOTSUPP;
-
-	if (!domain_iommu_ops_compatible(ops, domain) ||
-	    pasid == IOMMU_NO_PASID)
+	if (pasid == IOMMU_NO_PASID)
 		return -EINVAL;
 
 	mutex_lock(&group->mutex);
-	for_each_group_device(group, device) {
-		/*
-		 * Skip PASID validation for devices without PASID support
-		 * (max_pasids = 0). These devices cannot issue transactions
-		 * with PASID, so they don't affect group's PASID usage.
-		 */
-		if ((device->dev->iommu->max_pasids > 0) &&
-		    (pasid >= device->dev->iommu->max_pasids)) {
-			ret = -EINVAL;
-			goto out_unlock;
-		}
-	}
+
+	ret = __iommu_domain_test_device(domain, dev, pasid, NULL);
+	if (ret)
+		goto out_unlock;
 
 	entry = iommu_make_pasid_array_entry(domain, handle);
 
@@ -3547,12 +3594,7 @@ int iommu_replace_device_pasid(struct iommu_domain *domain,
 
 	if (!group)
 		return -ENODEV;
-
-	if (!domain->ops->set_dev_pasid)
-		return -EOPNOTSUPP;
-
-	if (!domain_iommu_ops_compatible(dev_iommu_ops(dev), domain) ||
-	    pasid == IOMMU_NO_PASID || !handle)
+	if (pasid == IOMMU_NO_PASID || !handle)
 		return -EINVAL;
 
 	mutex_lock(&group->mutex);
@@ -3589,6 +3631,11 @@ int iommu_replace_device_pasid(struct iommu_domain *domain,
 	ret = 0;
 
 	if (curr_domain != domain) {
+		ret = __iommu_domain_test_device(domain, dev, pasid,
+						 curr_domain);
+		if (ret)
+			goto out_unlock;
+
 		ret = __iommu_set_group_pasid(domain, group,
 					      pasid, curr_domain);
 		if (ret)

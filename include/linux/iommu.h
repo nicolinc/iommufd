@@ -714,7 +714,12 @@ struct iommu_ops {
 
 /**
  * struct iommu_domain_ops - domain specific operations
- * @attach_dev: attach an iommu domain to a device
+ * @test_dev: Test compatibility prior to an @attach_dev or @set_dev_pasid call.
+ *            A driver-level callback of this op should do a thorough sanity, to
+ *            make sure a device is compatible with the domain. So the following
+ *            @attach_dev and @set_dev_pasid functions would likely succeed with
+ *            only one exception due to a temporary failure like out of memory.
+ *            It's suggested to avoid the kernel prints in this op.
  *  Return:
  * * 0		- success
  * * EINVAL	- can indicate that device and domain are incompatible due to
@@ -722,11 +727,15 @@ struct iommu_ops {
  *		  driver shouldn't log an error, since it is legitimate for a
  *		  caller to test reuse of existing domains. Otherwise, it may
  *		  still represent some other fundamental problem
- * * ENOMEM	- out of memory
- * * ENOSPC	- non-ENOMEM type of resource allocation failures
  * * EBUSY	- device is attached to a domain and cannot be changed
  * * ENODEV	- device specific errors, not able to be attached
  * * <others>	- treated as ENODEV by the caller. Use is discouraged
+ * @attach_dev: attach an iommu domain to a device
+ *  Return:
+ * * 0		- success
+ * * ENOMEM	- out of memory
+ * * ENOSPC	- non-ENOMEM type of resource allocation failures
+ * * <others>	- Use is discouraged
  * @set_dev_pasid: set or replace an iommu domain to a pasid of device. The pasid of
  *                 the device should be left in the old config in error case.
  * @map_pages: map a physically contiguous set of pages of the same size to
@@ -751,6 +760,8 @@ struct iommu_ops {
  * @free: Release the domain after use.
  */
 struct iommu_domain_ops {
+	int (*test_dev)(struct iommu_domain *domain, struct device *dev,
+			ioasid_t pasid, struct iommu_domain *old);
 	int (*attach_dev)(struct iommu_domain *domain, struct device *dev,
 			  struct iommu_domain *old);
 	int (*set_dev_pasid)(struct iommu_domain *domain, struct device *dev,
