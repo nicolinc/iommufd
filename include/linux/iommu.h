@@ -262,6 +262,10 @@ struct iommu_ops {
 /**
  * struct iommu_domain_ops - domain specific operations
  * @iommu_ops: Pointer to the ops associated with compatible devices
+ * @can_attach_dev: Return true if the device is compatible with the domain.
+ *                  Keep kernel print free in this op as it can be called to
+ *                  test compatibility with domains that will simply fail the
+ *                  test, which will result in a kernel log spam.
  * @attach_dev: attach an iommu domain to a device
  * @detach_dev: detach an iommu domain from a device
  * @map: map a physically contiguous memory region to an iommu domain
@@ -283,6 +287,7 @@ struct iommu_ops {
  */
 struct iommu_domain_ops {
 	const struct iommu_ops *iommu_ops;
+	bool (*can_attach_dev)(struct iommu_domain *domain, struct device *dev);
 	int (*attach_dev)(struct iommu_domain *domain, struct device *dev);
 	void (*detach_dev)(struct iommu_domain *domain, struct device *dev);
 
@@ -422,6 +427,8 @@ extern bool iommu_capable(struct bus_type *bus, enum iommu_cap cap);
 extern struct iommu_domain *iommu_domain_alloc(struct bus_type *bus);
 extern struct iommu_group *iommu_group_get_by_id(int id);
 extern void iommu_domain_free(struct iommu_domain *domain);
+extern bool iommu_can_attach_device(struct iommu_domain *domain,
+				    struct device *dev);
 extern int iommu_attach_device(struct iommu_domain *domain,
 			       struct device *dev);
 extern void iommu_detach_device(struct iommu_domain *domain,
