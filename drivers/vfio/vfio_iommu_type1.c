@@ -2153,6 +2153,13 @@ static void vfio_iommu_iova_insert_copy(struct vfio_iommu *iommu,
 	list_splice_tail(iova_copy, iova);
 }
 
+static int vfio_domain_can_attach_device(struct device *dev, void *data)
+{
+	struct iommu_domain *domain = (struct iommu_domain *)data;
+
+	return iommu_can_attach_device(domain, dev) ? 0 : -EINVAL;
+}
+
 static struct vfio_domain *
 vfio_iommu_alloc_and_attach_domain(struct bus_type *bus,
 				   struct vfio_iommu *iommu,
@@ -2160,34 +2167,14 @@ vfio_iommu_alloc_and_attach_domain(struct bus_type *bus,
 				   phys_addr_t resv_msi_base,
 				   bool resv_msi)
 {
-	bool new_enforce_cache_coherency = false;
 	struct vfio_domain *domain = NULL, *d;
 	struct iommu_domain *new_domain;
 	int ret = 0;
 
-	new_domain = iommu_domain_alloc(bus);
-	if (!new_domain)
-		return ERR_PTR(-EIO);
-
-	/*
-	 * If the IOMMU can block non-coherent operations (ie PCIe TLPs with
-	 * no-snoop set) then VFIO always turns this feature on because on Intel
-	 * platforms it optimizes KVM to disable wbinvd emulation.
-	 */
-	if (new_domain->ops->enforce_cache_coherency)
-		new_enforce_cache_coherency =
-			new_domain->ops->enforce_cache_coherency(new_domain);
-
-	/*
-	 * Try to match an existing compatible domain.  We don't want to
-	 * preclude an IOMMU driver supporting multiple bus_types and being
-	 * able to include different bus_types in the same IOMMU domain, so
-	 * we test whether the domains use the same iommu_ops rather than
-	 * testing if they're on the same bus_type.
-	 */
+	/* Try to match an existing compatible domain */
 	list_for_each_entry(d, &iommu->domain_list, next) {
-		if (d->domain->ops != new_domain->ops ||
-		    d->enforce_cache_coherency != new_enforce_cache_coherency)
+		if (iommu_group_for_each_dev(iommu_group, d->domain,
+					     vfio_domain_can_attach_device))
 			continue;
 		if (iommu_attach_group(d->domain, iommu_group))
 			continue;
@@ -2196,9 +2183,12 @@ vfio_iommu_alloc_and_attach_domain(struct bus_type *bus,
 			iommu_detach_group(d->domain, iommu_group);
 			continue;
 		}
-		domain = d;
-		goto out_free_iommu_domain;
+		return d;
 	}
+
+	new_domain = iommu_domain_alloc(bus);
+	if (!new_domain)
+		return ERR_PTR(-EIO);
 
 	ret = -ENOMEM;
 	domain = kzalloc(sizeof(*d), GFP_KERNEL);
@@ -2206,7 +2196,15 @@ vfio_iommu_alloc_and_attach_domain(struct bus_type *bus,
 		goto out_free_iommu_domain;
 
 	domain->domain = new_domain;
-	domain->enforce_cache_coherency = new_enforce_cache_coherency;
+	/*
+	 * If the IOMMU can block non-coherent operations (ie PCIe TLPs with
+	 * no-snoop set) then VFIO always turns this feature on because on Intel
+	 * platforms it optimizes KVM to disable wbinvd emulation.
+	 */
+	if (new_domain->ops->enforce_cache_coherency) {
+		domain->enforce_cache_coherency =
+			new_domain->ops->enforce_cache_coherency(new_domain);
+	}
 
 	if (iommu->nesting) {
 		ret = iommu_enable_nesting(domain->domain);
