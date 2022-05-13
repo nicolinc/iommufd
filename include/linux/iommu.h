@@ -714,6 +714,10 @@ struct iommu_ops {
 
 /**
  * struct iommu_domain_ops - domain specific operations
+ * @test_dev: Test and return 0 if the device is compatible with the domain, for
+ *            an @attach_dev or @set_dev_pasid call. On failure, return an errno
+ *            (refer to @attach_dev). Keep kernel print free in this op to avoid
+ *            kernel log spam.
  * @attach_dev: attach an iommu domain to a device
  *  Return:
  * * 0		- success
@@ -751,6 +755,8 @@ struct iommu_ops {
  * @free: Release the domain after use.
  */
 struct iommu_domain_ops {
+	int (*test_dev)(struct iommu_domain *domain, struct device *dev,
+			ioasid_t pasid, struct iommu_domain *old);
 	int (*attach_dev)(struct iommu_domain *domain, struct device *dev,
 			  struct iommu_domain *old);
 	int (*set_dev_pasid)(struct iommu_domain *domain, struct device *dev,
