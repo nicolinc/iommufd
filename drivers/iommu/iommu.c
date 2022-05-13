@@ -1958,14 +1958,46 @@ static void __iommu_group_set_core_domain(struct iommu_group *group)
 	WARN(ret, "iommu driver failed to attach the default/blocking domain");
 }
 
+/**
+ * iommu_can_attach_device - Check if a device can be attached to a domain
+ * @domain: Domain to check
+ * @dev: Devices that will be attached
+ *
+ * Returns false if a future attach for the domain to the device will always
+ * fail. This may indicate that the device and domain are incompatible in some
+ * way. If this function returns true but device attach fails it should be due
+ * to a temporary failure like out of memory.
+ */
+bool iommu_can_attach_device(struct iommu_domain *domain, struct device *dev)
+{
+	/* Ensure the device was probe'd onto the same driver as the domain */
+	if (dev->bus->iommu_ops != domain->ops->iommu_ops)
+		return false;
+
+	if (!domain->ops->can_attach_dev) {
+		/*
+		 * Old drivers that don't implement can_attach_dev have a simple
+		 * single domain behavior. Just check if their default ops match
+		 * the domain.
+		 */
+		if (!dev->bus || !dev->bus->iommu_ops ||
+		    dev->bus->iommu_ops->default_domain_ops != domain->ops)
+			return false;
+		return true;
+	}
+
+	return domain->ops->can_attach_dev(domain, dev);
+}
+EXPORT_SYMBOL_GPL(iommu_can_attach_device);
+
 static int __iommu_attach_device(struct iommu_domain *domain,
 				 struct device *dev)
 {
 	int ret;
 
-	/* Ensure the device was probe'd onto the same driver as the domain */
-	if (dev->bus->iommu_ops != domain->ops->iommu_ops)
-		return -ENODEV;
+	if (domain->ops->can_attach_dev &&
+	    !domain->ops->can_attach_dev(domain, dev))
+		return -EOPNOTSUPP;
 
 	if (unlikely(domain->ops->attach_dev == NULL))
 		return -ENODEV;
