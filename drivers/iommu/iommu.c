@@ -1958,10 +1958,45 @@ static void __iommu_group_set_core_domain(struct iommu_group *group)
 	WARN(ret, "iommu driver failed to attach the default/blocking domain");
 }
 
+static int __iommu_can_attach_device(struct iommu_domain *domain,
+				     struct device *dev)
+{
+	/* Allow drivers to not implement it for now */
+	if (!domain->ops->can_attach_dev)
+		return 0;
+
+	return domain->ops->can_attach_dev(domain, dev);
+}
+
+bool iommu_can_attach_device(struct iommu_domain *domain, struct device *dev)
+{
+	struct iommu_domain *new_domain = iommu_domain_alloc(dev->bus);
+	bool ret = false;
+
+	if (!new_domain)
+		goto out;
+
+	if (domain->ops != new_domain->ops)
+		goto out_free;
+
+	if (__iommu_can_attach_device(domain, dev))
+		ret = true;
+
+out_free:
+	iommu_domain_free(new_domain);
+out:
+	return ret;
+}
+EXPORT_SYMBOL_GPL(iommu_can_attach_device);
+
 static int __iommu_attach_device(struct iommu_domain *domain,
 				 struct device *dev)
 {
 	int ret;
+
+	ret = __iommu_can_attach_device(domain, dev);
+	if (ret)
+		return ret;
 
 	if (unlikely(domain->ops->attach_dev == NULL))
 		return -ENODEV;
