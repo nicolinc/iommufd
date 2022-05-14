@@ -4308,16 +4308,28 @@ static void intel_iommu_domain_free(struct iommu_domain *domain)
 		domain_exit(to_dmar_domain(domain));
 }
 
-static int prepare_domain_attach_device(struct iommu_domain *domain,
-					struct device *dev)
+static int intel_iommu_can_attach_device(struct iommu_domain *domain,
+					 struct device *dev)
 {
 	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct device_domain_info *info;
 	struct intel_iommu *iommu;
 	int addr_width;
 
-	iommu = device_to_iommu(dev, NULL, NULL);
-	if (!iommu)
+	if (dev->bus->iommu_ops != &intel_iommu_ops)
 		return -ENODEV;
+
+	if (domain->type == IOMMU_DOMAIN_UNMANAGED &&
+	    device_is_rmrr_locked(dev)) {
+		dev_warn(dev, "Device is ineligible for IOMMU domain attach due to platform RMRR requirement.  Contact your platform vendor.\n");
+		return -EPERM;
+	}
+
+	info = dev_iommu_priv_get(dev);
+	if (!info)
+		return -ENODEV;
+
+	iommu = info->iommu;
 
 	if (dmar_domain->force_snooping && !ecap_sc_support(iommu->ecap))
 		return -EOPNOTSUPP;
@@ -4333,6 +4345,22 @@ static int prepare_domain_attach_device(struct iommu_domain *domain,
 		        __func__, addr_width, dmar_domain->max_addr);
 		return -EFAULT;
 	}
+
+	return 0;
+}
+
+static int prepare_domain_attach_device(struct iommu_domain *domain,
+					struct device *dev)
+{
+	struct device_domain_info *info = dev_iommu_priv_get(dev);
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct intel_iommu *iommu = info->iommu;
+	int addr_width;
+
+	addr_width = agaw_to_width(iommu->agaw);
+	if (addr_width > cap_mgaw(iommu->cap))
+		addr_width = cap_mgaw(iommu->cap);
+
 	dmar_domain->gaw = addr_width;
 
 	/*
@@ -4356,12 +4384,6 @@ static int intel_iommu_attach_device(struct iommu_domain *domain,
 				     struct device *dev)
 {
 	int ret;
-
-	if (domain->type == IOMMU_DOMAIN_UNMANAGED &&
-	    device_is_rmrr_locked(dev)) {
-		dev_warn(dev, "Device is ineligible for IOMMU domain attach due to platform RMRR requirement.  Contact your platform vendor.\n");
-		return -EPERM;
-	}
 
 	/* normally dev is not mapped */
 	if (unlikely(domain_context_mapped(dev))) {
@@ -4921,6 +4943,7 @@ const struct iommu_ops intel_iommu_ops = {
 	.page_response		= intel_svm_page_response,
 #endif
 	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.can_attach_dev		= intel_iommu_can_attach_device,
 		.attach_dev		= intel_iommu_attach_device,
 		.detach_dev		= intel_iommu_detach_device,
 		.map_pages		= intel_iommu_map_pages,
