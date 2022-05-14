@@ -4311,19 +4311,22 @@ static void intel_iommu_domain_free(struct iommu_domain *domain)
 		domain_exit(to_dmar_domain(domain));
 }
 
-static int prepare_domain_attach_device(struct iommu_domain *domain,
-					struct device *dev)
+static bool intel_iommu_can_attach_device(struct iommu_domain *domain,
+					  struct device *dev)
 {
 	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct device_domain_info *info;
 	struct intel_iommu *iommu;
 	int addr_width;
 
-	iommu = device_to_iommu(dev, NULL, NULL);
-	if (!iommu)
-		return -ENODEV;
+	info = dev_iommu_priv_get(dev);
+	if (!info)
+		return false;
+
+	iommu = info->iommu;
 
 	if (dmar_domain->force_snooping && !ecap_sc_support(iommu->ecap))
-		return -EOPNOTSUPP;
+		return false;
 
 	/* check if this iommu agaw is sufficient for max mapped address */
 	addr_width = agaw_to_width(iommu->agaw);
@@ -4334,8 +4337,24 @@ static int prepare_domain_attach_device(struct iommu_domain *domain,
 		dev_err(dev, "%s: iommu width (%d) is not "
 		        "sufficient for the mapped address (%llx)\n",
 		        __func__, addr_width, dmar_domain->max_addr);
-		return -EFAULT;
+		return false;
 	}
+
+	return true;
+}
+
+static int prepare_domain_attach_device(struct iommu_domain *domain,
+					struct device *dev)
+{
+	struct device_domain_info *info = dev_iommu_priv_get(dev);
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct intel_iommu *iommu = info->iommu;
+	int addr_width;
+
+	addr_width = agaw_to_width(iommu->agaw);
+	if (addr_width > cap_mgaw(iommu->cap))
+		addr_width = cap_mgaw(iommu->cap);
+
 	dmar_domain->gaw = addr_width;
 
 	/*
@@ -4926,6 +4945,7 @@ const struct iommu_ops intel_iommu_ops = {
 #endif
 	.default_domain_ops = &(const struct iommu_domain_ops) {
 		.iommu_ops		= &intel_iommu_ops,
+		.can_attach_dev		= intel_iommu_can_attach_device,
 		.attach_dev		= intel_iommu_attach_device,
 		.detach_dev		= intel_iommu_detach_device,
 		.map_pages		= intel_iommu_map_pages,
