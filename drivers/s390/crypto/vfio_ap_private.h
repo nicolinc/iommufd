@@ -103,13 +103,13 @@ struct ap_matrix_mdev {
  * struct vfio_ap_queue - contains the data associated with a queue bound to the
  *			  vfio_ap device driver
  * @matrix_mdev: the matrix mediated device
- * @saved_pfn: the guest PFN pinned for the guest
+ * @saved_page: the guest page pinned for the guest
  * @apqn: the APQN of the AP queue device
  * @saved_isc: the guest ISC registered with the GIB interface
  */
 struct vfio_ap_queue {
 	struct ap_matrix_mdev *matrix_mdev;
-	unsigned long saved_pfn;
+	struct page *saved_page;
 	int	apqn;
 #define VFIO_AP_ISC_INVALID 0xff
 	unsigned char saved_isc;
