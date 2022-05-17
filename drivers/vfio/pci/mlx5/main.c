@@ -595,7 +595,7 @@ static int mlx5vf_pci_probe(struct pci_dev *pdev,
 	mvdev = kzalloc(sizeof(*mvdev), GFP_KERNEL);
 	if (!mvdev)
 		return -ENOMEM;
-	vfio_pci_core_init_device(&mvdev->core_device, pdev, &mlx5vf_pci_ops);
+	vfio_pci_core_alloc_device(mvdev->core_device.pdev, &mlx5vf_pci_ops);
 
 	if (pdev->is_virtfn) {
 		struct mlx5_core_dev *mdev =
@@ -622,7 +622,7 @@ static int mlx5vf_pci_probe(struct pci_dev *pdev,
 	return 0;
 
 out_free:
-	vfio_pci_core_uninit_device(&mvdev->core_device);
+	vfio_pci_core_dealloc_device(&mvdev->core_device);
 	kfree(mvdev);
 	return ret;
 }
@@ -632,7 +632,7 @@ static void mlx5vf_pci_remove(struct pci_dev *pdev)
 	struct mlx5vf_pci_core_device *mvdev = dev_get_drvdata(&pdev->dev);
 
 	vfio_pci_core_unregister_device(&mvdev->core_device);
-	vfio_pci_core_uninit_device(&mvdev->core_device);
+	vfio_pci_core_dealloc_device(&mvdev->core_device);
 	kfree(mvdev);
 }
 
