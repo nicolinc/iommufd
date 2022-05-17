@@ -2214,73 +2214,35 @@ int vfio_set_irqs_validate_and_prepare(struct vfio_irq_set *hdr, int num_irqs,
 EXPORT_SYMBOL(vfio_set_irqs_validate_and_prepare);
 
 /*
- * Pin a set of guest PFNs and return their associated host PFNs for local
+ * Pin a set of guest pages and return their associated host pages for local
  * domain only.
  * @dev [in]     : device
- * @user_pfn [in]: array of user/guest PFNs to be pinned.
+ * @user_page [in]: array of user/guest pages to be pinned.
  * @npage [in]   : count of elements in user_pfn array.  This count should not
  *		   be greater VFIO_PIN_PAGES_MAX_ENTRIES.
  * @prot [in]    : protection flags
- * @phys_pfn[out]: array of host PFNs
+ * @phys_page[out]: array of host pages
  * Return error or number of pages pinned.
  */
-int vfio_pin_pages(struct device *dev, unsigned long *user_pfn, int npage,
-		   int prot, unsigned long *phys_pfn)
+int vfio_pin_pages(struct device *dev, struct page **user_page, int npage,
+		   int prot, struct page **phys_page)
 {
-	struct page **user_page, **phys_page;
-	struct vfio_container *container;
 	struct vfio_group *group;
-	struct vfio_iommu_driver *driver;
-	int i, ret;
+	int ret;
 
-	if (!dev || !user_pfn || !phys_pfn || !npage)
+	if (!dev)
 		return -EINVAL;
-
-	if (npage > VFIO_PIN_PAGES_MAX_ENTRIES)
-		return -E2BIG;
 
 	group = vfio_group_get_from_dev(dev);
 	if (!group)
 		return -ENODEV;
 
-	if (group->dev_counter > 1) {
-		ret = -EINVAL;
-		goto err_pin_pages;
-	}
-
 	ret = vfio_group_add_container_user(group);
 	if (ret)
 		goto err_pin_pages;
 
-	user_page = kcalloc(npage, sizeof(*user_page), GFP_KERNEL);
-	if (!user_page) {
-		ret = -ENOMEM;
-		goto err_dissolve;
-	}
+	ret = vfio_group_pin_pages(group, user_page, npage, prot, phys_page);
 
-	for (i = 0; i < npage; i++)
-		user_page[i] = pfn_to_page(user_pfn[i]);
-
-	/*
-	 * TODO: pin_pages should use the iommufd implementation
-	 */
-	container = group->container;
-	driver = container->iommu_driver;
-	if (likely(driver && driver->ops->pin_pages))
-		ret = driver->ops->pin_pages(container->iommu_data,
-					     group->iommu_group, user_page,
-					     npage, prot, phys_page);
-	else
-		ret = -ENOTTY;
-
-	kfree(user_page);
-
-	if (!ret) {
-		for (i = 0; i < npage; i++)
-			phys_pfn[i] = page_to_pfn(phys_page[i]);
-	}
-
-err_dissolve:
 	vfio_group_try_dissolve_container(group);
 
 err_pin_pages:
@@ -2290,27 +2252,22 @@ err_pin_pages:
 EXPORT_SYMBOL(vfio_pin_pages);
 
 /*
- * Unpin set of host PFNs for local domain only.
+ * Unpin set of host pages for local domain only.
  * @dev [in]     : device
- * @user_pfn [in]: array of user/guest PFNs to be unpinned. Number of user/guest
- *		   PFNs should not be greater than VFIO_PIN_PAGES_MAX_ENTRIES.
+ * @user_pfn [in]: array of user/guest pages to be unpinned. Number of user/guest
+ *		   pages should not be greater than VFIO_PIN_PAGES_MAX_ENTRIES.
  * @npage [in]   : count of elements in user_pfn array.  This count should not
  *                 be greater than VFIO_PIN_PAGES_MAX_ENTRIES.
  * Return error or number of pages unpinned.
  */
-int vfio_unpin_pages(struct device *dev, unsigned long *user_pfn, int npage)
+int vfio_unpin_pages(struct device *dev,
+		     struct page **user_page, int npage)
 {
-	struct vfio_container *container;
 	struct vfio_group *group;
-	struct vfio_iommu_driver *driver;
-	struct page **user_page;
-	int i, ret;
+	int ret;
 
-	if (!dev || !user_pfn || !npage)
+	if (!dev)
 		return -EINVAL;
-
-	if (npage > VFIO_PIN_PAGES_MAX_ENTRIES)
-		return -E2BIG;
 
 	group = vfio_group_get_from_dev(dev);
 	if (!group)
@@ -2320,29 +2277,8 @@ int vfio_unpin_pages(struct device *dev, unsigned long *user_pfn, int npage)
 	if (ret)
 		goto err_unpin_pages;
 
-	user_page = kcalloc(npage, sizeof(*user_page), GFP_KERNEL);
-	if (!user_page) {
-		ret = -ENOMEM;
-		goto err_dissolve;
-	}
+	ret = vfio_group_unpin_pages(group, user_page, npage);
 
-	for (i = 0; i < npage; i++)
-		user_page[i] = pfn_to_page(user_pfn[i]);
-
-	/*
-	 * TODO: unpin_pages should use the iommufd implementation
-	 */
-	container = group->container;
-	driver = container->iommu_driver;
-	if (likely(driver && driver->ops->unpin_pages))
-		ret = driver->ops->unpin_pages(container->iommu_data, user_page,
-					       npage);
-	else
-		ret = -ENOTTY;
-
-	kfree(user_page);
-
-err_dissolve:
 	vfio_group_try_dissolve_container(group);
 
 err_unpin_pages:
@@ -2352,7 +2288,7 @@ err_unpin_pages:
 EXPORT_SYMBOL(vfio_unpin_pages);
 
 /*
- * Pin a set of guest IOVA PFNs and return their associated host PFNs for a
+ * Pin a set of guest IOVA pages and return their associated host pages for a
  * VFIO group.
  *
  * The caller needs to call vfio_group_get_external_user() or
@@ -2369,7 +2305,7 @@ EXPORT_SYMBOL(vfio_unpin_pages);
  *			  This count should not be greater
  *			  VFIO_PIN_PAGES_MAX_ENTRIES.
  * @prot [in]		: protection flags
- * @phys_page [out]	: array of host Pages
+ * @phys_page [out]	: array of host pages
  * Return error or number of pages pinned.
  */
 int vfio_group_pin_pages(struct vfio_group *group,
@@ -2407,7 +2343,7 @@ int vfio_group_pin_pages(struct vfio_group *group,
 EXPORT_SYMBOL(vfio_group_pin_pages);
 
 /*
- * Unpin a set of guest IOVA PFNs for a VFIO group.
+ * Unpin a set of guest IOVA pages for a VFIO group.
  *
  * The caller needs to call vfio_group_get_external_user() or
  * vfio_group_get_external_user_from_dev() prior to calling this interface,
@@ -2418,7 +2354,7 @@ EXPORT_SYMBOL(vfio_group_pin_pages);
  * VFIO group by calling vfio_group_put_external_user().
  *
  * @group [in]		: vfio group
- * @user_iova_pfn [in]	: array of user/guest IOVA PFNs to be unpinned.
+ * @user_page [in]	: array of user/guest IOVA pages to be unpinned.
  * @npage [in]		: count of elements in user_iova_pfn array.
  *			  This count should not be greater than
  *			  VFIO_PIN_PAGES_MAX_ENTRIES.
