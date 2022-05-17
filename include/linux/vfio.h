@@ -180,10 +180,10 @@ extern int vfio_unpin_pages(struct device *dev, unsigned long *user_pfn,
 			    int npage);
 
 extern int vfio_group_pin_pages(struct vfio_group *group,
-				unsigned long *user_iova_pfn, int npage,
-				int prot, unsigned long *phys_pfn);
+				struct page **user_page,
+				int npage, int prot, struct page **phys_page);
 extern int vfio_group_unpin_pages(struct vfio_group *group,
-				  unsigned long *user_iova_pfn, int npage);
+				  struct page **user_page, int npage);
 
 extern int vfio_dma_rw(struct vfio_group *group, dma_addr_t user_iova,
 		       void *data, size_t len, bool write);
