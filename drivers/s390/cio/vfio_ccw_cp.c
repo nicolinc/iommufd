@@ -17,13 +17,13 @@
 
 #include "vfio_ccw_cp.h"
 
-struct pfn_array {
+struct page_array {
 	/* Starting guest physical I/O address. */
 	unsigned long		pa_iova;
-	/* Array that stores PFNs of the pages need to pin. */
-	unsigned long		*pa_iova_pfn;
-	/* Array that receives PFNs of the pages pinned. */
-	unsigned long		*pa_pfn;
+	/* Array that stores the pages need to pin. */
+	struct page		**pa_iova_page;
+	/* Array that receives the pages pinned. */
+	struct page		**pa_page;
 	/* Number of pages pinned from @pa_iova. */
 	int			pa_nr;
 };
@@ -36,31 +36,32 @@ struct ccwchain {
 	/* Count of the valid ccws in chain. */
 	int			ch_len;
 	/* Pinned PAGEs for the original data. */
-	struct pfn_array	*ch_pa;
+	struct page_array	*ch_pa;
 };
 
 /*
- * pfn_array_alloc() - alloc memory for PFNs
- * @pa: pfn_array on which to perform the operation
+ * page_array_alloc() - alloc memory for PFNs
+ * @pa: page_array on which to perform the operation
  * @iova: target guest physical address
  * @len: number of bytes that should be pinned from @iova
  *
  * Attempt to allocate memory for PFNs.
  *
- * Usage of pfn_array:
- * We expect (pa_nr == 0) and (pa_iova_pfn == NULL), any field in
+ * Usage of page_array:
+ * We expect (pa_nr == 0) and (pa_iova_page == NULL), any field in
  * this structure will be filled in by this function.
  *
  * Returns:
  *         0 if PFNs are allocated
- *   -EINVAL if pa->pa_nr is not initially zero, or pa->pa_iova_pfn is not NULL
+ *   -EINVAL if pa->pa_nr is not initially zero, or pa->pa_iova_page is not NULL
  *   -ENOMEM if alloc failed
  */
-static int pfn_array_alloc(struct pfn_array *pa, u64 iova, unsigned int len)
+static int page_array_alloc(struct page_array *pa, u64 iova, unsigned int len)
 {
+	struct page *page;
 	int i;
 
-	if (pa->pa_nr || pa->pa_iova_pfn)
+	if (pa->pa_nr || pa->pa_iova_page)
 		return -EINVAL;
 
 	pa->pa_iova = iova;
@@ -69,46 +70,43 @@ static int pfn_array_alloc(struct pfn_array *pa, u64 iova, unsigned int len)
 	if (!pa->pa_nr)
 		return -EINVAL;
 
-	pa->pa_iova_pfn = kcalloc(pa->pa_nr,
-				  sizeof(*pa->pa_iova_pfn) +
-				  sizeof(*pa->pa_pfn),
-				  GFP_KERNEL);
-	if (unlikely(!pa->pa_iova_pfn)) {
+	pa->pa_iova_page = kcalloc(pa->pa_nr,
+				   sizeof(*pa->pa_iova_page) +
+				   sizeof(*pa->pa_page),
+				   GFP_KERNEL);
+	if (unlikely(!pa->pa_iova_page)) {
 		pa->pa_nr = 0;
 		return -ENOMEM;
 	}
-	pa->pa_pfn = pa->pa_iova_pfn + pa->pa_nr;
+	pa->pa_page = pa->pa_iova_page + pa->pa_nr;
 
-	pa->pa_iova_pfn[0] = pa->pa_iova >> PAGE_SHIFT;
-	pa->pa_pfn[0] = -1ULL;
-	for (i = 1; i < pa->pa_nr; i++) {
-		pa->pa_iova_pfn[i] = pa->pa_iova_pfn[i - 1] + 1;
-		pa->pa_pfn[i] = -1ULL;
-	}
+	page = pa->pa_iova_page[0] = phys_to_page(pa->pa_iova);
+	for (i = 1; i < pa->pa_nr; i++)
+		pa->pa_iova_page[i] = ++page;
 
 	return 0;
 }
 
 /*
- * pfn_array_pin() - Pin user pages in memory
- * @pa: pfn_array on which to perform the operation
+ * page_array_pin() - Pin user pages in memory
+ * @pa: page_array on which to perform the operation
  * @mdev: the mediated device to perform pin operations
  *
  * Returns number of pages pinned upon success.
  * If the pin request partially succeeds, or fails completely,
  * all pages are left unpinned and a negative error value is returned.
  */
-static int pfn_array_pin(struct pfn_array *pa, struct device *mdev)
+static int page_array_pin(struct page_array *pa, struct device *mdev)
 {
 	int ret = 0;
 
-	ret = vfio_pin_pages(mdev, pa->pa_iova_pfn, pa->pa_nr,
-			     IOMMU_READ | IOMMU_WRITE, pa->pa_pfn);
+	ret = vfio_pin_pages(mdev, pa->pa_iova_page, pa->pa_nr,
+			     IOMMU_READ | IOMMU_WRITE, pa->pa_page);
 
 	if (ret < 0) {
 		goto err_out;
 	} else if (ret > 0 && ret != pa->pa_nr) {
-		vfio_unpin_pages(mdev, pa->pa_iova_pfn, ret);
+		vfio_unpin_pages(mdev, pa->pa_iova_page, ret);
 		ret = -EINVAL;
 		goto err_out;
 	}
@@ -122,29 +120,28 @@ err_out:
 }
 
 /* Unpin the pages before releasing the memory. */
-static void pfn_array_unpin_free(struct pfn_array *pa, struct device *mdev)
+static void page_array_unpin_free(struct page_array *pa, struct device *mdev)
 {
 	/* Only unpin if any pages were pinned to begin with */
 	if (pa->pa_nr)
-		vfio_unpin_pages(mdev, pa->pa_iova_pfn, pa->pa_nr);
+		vfio_unpin_pages(mdev, pa->pa_iova_page, pa->pa_nr);
 	pa->pa_nr = 0;
-	kfree(pa->pa_iova_pfn);
+	kfree(pa->pa_iova_page);
 }
 
-static bool pfn_array_iova_pinned(struct pfn_array *pa, unsigned long iova)
+static bool page_array_iova_pinned(struct page_array *pa, unsigned long iova)
 {
-	unsigned long iova_pfn = iova >> PAGE_SHIFT;
 	int i;
 
 	for (i = 0; i < pa->pa_nr; i++)
-		if (pa->pa_iova_pfn[i] == iova_pfn)
+		if (pa->pa_iova_page[i] == phys_to_page(iova))
 			return true;
 
 	return false;
 }
-/* Create the list of IDAL words for a pfn_array. */
-static inline void pfn_array_idal_create_words(
-	struct pfn_array *pa,
+/* Create the list of IDAL words for a page_array. */
+static inline void page_array_idal_create_words(
+	struct page_array *pa,
 	unsigned long *idaws)
 {
 	int i;
@@ -158,7 +155,7 @@ static inline void pfn_array_idal_create_words(
 	 */
 
 	for (i = 0; i < pa->pa_nr; i++)
-		idaws[i] = pa->pa_pfn[i] << PAGE_SHIFT;
+		idaws[i] = page_to_phys(pa->pa_page[i]);
 
 	/* Adjust the first IDAW, since it may not start on a page boundary */
 	idaws[0] += pa->pa_iova & (PAGE_SIZE - 1);
@@ -194,24 +191,24 @@ static long copy_from_iova(struct device *mdev,
 			   void *to, u64 iova,
 			   unsigned long n)
 {
-	struct pfn_array pa = {0};
+	struct page_array pa = {0};
 	u64 from;
 	int i, ret;
 	unsigned long l, m;
 
-	ret = pfn_array_alloc(&pa, iova, n);
+	ret = page_array_alloc(&pa, iova, n);
 	if (ret < 0)
 		return ret;
 
-	ret = pfn_array_pin(&pa, mdev);
+	ret = page_array_pin(&pa, mdev);
 	if (ret < 0) {
-		pfn_array_unpin_free(&pa, mdev);
+		page_array_unpin_free(&pa, mdev);
 		return ret;
 	}
 
 	l = n;
 	for (i = 0; i < pa.pa_nr; i++) {
-		from = pa.pa_pfn[i] << PAGE_SHIFT;
+		from = page_to_phys(pa.pa_page[i]);
 		m = PAGE_SIZE;
 		if (i == 0) {
 			from += iova & (PAGE_SIZE - 1);
@@ -226,7 +223,7 @@ static long copy_from_iova(struct device *mdev,
 			break;
 	}
 
-	pfn_array_unpin_free(&pa, mdev);
+	page_array_unpin_free(&pa, mdev);
 
 	return l;
 }
@@ -329,7 +326,7 @@ static struct ccwchain *ccwchain_alloc(struct channel_program *cp, int len)
 	chain->ch_ccw = (struct ccw1 *)data;
 
 	data = (u8 *)(chain->ch_ccw) + sizeof(*chain->ch_ccw) * len;
-	chain->ch_pa = (struct pfn_array *)data;
+	chain->ch_pa = (struct page_array *)data;
 
 	chain->ch_len = len;
 
@@ -509,7 +506,7 @@ static int ccwchain_fetch_direct(struct ccwchain *chain,
 				 struct channel_program *cp)
 {
 	struct ccw1 *ccw;
-	struct pfn_array *pa;
+	struct page_array *pa;
 	u64 iova;
 	unsigned long *idaws;
 	int ret;
@@ -543,13 +540,13 @@ static int ccwchain_fetch_direct(struct ccwchain *chain,
 	}
 
 	/*
-	 * Allocate an array of pfn's for pages to pin/translate.
+	 * Allocate an array of pages to pin/translate.
 	 * The number of pages is actually the count of the idaws
 	 * required for the data transfer, since we only only support
 	 * 4K IDAWs today.
 	 */
 	pa = chain->ch_pa + idx;
-	ret = pfn_array_alloc(pa, iova, bytes);
+	ret = page_array_alloc(pa, iova, bytes);
 	if (ret < 0)
 		goto out_free_idaws;
 
@@ -560,21 +557,21 @@ static int ccwchain_fetch_direct(struct ccwchain *chain,
 			goto out_unpin;
 
 		/*
-		 * Copy guest IDAWs into pfn_array, in case the memory they
+		 * Copy guest IDAWs into page_array, in case the memory they
 		 * occupy is not contiguous.
 		 */
 		for (i = 0; i < idaw_nr; i++)
-			pa->pa_iova_pfn[i] = idaws[i] >> PAGE_SHIFT;
+			pa->pa_iova_page[i] = phys_to_page(idaws[i]);
 	} else {
 		/*
-		 * No action is required here; the iova addresses in pfn_array
-		 * were initialized sequentially in pfn_array_alloc() beginning
+		 * No action is required here; the iova addresses in page_array
+		 * were initialized sequentially in page_array_alloc() beginning
 		 * with the contents of ccw->cda.
 		 */
 	}
 
 	if (ccw_does_data_transfer(ccw)) {
-		ret = pfn_array_pin(pa, cp->mdev);
+		ret = page_array_pin(pa, cp->mdev);
 		if (ret < 0)
 			goto out_unpin;
 	} else {
@@ -584,13 +581,13 @@ static int ccwchain_fetch_direct(struct ccwchain *chain,
 	ccw->cda = (__u32) virt_to_phys(idaws);
 	ccw->flags |= CCW_FLAG_IDA;
 
-	/* Populate the IDAL with pinned/translated addresses from pfn */
-	pfn_array_idal_create_words(pa, idaws);
+	/* Populate the IDAL with pinned/translated addresses from page */
+	page_array_idal_create_words(pa, idaws);
 
 	return 0;
 
 out_unpin:
-	pfn_array_unpin_free(pa, cp->mdev);
+	page_array_unpin_free(pa, cp->mdev);
 out_free_idaws:
 	kfree(idaws);
 out_init:
@@ -691,7 +688,7 @@ void cp_free(struct channel_program *cp)
 	cp->initialized = false;
 	list_for_each_entry_safe(chain, temp, &cp->ccwchain_list, next) {
 		for (i = 0; i < chain->ch_len; i++) {
-			pfn_array_unpin_free(chain->ch_pa + i, cp->mdev);
+			page_array_unpin_free(chain->ch_pa + i, cp->mdev);
 			ccwchain_cda_free(chain, i);
 		}
 		ccwchain_free(chain);
@@ -867,7 +864,7 @@ bool cp_iova_pinned(struct channel_program *cp, u64 iova)
 
 	list_for_each_entry(chain, &cp->ccwchain_list, next) {
 		for (i = 0; i < chain->ch_len; i++)
-			if (pfn_array_iova_pinned(chain->ch_pa + i, iova))
+			if (page_array_iova_pinned(chain->ch_pa + i, iova))
 				return true;
 	}
 
