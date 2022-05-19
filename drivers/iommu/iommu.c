@@ -3239,3 +3239,38 @@ bool iommu_group_dma_owner_claimed(struct iommu_group *group)
 	return user;
 }
 EXPORT_SYMBOL_GPL(iommu_group_dma_owner_claimed);
+
+/*
+ * User domain interfaces.
+ */
+struct iommu_domain *
+iommu_domain_alloc_user(struct device *dev, struct iommu_domain *parent,
+			void *user_data, unsigned iommu_domain_type)
+{
+	const struct iommu_ops *ops;
+	struct iommu_domain *domain;
+
+	if (dev->iommu && dev->iommu->iommu_dev)
+		ops = dev_iommu_ops(dev);
+	else if (dev->bus && dev->bus->iommu_ops)
+		ops = dev->bus->iommu_ops;
+	else
+		return NULL;
+
+	domain = ops->domain_alloc_user(dev, parent, user_data,
+					iommu_domain_type);
+	if (!domain)
+		return NULL;
+
+	domain->type = iommu_domain_type;
+
+	return domain;
+}
+EXPORT_SYMBOL_GPL(iommu_domain_alloc_user);
+
+void iommu_domain_cache_inv(struct iommu_domain *domain,
+			    struct iommu_cache_invalidate_info *inv_info)
+{
+	domain->ops->cache_invalidate(domain, inv_info);
+}
+EXPORT_SYMBOL_GPL(iommu_domain_cache_inv);
