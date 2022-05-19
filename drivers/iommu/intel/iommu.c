@@ -30,6 +30,7 @@
 #include "../iommu-sva-lib.h"
 #include "pasid.h"
 #include "cap_audit.h"
+#include "nested.h"
 
 #define ROOT_SIZE		VTD_PAGE_SIZE
 #define CONTEXT_SIZE		VTD_PAGE_SIZE
@@ -4156,6 +4157,20 @@ static struct iommu_domain *intel_iommu_domain_alloc(unsigned type)
 	return NULL;
 }
 
+static struct iommu_domain *
+intel_iommu_domain_alloc_user(struct device *dev, struct iommu_domain *parent,
+			      void *user_data, unsigned iommu_domain_type)
+{
+	switch (iommu_domain_type) {
+	case IOMMU_DOMAIN_NESTING:
+		return intel_nested_domain_alloc(parent, user_data);
+	case IOMMU_DOMAIN_UNMANAGED:
+		return intel_iommu_domain_alloc(IOMMU_DOMAIN_UNMANAGED);
+	default:
+		return NULL;
+	}
+}
+
 static void intel_iommu_domain_free(struct iommu_domain *domain)
 {
 	if (domain != &si_domain->domain)
@@ -4758,6 +4773,7 @@ const struct iommu_ops intel_iommu_ops = {
 	.capable		= intel_iommu_capable,
 	.hw_info		= intel_iommu_hw_info,
 	.domain_alloc		= intel_iommu_domain_alloc,
+	.domain_alloc_user	= intel_iommu_domain_alloc_user,
 	.probe_device		= intel_iommu_probe_device,
 	.probe_finalize		= intel_iommu_probe_finalize,
 	.release_device		= intel_iommu_release_device,
