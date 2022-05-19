@@ -1844,25 +1844,25 @@ int vfio_set_irqs_validate_and_prepare(struct vfio_irq_set *hdr, int num_irqs,
 EXPORT_SYMBOL(vfio_set_irqs_validate_and_prepare);
 
 /*
- * Pin a set of guest PFNs and return their associated host PFNs for local
+ * Pin a set of guest PFNs and return their associated host pages for local
  * domain only.
  * @device [in]  : device
  * @user_pfn [in]: array of user/guest PFNs to be pinned.
  * @npage [in]   : count of elements in user_pfn array.  This count should not
  *		   be greater VFIO_PIN_PAGES_MAX_ENTRIES.
  * @prot [in]    : protection flags
- * @phys_pfn[out]: array of host PFNs
+ * @page [out]   : array of host pages
  * Return error or number of pages pinned.
  */
 int vfio_pin_pages(struct vfio_device *device, unsigned long *user_pfn,
-		   int npage, int prot, unsigned long *phys_pfn)
+		   int npage, int prot, struct page **page)
 {
 	struct vfio_container *container;
 	struct vfio_group *group = device->group;
 	struct vfio_iommu_driver *driver;
 	int ret;
 
-	if (!user_pfn || !phys_pfn || !npage ||
+	if (!user_pfn || !page || !npage ||
 	    !vfio_assert_device_open(device))
 		return -EINVAL;
 
@@ -1877,7 +1877,7 @@ int vfio_pin_pages(struct vfio_device *device, unsigned long *user_pfn,
 	if (likely(driver && driver->ops->pin_pages))
 		ret = driver->ops->pin_pages(container->iommu_data,
 					     group->iommu_group, user_pfn,
-					     npage, prot, phys_pfn);
+					     npage, prot, page);
 	else
 		ret = -ENOTTY;
 

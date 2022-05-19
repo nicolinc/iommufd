@@ -155,7 +155,10 @@ struct vfio_regions {
 
 #define WAITED 1
 
-static int put_pfn(unsigned long pfn, int prot);
+#ifndef phys_to_page
+#define phys_to_page(phys)	(pfn_to_page(__phys_to_pfn(phys)))
+#endif
+static int vfio_unpin(struct page *page, int prot);
 
 static struct vfio_iommu_group*
 vfio_iommu_find_iommu_group(struct vfio_iommu *iommu,
@@ -407,7 +410,7 @@ static int vfio_iova_put_vfio_pfn(struct vfio_dma *dma, struct vfio_pfn *vpfn)
 
 	vpfn->ref_count--;
 	if (!vpfn->ref_count) {
-		ret = put_pfn(vpfn->pfn, dma->prot);
+		ret = vfio_unpin(pfn_to_page(vpfn->pfn), dma->prot);
 		vfio_remove_from_pfn_list(dma, vpfn);
 	}
 	return ret;
@@ -445,19 +448,17 @@ static int vfio_lock_acct(struct vfio_dma *dma, long npage, bool async)
  * For compound pages, any driver that sets the reserved bit in head
  * page needs to set the reserved bit in all subpages to be safe.
  */
-static bool is_invalid_reserved_pfn(unsigned long pfn)
+static bool is_invalid_reserved_page(struct page *page)
 {
-	if (pfn_valid(pfn))
-		return PageReserved(pfn_to_page(pfn));
+	if (page)
+		return PageReserved(page);
 
 	return true;
 }
 
-static int put_pfn(unsigned long pfn, int prot)
+static int vfio_unpin(struct page *page, int prot)
 {
-	if (!is_invalid_reserved_pfn(pfn)) {
-		struct page *page = pfn_to_page(pfn);
-
+	if (!is_invalid_reserved_page(page)) {
 		unpin_user_pages_dirty_lock(&page, 1, prot & IOMMU_WRITE);
 		return 1;
 	}
@@ -489,9 +490,7 @@ fallback:
 static void vfio_batch_unpin(struct vfio_batch *batch, struct vfio_dma *dma)
 {
 	while (batch->size) {
-		unsigned long pfn = page_to_pfn(batch->pages[batch->offset]);
-
-		put_pfn(pfn, dma->prot);
+		vfio_unpin(batch->pages[batch->offset], dma->prot);
 		batch->offset++;
 		batch->size--;
 	}
@@ -503,9 +502,9 @@ static void vfio_batch_fini(struct vfio_batch *batch)
 		free_page((unsigned long)batch->pages);
 }
 
-static int follow_fault_pfn(struct vm_area_struct *vma, struct mm_struct *mm,
-			    unsigned long vaddr, unsigned long *pfn,
-			    bool write_fault)
+static int follow_fault_page(struct vm_area_struct *vma, struct mm_struct *mm,
+			     unsigned long vaddr, struct page **page,
+			     bool write_fault)
 {
 	pte_t *ptep;
 	spinlock_t *ptl;
@@ -533,7 +532,7 @@ static int follow_fault_pfn(struct vm_area_struct *vma, struct mm_struct *mm,
 	if (write_fault && !pte_write(*ptep))
 		ret = -EFAULT;
 	else
-		*pfn = pte_pfn(*ptep);
+		*page = pte_page(*ptep);
 
 	pte_unmap_unlock(ptep, ptl);
 	return ret;
@@ -543,9 +542,8 @@ static int follow_fault_pfn(struct vm_area_struct *vma, struct mm_struct *mm,
  * Returns the positive number of pfns successfully obtained or a negative
  * error code.
  */
-static int vaddr_get_pfns(struct mm_struct *mm, unsigned long vaddr,
-			  long npages, int prot, unsigned long *pfn,
-			  struct page **pages)
+static int vfio_pin(struct mm_struct *mm, unsigned long vaddr,
+		    long npages, int prot, struct page **pages)
 {
 	struct vm_area_struct *vma;
 	unsigned int flags = 0;
@@ -557,10 +555,8 @@ static int vaddr_get_pfns(struct mm_struct *mm, unsigned long vaddr,
 	mmap_read_lock(mm);
 	ret = pin_user_pages_remote(mm, vaddr, npages, flags | FOLL_LONGTERM,
 				    pages, NULL, NULL);
-	if (ret > 0) {
-		*pfn = page_to_pfn(pages[0]);
+	if (ret > 0)
 		goto done;
-	}
 
 	vaddr = untagged_addr(vaddr);
 
@@ -568,12 +564,12 @@ retry:
 	vma = vma_lookup(mm, vaddr);
 
 	if (vma && vma->vm_flags & VM_PFNMAP) {
-		ret = follow_fault_pfn(vma, mm, vaddr, pfn, prot & IOMMU_WRITE);
+		ret = follow_fault_page(vma, mm, vaddr, pages, prot & IOMMU_WRITE);
 		if (ret == -EAGAIN)
 			goto retry;
 
 		if (!ret) {
-			if (is_invalid_reserved_pfn(*pfn))
+			if (is_invalid_reserved_page(*pages))
 				ret = 1;
 			else
 				ret = -EFAULT;
@@ -645,12 +641,12 @@ static int vfio_wait_all_valid(struct vfio_iommu *iommu)
  * first page and all consecutive pages with the same locking.
  */
 static long vfio_pin_pages_remote(struct vfio_dma *dma, unsigned long vaddr,
-				  long npage, unsigned long *pfn_base,
+				  long npage, struct page **page_base,
 				  unsigned long limit, struct vfio_batch *batch)
 {
-	unsigned long pfn;
 	struct mm_struct *mm = current->mm;
 	long ret, pinned = 0, lock_acct = 0;
+	struct page *page;
 	bool rsvd;
 	dma_addr_t iova = vaddr - dma->vaddr + dma->iova;
 
@@ -660,11 +656,10 @@ static long vfio_pin_pages_remote(struct vfio_dma *dma, unsigned long vaddr,
 
 	if (batch->size) {
 		/* Leftover pages in batch from an earlier call. */
-		*pfn_base = page_to_pfn(batch->pages[batch->offset]);
-		pfn = *pfn_base;
-		rsvd = is_invalid_reserved_pfn(*pfn_base);
+		*page_base = page = batch->pages[batch->offset];
+		rsvd = is_invalid_reserved_page(*page_base);
 	} else {
-		*pfn_base = 0;
+		*page_base = NULL;
 	}
 
 	while (npage) {
@@ -672,17 +667,17 @@ static long vfio_pin_pages_remote(struct vfio_dma *dma, unsigned long vaddr,
 			/* Empty batch, so refill it. */
 			long req_pages = min_t(long, npage, batch->capacity);
 
-			ret = vaddr_get_pfns(mm, vaddr, req_pages, dma->prot,
-					     &pfn, batch->pages);
+			ret = vfio_pin(mm, vaddr, req_pages, dma->prot,
+				       batch->pages);
 			if (ret < 0)
 				goto unpin_out;
 
 			batch->size = ret;
 			batch->offset = 0;
 
-			if (!*pfn_base) {
-				*pfn_base = pfn;
-				rsvd = is_invalid_reserved_pfn(*pfn_base);
+			if (!*page_base) {
+				*page_base = page = batch->pages[0];
+				rsvd = is_invalid_reserved_page(*page_base);
 			}
 		}
 
@@ -695,8 +690,8 @@ static long vfio_pin_pages_remote(struct vfio_dma *dma, unsigned long vaddr,
 		 * !VM_PFNMAP vma.
 		 */
 		while (true) {
-			if (pfn != *pfn_base + pinned ||
-			    rsvd != is_invalid_reserved_pfn(pfn))
+			if (page != *page_base + pinned ||
+			    rsvd != is_invalid_reserved_page(page))
 				goto out;
 
 			/*
@@ -725,7 +720,7 @@ static long vfio_pin_pages_remote(struct vfio_dma *dma, unsigned long vaddr,
 			if (!batch->size)
 				break;
 
-			pfn = page_to_pfn(batch->pages[batch->offset]);
+			page = batch->pages[batch->offset];
 		}
 
 		if (unlikely(disable_hugepages))
@@ -738,14 +733,14 @@ out:
 unpin_out:
 	if (batch->size == 1 && !batch->offset) {
 		/* May be a VM_PFNMAP pfn, which the batch can't remember. */
-		put_pfn(pfn, dma->prot);
+		vfio_unpin(page, dma->prot);
 		batch->size = 0;
 	}
 
 	if (ret < 0) {
 		if (pinned && !rsvd) {
-			for (pfn = *pfn_base ; pinned ; pfn++, pinned--)
-				put_pfn(pfn, dma->prot);
+			for (page = *page_base ; pinned ; page++, pinned--)
+				vfio_unpin(page, dma->prot);
 		}
 		vfio_batch_unpin(batch, dma);
 
@@ -756,14 +751,14 @@ unpin_out:
 }
 
 static long vfio_unpin_pages_remote(struct vfio_dma *dma, dma_addr_t iova,
-				    unsigned long pfn, long npage,
+				    struct page *page, long npage,
 				    bool do_accounting)
 {
 	long unlocked = 0, locked = 0;
 	long i;
 
 	for (i = 0; i < npage; i++, iova += PAGE_SIZE) {
-		if (put_pfn(pfn++, dma->prot)) {
+		if (vfio_unpin(page++, dma->prot)) {
 			unlocked++;
 			if (vfio_find_vpfn(dma, iova))
 				locked++;
@@ -777,9 +772,8 @@ static long vfio_unpin_pages_remote(struct vfio_dma *dma, dma_addr_t iova,
 }
 
 static int vfio_pin_page_external(struct vfio_dma *dma, unsigned long vaddr,
-				  unsigned long *pfn_base, bool do_accounting)
+				  struct page **page_base, bool do_accounting)
 {
-	struct page *pages[1];
 	struct mm_struct *mm;
 	int ret;
 
@@ -787,16 +781,16 @@ static int vfio_pin_page_external(struct vfio_dma *dma, unsigned long vaddr,
 	if (!mm)
 		return -ENODEV;
 
-	ret = vaddr_get_pfns(mm, vaddr, 1, dma->prot, pfn_base, pages);
+	ret = vfio_pin(mm, vaddr, 1, dma->prot, page_base);
 	if (ret != 1)
 		goto out;
 
 	ret = 0;
 
-	if (do_accounting && !is_invalid_reserved_pfn(*pfn_base)) {
+	if (do_accounting && !is_invalid_reserved_page(*page_base)) {
 		ret = vfio_lock_acct(dma, 1, true);
 		if (ret) {
-			put_pfn(*pfn_base, dma->prot);
+			vfio_unpin(*page_base, dma->prot);
 			if (ret == -ENOMEM)
 				pr_warn("%s: Task %s (%d) RLIMIT_MEMLOCK "
 					"(%ld) exceeded\n", __func__,
@@ -831,7 +825,7 @@ static int vfio_iommu_type1_pin_pages(void *iommu_data,
 				      struct iommu_group *iommu_group,
 				      unsigned long *user_pfn,
 				      int npage, int prot,
-				      unsigned long *phys_pfn)
+				      struct page **page)
 {
 	struct vfio_iommu *iommu = iommu_data;
 	struct vfio_iommu_group *group;
@@ -841,7 +835,7 @@ static int vfio_iommu_type1_pin_pages(void *iommu_data,
 	bool do_accounting;
 	dma_addr_t iova;
 
-	if (!iommu || !user_pfn || !phys_pfn)
+	if (!iommu || !user_pfn || !page)
 		return -EINVAL;
 
 	/* Supported for v2 version only */
@@ -896,19 +890,19 @@ again:
 
 		vpfn = vfio_iova_get_vfio_pfn(dma, iova);
 		if (vpfn) {
-			phys_pfn[i] = vpfn->pfn;
+			page[i] = pfn_to_page(vpfn->pfn);
 			continue;
 		}
 
 		remote_vaddr = dma->vaddr + (iova - dma->iova);
-		ret = vfio_pin_page_external(dma, remote_vaddr, &phys_pfn[i],
+		ret = vfio_pin_page_external(dma, remote_vaddr, &page[i],
 					     do_accounting);
 		if (ret)
 			goto pin_unwind;
 
-		ret = vfio_add_to_pfn_list(dma, iova, phys_pfn[i]);
+		ret = vfio_add_to_pfn_list(dma, iova, page_to_pfn(page[i]));
 		if (ret) {
-			if (put_pfn(phys_pfn[i], dma->prot) && do_accounting)
+			if (vfio_unpin(page[i], dma->prot) && do_accounting)
 				vfio_lock_acct(dma, -1, true);
 			goto pin_unwind;
 		}
@@ -935,14 +929,14 @@ again:
 	goto pin_done;
 
 pin_unwind:
-	phys_pfn[i] = 0;
+	page[i] = NULL;
 	for (j = 0; j < i; j++) {
 		dma_addr_t iova;
 
 		iova = user_pfn[j] << PAGE_SHIFT;
 		dma = vfio_find_dma(iommu, iova, PAGE_SIZE);
 		vfio_unpin_page_external(dma, iova, do_accounting);
-		phys_pfn[j] = 0;
+		page[j] = NULL;
 	}
 pin_done:
 	mutex_unlock(&iommu->lock);
@@ -995,7 +989,7 @@ static long vfio_sync_unpin(struct vfio_dma *dma, struct vfio_domain *domain,
 	list_for_each_entry_safe(entry, next, regions, list) {
 		unlocked += vfio_unpin_pages_remote(dma,
 						    entry->iova,
-						    entry->phys >> PAGE_SHIFT,
+						    phys_to_page(entry->phys),
 						    entry->len >> PAGE_SHIFT,
 						    false);
 		list_del(&entry->list);
@@ -1065,7 +1059,7 @@ static size_t unmap_unpin_slow(struct vfio_domain *domain,
 
 	if (unmapped) {
 		*unlocked += vfio_unpin_pages_remote(dma, *iova,
-						     phys >> PAGE_SHIFT,
+						     phys_to_page(phys),
 						     unmapped >> PAGE_SHIFT,
 						     false);
 		*iova += unmapped;
@@ -1455,13 +1449,13 @@ unlock:
 }
 
 static int vfio_iommu_map(struct vfio_iommu *iommu, dma_addr_t iova,
-			  unsigned long pfn, long npage, int prot)
+			  struct page *page, long npage, int prot)
 {
 	struct vfio_domain *d;
 	int ret;
 
 	list_for_each_entry(d, &iommu->domain_list, next) {
-		ret = iommu_map(d->domain, iova, (phys_addr_t)pfn << PAGE_SHIFT,
+		ret = iommu_map(d->domain, iova, page_to_phys(page),
 				npage << PAGE_SHIFT, prot | IOMMU_CACHE);
 		if (ret)
 			goto unwind;
@@ -1486,9 +1480,10 @@ static int vfio_pin_map_dma(struct vfio_iommu *iommu, struct vfio_dma *dma,
 	dma_addr_t iova = dma->iova;
 	unsigned long vaddr = dma->vaddr;
 	struct vfio_batch batch;
+	struct page *page;
 	size_t size = map_size;
 	long npage;
-	unsigned long pfn, limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
+	unsigned long limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
 	int ret = 0;
 
 	vfio_batch_init(&batch);
@@ -1496,7 +1491,7 @@ static int vfio_pin_map_dma(struct vfio_iommu *iommu, struct vfio_dma *dma,
 	while (size) {
 		/* Pin a contiguous chunk of memory */
 		npage = vfio_pin_pages_remote(dma, vaddr + dma->size,
-					      size >> PAGE_SHIFT, &pfn, limit,
+					      size >> PAGE_SHIFT, &page, limit,
 					      &batch);
 		if (npage <= 0) {
 			WARN_ON(!npage);
@@ -1505,11 +1500,11 @@ static int vfio_pin_map_dma(struct vfio_iommu *iommu, struct vfio_dma *dma,
 		}
 
 		/* Map it! */
-		ret = vfio_iommu_map(iommu, iova + dma->size, pfn, npage,
+		ret = vfio_iommu_map(iommu, iova + dma->size, page, npage,
 				     dma->prot);
 		if (ret) {
-			vfio_unpin_pages_remote(dma, iova + dma->size, pfn,
-						npage, true);
+			vfio_unpin_pages_remote(dma, iova + dma->size,
+						page, npage, true);
 			vfio_batch_unpin(&batch, dma);
 			break;
 		}
@@ -1722,6 +1717,7 @@ static int vfio_iommu_replay(struct vfio_iommu *iommu,
 		iova = dma->iova;
 
 		while (iova < dma->iova + dma->size) {
+			struct page *page;
 			phys_addr_t phys;
 			size_t size;
 
@@ -1750,8 +1746,8 @@ static int vfio_iommu_replay(struct vfio_iommu *iommu,
 					p += PAGE_SIZE;
 					i += PAGE_SIZE;
 				}
+				page = phys_to_page(phys);
 			} else {
-				unsigned long pfn;
 				unsigned long vaddr = dma->vaddr +
 						     (iova - dma->iova);
 				size_t n = dma->iova + dma->size - iova;
@@ -1759,7 +1755,7 @@ static int vfio_iommu_replay(struct vfio_iommu *iommu,
 
 				npage = vfio_pin_pages_remote(dma, vaddr,
 							      n >> PAGE_SHIFT,
-							      &pfn, limit,
+							      &page, limit,
 							      &batch);
 				if (npage <= 0) {
 					WARN_ON(!npage);
@@ -1767,7 +1763,7 @@ static int vfio_iommu_replay(struct vfio_iommu *iommu,
 					goto unwind;
 				}
 
-				phys = pfn << PAGE_SHIFT;
+				phys = page_to_phys(page);
 				size = npage << PAGE_SHIFT;
 			}
 
@@ -1775,8 +1771,7 @@ static int vfio_iommu_replay(struct vfio_iommu *iommu,
 					size, dma->prot | IOMMU_CACHE);
 			if (ret) {
 				if (!dma->iommu_mapped) {
-					vfio_unpin_pages_remote(dma, iova,
-							phys >> PAGE_SHIFT,
+					vfio_unpin_pages_remote(dma, iova, page,
 							size >> PAGE_SHIFT,
 							true);
 					vfio_batch_unpin(&batch, dma);
@@ -1831,7 +1826,7 @@ unwind:
 			}
 
 			iommu_unmap(domain->domain, iova, size);
-			vfio_unpin_pages_remote(dma, iova, phys >> PAGE_SHIFT,
+			vfio_unpin_pages_remote(dma, iova, phys_to_page(phys),
 						size >> PAGE_SHIFT, true);
 		}
 	}
@@ -2396,7 +2391,7 @@ static void vfio_iommu_unmap_unpin_reaccount(struct vfio_iommu *iommu)
 			struct vfio_pfn *vpfn = rb_entry(p, struct vfio_pfn,
 							 node);
 
-			if (!is_invalid_reserved_pfn(vpfn->pfn))
+			if (!is_invalid_reserved_page(pfn_to_page(vpfn->pfn)))
 				locked++;
 		}
 		vfio_lock_acct(dma, locked - unlocked, true);
