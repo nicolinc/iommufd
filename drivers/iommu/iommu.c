@@ -1936,6 +1936,28 @@ struct iommu_domain *iommu_domain_alloc(struct bus_type *bus)
 }
 EXPORT_SYMBOL_GPL(iommu_domain_alloc);
 
+struct iommu_domain *iommu_domain_alloc_user(struct device *dev,
+					     struct iommu_domain *parent,
+					     void *user_data, size_t data_len)
+{
+	const struct iommu_ops *ops;
+	struct iommu_domain *domain;
+
+	if (dev->iommu && dev->iommu->iommu_dev)
+		ops = dev_iommu_ops(dev);
+	else if (dev->bus && dev->bus->iommu_ops)
+		ops = dev->bus->iommu_ops;
+	else
+		return NULL;
+
+	domain = ops->domain_alloc_user(dev, parent, user_data, data_len);
+	if (!domain)
+		return NULL;
+
+	return domain;
+}
+EXPORT_SYMBOL_GPL(iommu_domain_alloc_user);
+
 void iommu_domain_free(struct iommu_domain *domain)
 {
 	iommu_put_dma_cookie(domain);
