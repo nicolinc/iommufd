@@ -65,6 +65,7 @@ struct iommu_domain_geometry {
 #define __IOMMU_DOMAIN_PT	(1U << 2)  /* Domain is identity mapped   */
 #define __IOMMU_DOMAIN_DMA_FQ	(1U << 3)  /* DMA-API uses flush queue    */
 
+#define __IOMMU_DOMAIN_USER_IOVA	(1U << 4)  /* User managed IOVA */
 /*
  * This are the possible domain-types
  *
@@ -87,6 +88,7 @@ struct iommu_domain_geometry {
 #define IOMMU_DOMAIN_DMA_FQ	(__IOMMU_DOMAIN_PAGING |	\
 				 __IOMMU_DOMAIN_DMA_API |	\
 				 __IOMMU_DOMAIN_DMA_FQ)
+#define IOMMU_DOMAIN_NESTING	(__IOMMU_DOMAIN_USER_IOVA)
 
 struct iommu_domain {
 	unsigned type;
@@ -232,6 +234,10 @@ struct iommu_ops {
 
 	/* Domain allocation and freeing by the iommu driver */
 	struct iommu_domain *(*domain_alloc)(unsigned iommu_domain_type);
+	struct iommu_domain *(*domain_alloc_user)(struct device *dev,
+						  struct iommu_domain *parent,
+						  void *user_data,
+						  unsigned iommu_domain_type);
 
 	struct iommu_device *(*probe_device)(struct device *dev);
 	void (*release_device)(struct device *dev);
@@ -268,6 +274,7 @@ struct iommu_ops {
  * struct iommu_domain_ops - domain specific operations
  * @attach_dev: attach an iommu domain to a device
  * @detach_dev: detach an iommu domain from a device
+ * @cache_invalidate: invalidate translation caches
  * @map: map a physically contiguous memory region to an iommu domain
  * @map_pages: map a physically contiguous set of pages of the same size to
  *             an iommu domain.
@@ -288,6 +295,8 @@ struct iommu_ops {
 struct iommu_domain_ops {
 	int (*attach_dev)(struct iommu_domain *domain, struct device *dev);
 	void (*detach_dev)(struct iommu_domain *domain, struct device *dev);
+	int (*cache_invalidate)(struct iommu_domain *domain,
+				struct iommu_cache_invalidate_info *inv_info);
 
 	int (*map)(struct iommu_domain *domain, unsigned long iova,
 		   phys_addr_t paddr, size_t size, int prot, gfp_t gfp);
@@ -679,6 +688,11 @@ int iommu_group_claim_dma_owner(struct iommu_group *group, void *owner);
 void iommu_group_release_dma_owner(struct iommu_group *group);
 bool iommu_group_dma_owner_claimed(struct iommu_group *group);
 
+struct iommu_domain *
+iommu_domain_alloc_user(struct device *dev, struct iommu_domain *parent,
+			void *user_data, unsigned iommu_domain_type);
+void iommu_domain_cache_inv(struct iommu_domain *domain,
+			    struct iommu_cache_invalidate_info *inv_info);
 #else /* CONFIG_IOMMU_API */
 
 struct iommu_ops {};
@@ -1045,6 +1059,19 @@ static inline void iommu_group_release_dma_owner(struct iommu_group *group)
 static inline bool iommu_group_dma_owner_claimed(struct iommu_group *group)
 {
 	return false;
+}
+
+static inline struct iommu_domain *
+iommu_domain_alloc_user(struct device *dev, struct iommu_domain *parent,
+			void *user_data, unsigned iommu_domain_type)
+{
+	return NULL;
+}
+
+static inline void
+iommu_domain_cache_inv(struct iommu_domain *domain,
+		       struct iommu_cache_invalidate_info *inv_info)
+{
 }
 #endif /* CONFIG_IOMMU_API */
 
