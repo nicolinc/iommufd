@@ -23,8 +23,8 @@ struct pfn_array {
 	unsigned long		pa_iova;
 	/* Array that stores PFNs of the pages need to pin. */
 	unsigned long		*pa_iova_pfn;
-	/* Array that receives PFNs of the pages pinned. */
-	unsigned long		*pa_pfn;
+	/* Array that receives the pinned pages. */
+	struct page		*pa_page;
 	/* Number of pages pinned from @pa_iova. */
 	int			pa_nr;
 };
