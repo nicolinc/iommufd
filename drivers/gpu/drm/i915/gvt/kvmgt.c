@@ -231,26 +231,19 @@ static void intel_gvt_cleanup_vgpu_type_groups(struct intel_gvt *gvt)
 static void gvt_unpin_guest_page(struct intel_vgpu *vgpu, unsigned long gfn,
 		unsigned long size)
 {
+	unsigned long npage = roundup(size, PAGE_SIZE) / PAGE_SIZE;
 	struct drm_i915_private *i915 = vgpu->gvt->gt->i915;
-	int total_pages;
-	int npage;
 	int ret;
 
-	total_pages = roundup(size, PAGE_SIZE) / PAGE_SIZE;
-
-	for (npage = 0; npage < total_pages; npage++) {
-		unsigned long cur_gfn = gfn + npage;
-
-		ret = vfio_unpin_pages(&vgpu->vfio_device, &cur_gfn, 1);
-		drm_WARN_ON(&i915->drm, ret != 1);
-	}
+	ret = vfio_unpin_pages(&vgpu->vfio_device, gfn << PAGE_SHIFT, npage);
+	drm_WARN_ON(&i915->drm, ret != npage);
 }
 
 /* Pin a normal or compound guest page for dma. */
 static int gvt_pin_guest_page(struct intel_vgpu *vgpu, unsigned long gfn,
 		unsigned long size, struct page **page)
 {
-	unsigned long base_pfn = 0;
+	struct page *base_page = NULL;
 	int total_pages;
 	int npage;
 	int ret;
@@ -261,27 +254,20 @@ static int gvt_pin_guest_page(struct intel_vgpu *vgpu, unsigned long gfn,
 	 * on stack to hold pfns.
 	 */
 	for (npage = 0; npage < total_pages; npage++) {
-		unsigned long cur_gfn = gfn + npage;
-		unsigned long pfn;
+		unsigned long cur_iova = (gfn + npage) << PAGE_SHIFT;
+		struct page *cur_page;
 
-		ret = vfio_pin_pages(&vgpu->vfio_device, &cur_gfn, 1,
-				     IOMMU_READ | IOMMU_WRITE, &pfn);
+		ret = vfio_pin_pages(&vgpu->vfio_device, cur_iova, 1,
+				     IOMMU_READ | IOMMU_WRITE, &cur_page);
 		if (ret != 1) {
-			gvt_vgpu_err("vfio_pin_pages failed for gfn 0x%lx, ret %d\n",
-				     cur_gfn, ret);
-			goto err;
-		}
-
-		if (!pfn_valid(pfn)) {
-			gvt_vgpu_err("pfn 0x%lx is not mem backed\n", pfn);
-			npage++;
-			ret = -EFAULT;
+			gvt_vgpu_err("vfio_pin_pages failed for iova 0x%lx, ret %d\n",
+				     cur_iova, ret);
 			goto err;
 		}
 
 		if (npage == 0)
-			base_pfn = pfn;
-		else if (base_pfn + npage != pfn) {
+			base_page = cur_page;
+		else if (base_page + npage != cur_page) {
 			gvt_vgpu_err("The pages are not continuous\n");
 			ret = -EINVAL;
 			npage++;
@@ -289,7 +275,7 @@ static int gvt_pin_guest_page(struct intel_vgpu *vgpu, unsigned long gfn,
 		}
 	}
 
-	*page = pfn_to_page(base_pfn);
+	*page = base_page;
 	return 0;
 err:
 	gvt_unpin_guest_page(vgpu, gfn, npage * PAGE_SIZE);
