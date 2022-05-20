@@ -23,8 +23,8 @@ struct pfn_array {
 	unsigned long		pa_iova;
 	/* Array that stores PFNs of the pages need to pin. */
 	unsigned long		*pa_iova_pfn;
-	/* Array that receives PFNs of the pages pinned. */
-	unsigned long		*pa_pfn;
+	/* Array that receives the pinned pages. */
+	struct page		**pa_page;
 	/* Number of pages pinned from @pa_iova. */
 	int			pa_nr;
 };
@@ -72,19 +72,19 @@ static int pfn_array_alloc(struct pfn_array *pa, u64 iova, unsigned int len)
 
 	pa->pa_iova_pfn = kcalloc(pa->pa_nr,
 				  sizeof(*pa->pa_iova_pfn) +
-				  sizeof(*pa->pa_pfn),
+				  sizeof(*pa->pa_page),
 				  GFP_KERNEL);
 	if (unlikely(!pa->pa_iova_pfn)) {
 		pa->pa_nr = 0;
 		return -ENOMEM;
 	}
-	pa->pa_pfn = pa->pa_iova_pfn + pa->pa_nr;
+	pa->pa_page = (struct page **)pa->pa_iova_pfn + pa->pa_nr;
 
 	pa->pa_iova_pfn[0] = pa->pa_iova >> PAGE_SHIFT;
-	pa->pa_pfn[0] = -1ULL;
+	pa->pa_page[0] = NULL;
 	for (i = 1; i < pa->pa_nr; i++) {
 		pa->pa_iova_pfn[i] = pa->pa_iova_pfn[i - 1] + 1;
-		pa->pa_pfn[i] = -1ULL;
+		pa->pa_page[i] = NULL;
 	}
 
 	return 0;
@@ -112,8 +112,10 @@ static int pfn_array_pin(struct pfn_array *pa, struct vfio_device *vdev)
 			npage++;
 			continue;
 		}
-		ret = vfio_pin_pages(vdev, pa->pa_iova_pfn + pinned, npage,
-				     IOMMU_READ | IOMMU_WRITE, pa->pa_pfn + pinned);
+		ret = vfio_pin_pages(vdev,
+				     pa->pa_iova_pfn[pinned] << PAGE_SHIFT,
+				     npage, IOMMU_READ | IOMMU_WRITE,
+				     pa->pa_page + pinned);
 		if (ret < 0) {
 			goto err_out;
 		} else if (ret > 0 && ret != npage) {
@@ -128,7 +130,7 @@ static int pfn_array_pin(struct pfn_array *pa, struct vfio_device *vdev)
 	return ret;
 
 err_out:
-	vfio_unpin_pages(vdev, pa->pa_iova_pfn, pinned);
+	vfio_unpin_pages(vdev, pa->pa_iova_pfn[0] << PAGE_SHIFT, pinned);
 	pa->pa_nr = 0;
 
 	return ret;
@@ -139,7 +141,8 @@ static void pfn_array_unpin_free(struct pfn_array *pa, struct vfio_device *vdev)
 {
 	/* Only unpin if any pages were pinned to begin with */
 	if (pa->pa_nr)
-		vfio_unpin_pages(vdev, pa->pa_iova_pfn, pa->pa_nr);
+		vfio_unpin_pages(vdev, pa->pa_iova_pfn[0] << PAGE_SHIFT,
+				 pa->pa_nr);
 	pa->pa_nr = 0;
 	kfree(pa->pa_iova_pfn);
 }
@@ -171,7 +174,7 @@ static inline void pfn_array_idal_create_words(
 	 */
 
 	for (i = 0; i < pa->pa_nr; i++)
-		idaws[i] = pa->pa_pfn[i] << PAGE_SHIFT;
+		idaws[i] = page_to_phys(pa->pa_page[i]);
 
 	/* Adjust the first IDAW, since it may not start on a page boundary */
 	idaws[0] += pa->pa_iova & (PAGE_SIZE - 1);
@@ -223,7 +226,7 @@ static long copy_from_iova(struct vfio_device *vdev, void *to, u64 iova,
 
 	l = n;
 	for (i = 0; i < pa.pa_nr; i++) {
-		from = pa.pa_pfn[i] << PAGE_SHIFT;
+		from = page_to_phys(pa.pa_page[i]);
 		m = PAGE_SIZE;
 		if (i == 0) {
 			from += iova & (PAGE_SIZE - 1);
