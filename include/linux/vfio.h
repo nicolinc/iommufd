@@ -145,9 +145,9 @@ extern bool vfio_file_has_dev(struct file *file, struct vfio_device *device);
 
 #define VFIO_PIN_PAGES_MAX_ENTRIES	(PAGE_SIZE/sizeof(unsigned long))
 
-extern int vfio_pin_pages(struct vfio_device *device, unsigned long *user_pfn,
-			  int npage, int prot, unsigned long *phys_pfn);
-extern int vfio_unpin_pages(struct vfio_device *device, unsigned long *user_pfn,
+extern int vfio_pin_pages(struct vfio_device *device, unsigned long user_iova,
+			  int npage, int prot, struct page **phys_page);
+extern int vfio_unpin_pages(struct vfio_device *device, unsigned long user_iova,
 			    int npage);
 extern int vfio_dma_rw(struct vfio_device *device, dma_addr_t user_iova,
 		       void *data, size_t len, bool write);
