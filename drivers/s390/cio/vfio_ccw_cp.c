@@ -101,22 +101,34 @@ static int pfn_array_alloc(struct pfn_array *pa, u64 iova, unsigned int len)
  */
 static int pfn_array_pin(struct pfn_array *pa, struct vfio_device *vdev)
 {
+	int pinned = 0, npage = 1;
 	int ret = 0;
 
-	ret = vfio_pin_pages(vdev, pa->pa_iova_pfn, pa->pa_nr,
-			     IOMMU_READ | IOMMU_WRITE, pa->pa_pfn);
-
-	if (ret < 0) {
-		goto err_out;
-	} else if (ret > 0 && ret != pa->pa_nr) {
-		vfio_unpin_pages(vdev, pa->pa_iova_pfn, ret);
-		ret = -EINVAL;
-		goto err_out;
+	/* Make sure pass in contiguous pages to vfio_pin_pages() */
+	while (pinned < pa->pa_nr) {
+		if (pinned + npage < pa->pa_nr &&
+		    pa->pa_iova_pfn[pinned] + npage ==
+		    pa->pa_iova_pfn[pinned + npage]) {
+			npage++;
+			continue;
+		}
+		ret = vfio_pin_pages(vdev, pa->pa_iova_pfn + pinned, npage,
+				     IOMMU_READ | IOMMU_WRITE, pa->pa_pfn + pinned);
+		if (ret < 0) {
+			goto err_out;
+		} else if (ret > 0 && ret != npage) {
+			pinned += ret;
+			ret = -EINVAL;
+			goto err_out;
+		}
+		pinned += npage;
+		npage = 1;
 	}
 
 	return ret;
 
 err_out:
+	vfio_unpin_pages(vdev, pa->pa_iova_pfn, pinned);
 	pa->pa_nr = 0;
 
 	return ret;
