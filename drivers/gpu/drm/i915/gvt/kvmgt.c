@@ -231,14 +231,8 @@ static void intel_gvt_cleanup_vgpu_type_groups(struct intel_gvt *gvt)
 static void gvt_unpin_guest_page(struct intel_vgpu *vgpu, unsigned long gfn,
 		unsigned long size)
 {
-	int total_pages = DIV_ROUND_UP(size, PAGE_SIZE);
-	int npage;
-
-	for (npage = 0; npage < total_pages; npage++) {
-		unsigned long cur_gfn = gfn + npage;
-
-		vfio_unpin_pages(&vgpu->vfio_device, &cur_gfn, 1);
-	}
+	vfio_unpin_pages(&vgpu->vfio_device, gfn << PAGE_SHIFT,
+			 DIV_ROUND_UP(size, PAGE_SIZE));
 }
 
 /* Pin a normal or compound guest page for dma. */
@@ -255,14 +249,14 @@ static int gvt_pin_guest_page(struct intel_vgpu *vgpu, unsigned long gfn,
 	 * on stack to hold pfns.
 	 */
 	for (npage = 0; npage < total_pages; npage++) {
-		unsigned long cur_gfn = gfn + npage;
+		dma_addr_t cur_iova = (gfn + npage) << PAGE_SHIFT;
 		unsigned long pfn;
 
-		ret = vfio_pin_pages(&vgpu->vfio_device, &cur_gfn, 1,
+		ret = vfio_pin_pages(&vgpu->vfio_device, cur_iova, 1,
 				     IOMMU_READ | IOMMU_WRITE, &pfn);
 		if (ret != 1) {
-			gvt_vgpu_err("vfio_pin_pages failed for gfn 0x%lx, ret %d\n",
-				     cur_gfn, ret);
+			gvt_vgpu_err("vfio_pin_pages failed for iova %pad, ret %d\n",
+				     &cur_iova, ret);
 			goto err;
 		}
 
@@ -306,7 +300,7 @@ static int gvt_dma_map_page(struct intel_vgpu *vgpu, unsigned long gfn,
 	if (dma_mapping_error(dev, *dma_addr)) {
 		gvt_vgpu_err("DMA mapping failed for pfn 0x%lx, ret %d\n",
 			     page_to_pfn(page), ret);
-		gvt_unpin_guest_page(vgpu, gfn, size);
+		gvt_unpin_guest_page(vgpu, gfn << PAGE_SHIFT, size);
 		return -ENOMEM;
 	}
 
@@ -319,7 +313,7 @@ static void gvt_dma_unmap_page(struct intel_vgpu *vgpu, unsigned long gfn,
 	struct device *dev = vgpu->gvt->gt->i915->drm.dev;
 
 	dma_unmap_page(dev, dma_addr, size, DMA_BIDIRECTIONAL);
-	gvt_unpin_guest_page(vgpu, gfn, size);
+	gvt_unpin_guest_page(vgpu, gfn << PAGE_SHIFT, size);
 }
 
 static struct gvt_dma *__gvt_cache_find_dma_addr(struct intel_vgpu *vgpu,
