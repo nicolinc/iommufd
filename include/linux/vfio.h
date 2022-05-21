@@ -151,7 +151,7 @@ extern int vfio_pin_pages(struct vfio_device *device, dma_addr_t iova,
 			  int npage, int prot, struct page **phys_page);
 extern int vfio_unpin_pages(struct vfio_device *device, dma_addr_t iova,
 			    int npage);
-extern int vfio_dma_rw(struct vfio_device *device, dma_addr_t user_iova,
+extern int vfio_dma_rw(struct vfio_device *device, dma_addr_t iova,
 		       void *data, size_t len, bool write);
 
 /* each type has independent events */
