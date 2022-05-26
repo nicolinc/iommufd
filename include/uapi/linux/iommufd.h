@@ -44,6 +44,9 @@ enum {
 	IOMMUFD_CMD_IOAS_MAP,
 	IOMMUFD_CMD_IOAS_UNMAP,
 	IOMMUFD_CMD_VFIO_IOAS,
+	IOMMUFD_CMD_DEVICE_GET_INFO,
+	IOMMUFD_CMD_HWPT_ALLOC,
+	IOMMUFD_CMD_HWPT_INVAL_S1_CACHE,
 };
 
 /**
@@ -276,4 +279,235 @@ struct iommu_vfio_ioas {
 	__u16 __reserved;
 };
 #define IOMMU_VFIO_IOAS _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VFIO_IOAS)
+
+/**
+ * struct iommu_device_info_vtd - Intel VT-d hardware data
+ *
+ * @flags: VT-d specific flags. Currently reserved for future
+ *	   extension. must be set to 0.
+ * @cap_reg: Describe basic capabilities as defined in VT-d capability
+ *	     register.
+ * @ecap_reg: Describe the extended capabilities as defined in VT-d
+ *	      extended capability register.
+ */
+struct iommu_device_info_vtd {
+	__u32 flags;
+	__u8 padding[4];
+	__aligned_u64 cap_reg;
+	__aligned_u64 ecap_reg;
+};
+
+enum iommu_device_type {
+	IOMMU_DEVICE_INTEL_V1 = 0,
+	IOMMU_DEVICE_ARM_V1,
+};
+
+/**
+ * struct iommu_device_info - ioctl(IOMMU_DEVICE_GET_INFO)
+ * @size: sizeof the whole info
+ * @flags: must be 0
+ * @dev_id: the device to query
+ * @out_iommu_type: physical iommu type
+ * @__reserved: must be 0
+ * @hw_data_len: length of hw data
+ * @hw_data_ptr: pointer to hw data area
+ */
+struct iommu_device_info {
+	__u32 size;
+	__u32 flags;
+	__u32 dev_id;
+	__u32 out_iommu_type;
+	__u32 __reserved;
+	__u32 out_data_len;
+	__aligned_u64 out_data_ptr;
+};
+#define IOMMU_DEVICE_GET_INFO _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DEVICE_GET_INFO)
+
+/**
+ * struct iommu_hwpt_intel_vtd - Intel VT-d specific hwpt data
+ *
+ * @flags:	VT-d page table entry attributes
+ * @s1_pgtbl: 	the stage1 (a.k.a user managed page table) pointer.
+ *		This pointer should be subjected to stage2 translation.
+ * @pat:	Page attribute table data to compute effective memory type
+ * @emt:	Extended memory type
+ * @addr_width: the input address width of VT-d page table
+ * @__reserved: Must be 0
+ */
+struct iommu_hwpt_intel_vtd {
+#define IOMMU_VTD_PGTBL_SRE	(1 << 0) /* supervisor request */
+#define IOMMU_VTD_PGTBL_EAFE	(1 << 1) /* extended access enable */
+#define IOMMU_VTD_PGTBL_PCD	(1 << 2) /* page-level cache disable */
+#define IOMMU_VTD_PGTBL_PWT	(1 << 3) /* page-level write through */
+#define IOMMU_VTD_PGTBL_EMTE	(1 << 4) /* extended mem type enable */
+#define IOMMU_VTD_PGTBL_CD	(1 << 5) /* PASID-level cache disable */
+#define IOMMU_VTD_PGTBL_WPE	(1 << 6) /* Write protect enable */
+#define IOMMU_VTD_PGTBL_LAST	(1 << 7)
+	__u64 flags;
+	__u64 s1_pgtbl;
+	__u32 pat;
+	__u32 emt;
+	__u32 addr_width;
+	__u32 __reserved;
+};
+
+enum iommu_hwpt_data_type {
+	IOMMU_HWPT_DATA_NONE = 0,
+	IOMMU_HWPT_DATA_INTEL_VTD,
+};
+
+/**
+ * struct iommu_hwpt_alloc - ioctl(IOMMU_HWPT_ALLOC)
+ * @size: sizeof(struct iommu_hwpt_alloc)
+ * @flags: indicates the special use of the hwpt
+ * @dev_id: the device to allocate this hwpt for
+ * @parent_id: the parent of this hwpt (flag dependent)
+ *     +==========================+==================================+
+ *     | Flags                    | parent_id                        |
+ *     +--------------------------+----------------------------------+
+ *     | IOMMU_HWPT_FLAG_NESTING  | Parent hwpt_id                   |
+ *     +--------------------------+----------------------------------+
+ *     | Otherwise                | IOAS ID                          |
+ *     +==========================+==================================+
+ * @data_type: the type of the user data
+ * @data_len: the legnth of the type specific data
+ * @data_uptr: user pointer of the type specific data
+ * @out_hwpt_id: output hwpt ID for the allocated object
+ * @__reserved: must be 0
+ *
+ * Allocate a hardware page table for userspace
+ */
+struct iommu_hwpt_alloc {
+	__u32 size;
+#define IOMMU_HWPT_FLAG_NESTING		(1 << 0)
+	__u32 flags;
+	__u32 dev_id;
+	__u32 parent_id;
+	__u32 data_type;
+	__u32 data_len;
+	__aligned_u64 data_uptr;
+	__u32 out_hwpt_id;
+	__u32 __reserved;
+};
+#define IOMMU_HWPT_ALLOC _IO(IOMMUFD_TYPE, IOMMUFD_CMD_HWPT_ALLOC)
+
+/* defines the granularity of the invalidation */
+enum iommu_inv_granularity {
+	IOMMU_INV_GRANU_DOMAIN,	/* domain-selective invalidation */
+	IOMMU_INV_GRANU_PASID,	/* PASID-selective invalidation */
+	IOMMU_INV_GRANU_ADDR,	/* page-selective invalidation */
+	IOMMU_INV_GRANU_NR,	/* number of invalidation granularities */
+};
+
+/**
+ * struct iommu_inv_addr_info - Address Selective Invalidation Structure
+ *
+ * @flags: indicates the granularity of the address-selective invalidation
+ * - If the PASID bit is set, the @pasid field is populated and the invalidation
+ *   relates to cache entries tagged with this PASID and matching the address
+ *   range.
+ * - If ARCHID bit is set, @archid is populated and the invalidation relates
+ *   to cache entries tagged with this architecture specific ID and matching
+ *   the address range.
+ * - Both PASID and ARCHID can be set as they may tag different caches.
+ * - If neither PASID or ARCHID is set, global addr invalidation applies.
+ * - The LEAF flag indicates whether only the leaf PTE caching needs to be
+ *   invalidated and other paging structure caches can be preserved.
+ * @pasid: process address space ID
+ * @archid: architecture-specific ID
+ * @addr: first stage/level input address
+ * @granule_size: page/block size of the mapping in bytes
+ * @nb_granules: number of contiguous granules to be invalidated
+ */
+struct iommu_inv_addr_info {
+#define IOMMU_INV_ADDR_FLAGS_PASID	(1 << 0)
+#define IOMMU_INV_ADDR_FLAGS_ARCHID	(1 << 1)
+#define IOMMU_INV_ADDR_FLAGS_LEAF	(1 << 2)
+	__u32	flags;
+	__u32	archid;
+	__u64	pasid;
+	__u64	addr;
+	__u64	granule_size;
+	__u64	nb_granules;
+};
+
+/**
+ * struct iommu_inv_pasid_info - PASID Selective Invalidation Structure
+ *
+ * @flags: indicates the granularity of the PASID-selective invalidation
+ * - If the PASID bit is set, the @pasid field is populated and the invalidation
+ *   relates to cache entries tagged with this PASID and matching the address
+ *   range.
+ * - If the ARCHID bit is set, the @archid is populated and the invalidation
+ *   relates to cache entries tagged with this architecture specific ID and
+ *   matching the address range.
+ * - Both PASID and ARCHID can be set as they may tag different caches.
+ * - At least one of PASID or ARCHID must be set.
+ * @pasid: process address space ID
+ * @archid: architecture-specific ID
+ */
+struct iommu_inv_pasid_info {
+#define IOMMU_INV_PASID_FLAGS_PASID	(1 << 0)
+#define IOMMU_INV_PASID_FLAGS_ARCHID	(1 << 1)
+	__u32	flags;
+	__u32	archid;
+	__u64	pasid;
+};
+
+/**
+ * struct iommu_hwpt_invalidate_s1_cache - ioctl(IOMMU_HWPT_INVAL_S1_CACHE)
+ * @size: sizeof(struct iommu_hwpt_invalidate_s1_cache)
+ * @flags: Must be 0
+ * @hwpt_id: hwpt ID of target hardware page table for the invalidation
+ * @cache: bitfield that allows to select which caches to invalidate
+ * @granularity: defines the lowest granularity used for the invalidation:
+ *     domain > PASID > addr
+ * @padding: reserved for future use (should be zero)
+ * @pasid_info: invalidation data when @granularity is %IOMMU_INV_GRANU_PASID
+ * @addr_info: invalidation data when @granularity is %IOMMU_INV_GRANU_ADDR
+ *
+ * Not all the combinations of cache/granularity are valid:
+ *
+ * +--------------+---------------+---------------+---------------+
+ * | type /       |   DEV_IOTLB   |     IOTLB     |      PASID    |
+ * | granularity  |               |               |      cache    |
+ * +==============+===============+===============+===============+
+ * | DOMAIN       |       N/A     |       Y       |       Y       |
+ * +--------------+---------------+---------------+---------------+
+ * | PASID        |       Y       |       Y       |       Y       |
+ * +--------------+---------------+---------------+---------------+
+ * | ADDR         |       Y       |       Y       |       N/A     |
+ * +--------------+---------------+---------------+---------------+
+ *
+ * Invalidations by %IOMMU_INV_GRANU_DOMAIN don't take any argument other than
+ * @version and @cache.
+ *
+ * If multiple cache types are invalidated simultaneously, they all
+ * must support the used granularity.
+ */
+struct iommu_cache_invalidate_info {
+#define IOMMU_CACHE_INVALIDATE_INFO_VERSION_1 1
+	__u32	version;
+/* IOMMU paging structure cache */
+#define IOMMU_CACHE_INV_TYPE_IOTLB	(1 << 0) /* IOMMU IOTLB */
+#define IOMMU_CACHE_INV_TYPE_DEV_IOTLB	(1 << 1) /* Device IOTLB */
+#define IOMMU_CACHE_INV_TYPE_PASID	(1 << 2) /* PASID cache */
+#define IOMMU_CACHE_INV_TYPE_NR		(3)
+	__u8	cache;
+	__u8	granularity;
+	__u8	padding[6];
+	union {
+		struct iommu_inv_pasid_info pasid_info;
+		struct iommu_inv_addr_info addr_info;
+	} granu;
+};
+
+struct iommu_hwpt_invalidate_s1_cache {
+	__u32 size;
+	__u32 flags;
+	__u32 hwpt_id;
+	struct iommu_cache_invalidate_info info;
+};
+#define IOMMU_HWPT_INVAL_S1_CACHE _IO(IOMMUFD_TYPE, IOMMUFD_CMD_HWPT_INVAL_S1_CACHE)
+
 #endif
