@@ -877,6 +877,7 @@ static const struct iommu_ops ipmmu_ops = {
 	.pgsize_bitmap = SZ_1G | SZ_2M | SZ_4K,
 	.of_xlate = ipmmu_of_xlate,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.iommu_ops	= &ipmmu_ops,
 		.attach_dev	= ipmmu_attach_device,
 		.detach_dev	= ipmmu_detach_device,
 		.map		= ipmmu_map,

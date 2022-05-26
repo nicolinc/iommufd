@@ -1963,6 +1963,10 @@ static int __iommu_attach_device(struct iommu_domain *domain,
 {
 	int ret;
 
+	/* Ensure the device was probe'd onto the same driver as the domain */
+	if (dev->bus->iommu_ops != domain->ops->iommu_ops)
+		return -ENODEV;
+
 	if (unlikely(domain->ops->attach_dev == NULL))
 		return -ENODEV;
 
