@@ -1017,6 +1017,7 @@ static struct iommu_ops viommu_ops = {
 	.of_xlate		= viommu_of_xlate,
 	.owner			= THIS_MODULE,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.iommu_ops		= &viommu_ops,
 		.attach_dev		= viommu_attach_dev,
 		.map			= viommu_map,
 		.unmap			= viommu_unmap,

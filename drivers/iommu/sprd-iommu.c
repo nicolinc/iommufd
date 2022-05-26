@@ -423,6 +423,7 @@ static const struct iommu_ops sprd_iommu_ops = {
 	.pgsize_bitmap	= ~0UL << SPRD_IOMMU_PAGE_SHIFT,
 	.owner		= THIS_MODULE,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.iommu_ops	= &sprd_iommu_ops,
 		.attach_dev	= sprd_iommu_attach_device,
 		.detach_dev	= sprd_iommu_detach_device,
 		.map		= sprd_iommu_map,
