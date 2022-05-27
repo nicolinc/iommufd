@@ -2155,164 +2155,82 @@ static int vfio_iommu_domain_alloc(struct device *dev, void *data)
 	return 1; /* Don't iterate */
 }
 
-static int vfio_iommu_type1_attach_group(void *iommu_data,
-		struct iommu_group *iommu_group, enum vfio_group_type type)
+static struct vfio_domain *
+vfio_iommu_alloc_attach_domain(struct vfio_iommu *iommu,
+			       struct vfio_iommu_group *group,
+			       struct list_head *group_resv_regions)
 {
-	struct vfio_iommu *iommu = iommu_data;
-	struct vfio_iommu_group *group;
-	struct vfio_domain *domain, *d;
-	bool resv_msi, msi_remap;
-	phys_addr_t resv_msi_base = 0;
-	struct iommu_domain_geometry *geo;
-	LIST_HEAD(iova_copy);
-	LIST_HEAD(group_resv_regions);
-	int ret = -EINVAL;
+	struct iommu_domain *new_domain;
+	struct vfio_domain *domain;
+	phys_addr_t resv_msi_base;
+	int ret = 0;
 
-	mutex_lock(&iommu->lock);
-
-	/* Check for duplicates */
-	if (vfio_iommu_find_iommu_group(iommu, iommu_group))
-		goto out_unlock;
-
-	ret = -ENOMEM;
-	group = kzalloc(sizeof(*group), GFP_KERNEL);
-	if (!group)
-		goto out_unlock;
-	group->iommu_group = iommu_group;
-
-	if (type == VFIO_EMULATED_IOMMU) {
-		list_add(&group->next, &iommu->emulated_iommu_groups);
-		/*
-		 * An emulated IOMMU group cannot dirty memory directly, it can
-		 * only use interfaces that provide dirty tracking.
-		 * The iommu scope can only be promoted with the addition of a
-		 * dirty tracking group.
-		 */
-		group->pinned_page_dirty_scope = true;
-		ret = 0;
-		goto out_unlock;
+	/* Try to match an existing compatible domain */
+	list_for_each_entry (domain, &iommu->domain_list, next) {
+		ret = iommu_attach_group(domain->domain, group->iommu_group);
+		/* -EMEDIUMTYPE means an incompatible domain, so try next one */
+		if (ret == -EMEDIUMTYPE)
+			continue;
+		if (ret)
+			return ERR_PTR(ret);
+		goto done;
 	}
-
-	ret = -ENOMEM;
-	domain = kzalloc(sizeof(*domain), GFP_KERNEL);
-	if (!domain)
-		goto out_free_group;
 
 	/*
 	 * Going via the iommu_group iterator avoids races, and trivially gives
 	 * us a representative device for the IOMMU API call. We don't actually
 	 * want to iterate beyond the first device (if any).
 	 */
-	ret = -EIO;
-	iommu_group_for_each_dev(iommu_group, &domain->domain,
+	iommu_group_for_each_dev(group->iommu_group, &new_domain,
 				 vfio_iommu_domain_alloc);
-	if (!domain->domain)
-		goto out_free_domain;
+	if (!new_domain)
+		return ERR_PTR(-EIO);
 
 	if (iommu->nesting) {
-		ret = iommu_enable_nesting(domain->domain);
+		ret = iommu_enable_nesting(new_domain);
 		if (ret)
-			goto out_domain;
+			goto out_free_iommu_domain;
 	}
 
-	ret = iommu_attach_group(domain->domain, group->iommu_group);
+	ret = iommu_attach_group(new_domain, group->iommu_group);
 	if (ret)
-		goto out_domain;
+		goto out_free_iommu_domain;
 
-	/* Get aperture info */
-	geo = &domain->domain->geometry;
-	if (vfio_iommu_aper_conflict(iommu, geo->aperture_start,
-				     geo->aperture_end)) {
-		ret = -EINVAL;
-		goto out_detach;
-	}
-
-	ret = iommu_get_group_resv_regions(iommu_group, &group_resv_regions);
-	if (ret)
-		goto out_detach;
-
-	if (vfio_iommu_resv_conflict(iommu, &group_resv_regions)) {
-		ret = -EINVAL;
+	domain = kzalloc(sizeof(*domain), GFP_KERNEL);
+	if (!domain) {
+		ret = -ENOMEM;
 		goto out_detach;
 	}
 
-	/*
-	 * We don't want to work on the original iova list as the list
-	 * gets modified and in case of failure we have to retain the
-	 * original list. Get a copy here.
-	 */
-	ret = vfio_iommu_iova_get_copy(iommu, &iova_copy);
-	if (ret)
-		goto out_detach;
-
-	ret = vfio_iommu_aper_resize(&iova_copy, geo->aperture_start,
-				     geo->aperture_end);
-	if (ret)
-		goto out_detach;
-
-	ret = vfio_iommu_resv_exclude(&iova_copy, &group_resv_regions);
-	if (ret)
-		goto out_detach;
-
-	resv_msi = vfio_iommu_has_sw_msi(&group_resv_regions, &resv_msi_base);
-
-	INIT_LIST_HEAD(&domain->group_list);
-	list_add(&group->next, &domain->group_list);
-
-	msi_remap = irq_domain_check_msi_remap() ||
-		    iommu_group_for_each_dev(iommu_group, (void *)IOMMU_CAP_INTR_REMAP,
-					     vfio_iommu_device_capable);
-
-	if (!allow_unsafe_interrupts && !msi_remap) {
-		pr_warn("%s: No interrupt remapping support.  Use the module param \"allow_unsafe_interrupts\" to enable VFIO IOMMU support on this platform\n",
-		       __func__);
-		ret = -EPERM;
-		goto out_detach;
-	}
+	domain->domain = new_domain;
+	vfio_test_domain_fgsp(domain);
 
 	/*
 	 * If the IOMMU can block non-coherent operations (ie PCIe TLPs with
 	 * no-snoop set) then VFIO always turns this feature on because on Intel
 	 * platforms it optimizes KVM to disable wbinvd emulation.
 	 */
-	if (domain->domain->ops->enforce_cache_coherency)
+	if (new_domain->ops->enforce_cache_coherency)
 		domain->enforce_cache_coherency =
-			domain->domain->ops->enforce_cache_coherency(
-				domain->domain);
-
-	/* Try to match an existing compatible domain */
-	list_for_each_entry(d, &iommu->domain_list, next) {
-		iommu_detach_group(domain->domain, group->iommu_group);
-		if (!iommu_attach_group(d->domain, group->iommu_group)) {
-			list_add(&group->next, &d->group_list);
-			iommu_domain_free(domain->domain);
-			kfree(domain);
-			goto done;
-		}
-
-		ret = iommu_attach_group(domain->domain,  group->iommu_group);
-		if (ret)
-			goto out_domain;
-	}
-
-	vfio_test_domain_fgsp(domain);
+			new_domain->ops->enforce_cache_coherency(new_domain);
 
 	/* replay mappings on new domains */
 	ret = vfio_iommu_replay(iommu, domain);
 	if (ret)
-		goto out_detach;
+		goto out_free_domain;
 
-	if (resv_msi) {
+	if (vfio_iommu_has_sw_msi(group_resv_regions, &resv_msi_base)) {
 		ret = iommu_get_msi_cookie(domain->domain, resv_msi_base);
 		if (ret && ret != -ENODEV)
-			goto out_detach;
+			goto out_free_domain;
 	}
 
+	INIT_LIST_HEAD(&domain->group_list);
 	list_add(&domain->next, &iommu->domain_list);
 	vfio_update_pgsize_bitmap(iommu);
+
 done:
-	/* Delete the old one and insert new iova list */
-	vfio_iommu_iova_insert_copy(iommu, &iova_copy);
+	list_add(&group->next, &domain->group_list);
 
 	/*
 	 * An iommu backed group can dirty memory directly and therefore
@@ -2320,24 +2238,16 @@ done:
 	 * capable via the page pinning interface.
 	 */
 	iommu->num_non_pinned_groups++;
-	mutex_unlock(&iommu->lock);
-	vfio_iommu_resv_free(&group_resv_regions);
 
-	return 0;
+	return domain;
 
-out_detach:
-	iommu_detach_group(domain->domain, group->iommu_group);
-out_domain:
-	iommu_domain_free(domain->domain);
-	vfio_iommu_iova_free(&iova_copy);
-	vfio_iommu_resv_free(&group_resv_regions);
 out_free_domain:
 	kfree(domain);
-out_free_group:
-	kfree(group);
-out_unlock:
-	mutex_unlock(&iommu->lock);
-	return ret;
+out_detach:
+	iommu_detach_group(new_domain, group->iommu_group);
+out_free_iommu_domain:
+	iommu_domain_free(new_domain);
+	return ERR_PTR(ret);
 }
 
 static void vfio_iommu_unmap_unpin_all(struct vfio_iommu *iommu)
@@ -2369,6 +2279,155 @@ static void vfio_iommu_unmap_unpin_reaccount(struct vfio_iommu *iommu)
 		}
 		vfio_lock_acct(dma, locked - unlocked, true);
 	}
+}
+
+static void vfio_iommu_detach_destroy_domain(struct vfio_domain *domain,
+					     struct vfio_iommu *iommu,
+					     struct vfio_iommu_group *group)
+{
+	iommu_detach_group(domain->domain, group->iommu_group);
+	list_del(&group->next);
+	if (!list_empty(&domain->group_list))
+		goto out_dirty;
+
+	/*
+	 * Group ownership provides privilege, if the group list is empty, the
+	 * domain goes away. If it's the last domain with iommu and external
+	 * domain doesn't exist, then all the mappings go away too. If it's the
+	 * last domain with iommu and external domain exist, update accounting
+	 */
+	if (list_is_singular(&iommu->domain_list)) {
+		if (list_empty(&iommu->emulated_iommu_groups)) {
+			WARN_ON(iommu->notifier.head);
+			vfio_iommu_unmap_unpin_all(iommu);
+		} else {
+			vfio_iommu_unmap_unpin_reaccount(iommu);
+		}
+	}
+	iommu_domain_free(domain->domain);
+	list_del(&domain->next);
+	kfree(domain);
+	vfio_update_pgsize_bitmap(iommu);
+
+out_dirty:
+	/*
+	 * Removal of a group without dirty tracking may allow the iommu scope
+	 * to be promoted.
+	 */
+	if (!group->pinned_page_dirty_scope) {
+		iommu->num_non_pinned_groups--;
+		if (iommu->dirty_page_tracking)
+			vfio_iommu_populate_bitmap_full(iommu);
+	}
+}
+
+static int vfio_iommu_type1_attach_group(void *iommu_data,
+		struct iommu_group *iommu_group, enum vfio_group_type type)
+{
+	struct vfio_iommu *iommu = iommu_data;
+	struct vfio_iommu_group *group;
+	struct vfio_domain *domain;
+	bool msi_remap;
+	struct iommu_domain_geometry *geo;
+	LIST_HEAD(iova_copy);
+	LIST_HEAD(group_resv_regions);
+	int ret = -EINVAL;
+
+	mutex_lock(&iommu->lock);
+
+	/* Check for duplicates */
+	if (vfio_iommu_find_iommu_group(iommu, iommu_group))
+		goto out_unlock;
+
+	ret = -ENOMEM;
+	group = kzalloc(sizeof(*group), GFP_KERNEL);
+	if (!group)
+		goto out_unlock;
+	group->iommu_group = iommu_group;
+
+	if (type == VFIO_EMULATED_IOMMU) {
+		list_add(&group->next, &iommu->emulated_iommu_groups);
+		/*
+		 * An emulated IOMMU group cannot dirty memory directly, it can
+		 * only use interfaces that provide dirty tracking.
+		 * The iommu scope can only be promoted with the addition of a
+		 * dirty tracking group.
+		 */
+		group->pinned_page_dirty_scope = true;
+		ret = 0;
+		goto out_unlock;
+	}
+
+	ret = iommu_get_group_resv_regions(iommu_group, &group_resv_regions);
+	if (ret)
+		goto out_free_group;
+
+	domain = vfio_iommu_alloc_attach_domain(iommu, group,
+						&group_resv_regions);
+	if (IS_ERR(domain)) {
+		ret = PTR_ERR(domain);
+		goto out_free_group;
+	}
+
+	/* Get aperture info */
+	geo = &domain->domain->geometry;
+	if (vfio_iommu_aper_conflict(iommu, geo->aperture_start,
+				     geo->aperture_end)) {
+		ret = -EINVAL;
+		goto out_detach;
+	}
+
+	if (vfio_iommu_resv_conflict(iommu, &group_resv_regions)) {
+		ret = -EINVAL;
+		goto out_detach;
+	}
+
+	/*
+	 * We don't want to work on the original iova list as the list
+	 * gets modified and in case of failure we have to retain the
+	 * original list. Get a copy here.
+	 */
+	ret = vfio_iommu_iova_get_copy(iommu, &iova_copy);
+	if (ret)
+		goto out_detach;
+
+	ret = vfio_iommu_aper_resize(&iova_copy, geo->aperture_start,
+				     geo->aperture_end);
+	if (ret)
+		goto out_detach;
+
+	ret = vfio_iommu_resv_exclude(&iova_copy, &group_resv_regions);
+	if (ret)
+		goto out_detach;
+
+	msi_remap = irq_domain_check_msi_remap() ||
+		    iommu_group_for_each_dev(iommu_group, (void *)IOMMU_CAP_INTR_REMAP,
+					     vfio_iommu_device_capable);
+
+	if (!allow_unsafe_interrupts && !msi_remap) {
+		pr_warn("%s: No interrupt remapping support.  Use the module param \"allow_unsafe_interrupts\" to enable VFIO IOMMU support on this platform\n",
+		       __func__);
+		ret = -EPERM;
+		goto out_detach;
+	}
+
+	/* Delete the old one and insert new iova list */
+	vfio_iommu_iova_insert_copy(iommu, &iova_copy);
+
+	mutex_unlock(&iommu->lock);
+	vfio_iommu_resv_free(&group_resv_regions);
+
+	return 0;
+
+out_detach:
+	vfio_iommu_detach_destroy_domain(domain, iommu, group);
+out_free_group:
+	kfree(group);
+out_unlock:
+	mutex_unlock(&iommu->lock);
+	vfio_iommu_iova_free(&iova_copy);
+	vfio_iommu_resv_free(&group_resv_regions);
+	return ret;
 }
 
 /*
@@ -2485,44 +2544,12 @@ static void vfio_iommu_type1_detach_group(void *iommu_data,
 		group = find_iommu_group(domain, iommu_group);
 		if (!group)
 			continue;
-
-		iommu_detach_group(domain->domain, group->iommu_group);
-		list_del(&group->next);
-		/*
-		 * Group ownership provides privilege, if the group list is
-		 * empty, the domain goes away. If it's the last domain with
-		 * iommu and external domain doesn't exist, then all the
-		 * mappings go away too. If it's the last domain with iommu and
-		 * external domain exist, update accounting
-		 */
-		if (list_empty(&domain->group_list)) {
-			if (list_is_singular(&iommu->domain_list)) {
-				if (list_empty(&iommu->emulated_iommu_groups)) {
-					WARN_ON(iommu->notifier.head);
-					vfio_iommu_unmap_unpin_all(iommu);
-				} else {
-					vfio_iommu_unmap_unpin_reaccount(iommu);
-				}
-			}
-			iommu_domain_free(domain->domain);
-			list_del(&domain->next);
-			kfree(domain);
-			vfio_iommu_aper_expand(iommu, &iova_copy);
-			vfio_update_pgsize_bitmap(iommu);
-		}
-		/*
-		 * Removal of a group without dirty tracking may allow
-		 * the iommu scope to be promoted.
-		 */
-		if (!group->pinned_page_dirty_scope) {
-			iommu->num_non_pinned_groups--;
-			if (iommu->dirty_page_tracking)
-				vfio_iommu_populate_bitmap_full(iommu);
-		}
+		vfio_iommu_detach_destroy_domain(domain, iommu, group);
 		kfree(group);
 		break;
 	}
 
+	vfio_iommu_aper_expand(iommu, &iova_copy);
 	if (!vfio_iommu_resv_refresh(iommu, &iova_copy))
 		vfio_iommu_iova_insert_copy(iommu, &iova_copy);
 	else
