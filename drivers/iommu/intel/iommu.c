@@ -4323,7 +4323,7 @@ static int prepare_domain_attach_device(struct iommu_domain *domain,
 		return -ENODEV;
 
 	if (dmar_domain->force_snooping && !ecap_sc_support(iommu->ecap))
-		return -EOPNOTSUPP;
+		return -EMEDIUMTYPE;
 
 	/* check if this iommu agaw is sufficient for max mapped address */
 	addr_width = agaw_to_width(iommu->agaw);
@@ -4334,7 +4334,7 @@ static int prepare_domain_attach_device(struct iommu_domain *domain,
 		dev_err(dev, "%s: iommu width (%d) is not "
 		        "sufficient for the mapped address (%llx)\n",
 		        __func__, addr_width, dmar_domain->max_addr);
-		return -EFAULT;
+		return -EMEDIUMTYPE;
 	}
 	dmar_domain->gaw = addr_width;
 
@@ -4363,7 +4363,7 @@ static int intel_iommu_attach_device(struct iommu_domain *domain,
 	if (domain->type == IOMMU_DOMAIN_UNMANAGED &&
 	    device_is_rmrr_locked(dev)) {
 		dev_warn(dev, "Device is ineligible for IOMMU domain attach due to platform RMRR requirement.  Contact your platform vendor.\n");
-		return -EPERM;
+		return -EMEDIUMTYPE;
 	}
 
 	/* normally dev is not mapped */

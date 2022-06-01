@@ -386,7 +386,7 @@ static int qcom_iommu_attach_dev(struct iommu_domain *domain, struct device *dev
 			"attached to domain on IOMMU %s\n",
 			dev_name(qcom_domain->iommu->dev),
 			dev_name(qcom_iommu->dev));
-		return -EINVAL;
+		return -EMEDIUMTYPE;
 	}
 
 	return 0;
