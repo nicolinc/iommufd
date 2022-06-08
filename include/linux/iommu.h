@@ -15,6 +15,7 @@
 #include <linux/of.h>
 #include <linux/ioasid.h>
 #include <uapi/linux/iommu.h>
+#include <uapi/linux/iommufd.h>
 
 #define IOMMU_READ	(1 << 0)
 #define IOMMU_WRITE	(1 << 1)
@@ -223,6 +224,7 @@ struct iommu_iotlb_gather {
 /**
  * struct iommu_ops - iommu ops and capabilities
  * @capable: check capability
+ * @hw_info: IOMMU hardware capabilities
  * @domain_alloc: allocate iommu domain
  * @probe_device: Add device to iommu driver handling
  * @release_device: Remove device from iommu driver handling
@@ -249,6 +251,7 @@ struct iommu_iotlb_gather {
  */
 struct iommu_ops {
 	bool (*capable)(struct device *dev, enum iommu_cap);
+	int (*hw_info)(struct device *dev, void *data, size_t length);
 
 	/* Domain allocation and freeing by the iommu driver */
 	struct iommu_domain *(*domain_alloc)(unsigned iommu_domain_type);
@@ -276,6 +279,7 @@ struct iommu_ops {
 	void (*remove_dev_pasid)(struct device *dev, ioasid_t pasid);
 
 	const struct iommu_domain_ops *default_domain_ops;
+	enum iommu_device_data_type driver_type;
 	unsigned long pgsize_bitmap;
 	struct module *owner;
 };
@@ -414,6 +418,9 @@ struct dev_iommu {
 	void				*priv;
 	u32				max_pasids;
 };
+
+int iommu_get_hw_info(struct device *dev, enum iommu_device_data_type type,
+		      void *data, size_t length);
 
 int iommu_device_register(struct iommu_device *iommu,
 			  const struct iommu_ops *ops,

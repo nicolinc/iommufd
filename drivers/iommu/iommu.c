@@ -3425,3 +3425,30 @@ struct iommu_domain *iommu_sva_domain_alloc(struct device *dev,
 
 	return domain;
 }
+
+/**
+ * iommu_get_hw_info - get hardware information of the IOMMU for a device
+ * @dev - the device for which iommu information is queried
+ * @type - the type of IOMMU hardware
+ * @data - data buffer for the returned information
+ * @length - the length of the data buffer
+ *
+ * Return 0 on success with the IOMMU hardware information stored in the data
+ * buffer. Otherwise, an error number.
+ */
+int iommu_get_hw_info(struct device *dev, enum iommu_device_data_type type,
+		      void *data, size_t length)
+{
+	const struct iommu_ops *ops;
+
+	if (!dev->iommu || !dev->iommu->iommu_dev)
+		return -ENODEV;
+
+	ops = dev_iommu_ops(dev);
+
+	if (!ops->hw_info || type != ops->driver_type || !data)
+		return -EINVAL;
+
+	return ops->hw_info(dev, data, length);
+}
+EXPORT_SYMBOL_NS_GPL(iommu_get_hw_info, IOMMUFD_INTERNAL);
