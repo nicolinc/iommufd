@@ -252,6 +252,7 @@ union iommu_domain_user_data {
 union iommu_cache_invalidate_user_data {
 	struct iommu_hwpt_vtd_s1_invalidate vtd;
 	struct iommu_hwpt_vtd_s1_invalidate_desc req_vtd;
+	struct iommu_hwpt_arm_smmuv3_invalidate smmuv3;
 };
 
 /**
