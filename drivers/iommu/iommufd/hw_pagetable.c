@@ -448,6 +448,7 @@ out_put_ioas:
 
 static const size_t iommufd_user_data_len[] = {
 	[IOMMU_USER_INTEL_VTD] = sizeof(struct iommu_user_intel_vtd),
+	[IOMMU_USER_ARM_SMMUV3] = sizeof(struct iommu_user_arm_smmuv3),
 };
 
 int iommufd_alloc_user_hwpt(struct iommufd_ucmd *ucmd)
