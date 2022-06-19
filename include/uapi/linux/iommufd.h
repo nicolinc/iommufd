@@ -351,9 +351,41 @@ struct iommu_hwpt_intel_vtd {
 	__u32 __reserved;
 };
 
+/**
+ * struct iommu_hwpt_arm_smmuv3 - ARM SMMUv3 specific hwpt data
+ *
+ * @flags:	page table entry attributes
+ * @format: 	hwpt data format
+ * @config:	stream configuration
+ * @s2vmid:	virtual machine identifier
+ * @__reserved: Must be 0
+ * @s1ctxptr:	stage 1 context descriptor pointer
+ * @s1cdmax:	number of CDs pointed to by s1ContextPtr
+ * @s1fmt:	stage 1 Format
+ * @s1dss:	default substream
+ */
+struct iommu_hwpt_arm_smmuv3 {
+#define IOMMU_SMMU_FLAG_S2		(1 << 0) /* if unset, stage1 */
+#define IOMMU_SMMU_FLAG_VMID		(1 << 1) /* vmid override */
+	__u64 flags;
+#define IOMMU_SMMU_FORMAT_SMMUV3	1
+	__u32 format;
+#define IOMMU_SMMU_CONFIG_TRANSLATE	1
+#define IOMMU_SMMU_CONFIG_BYPASS	2
+#define IOMMU_SMMU_CONFIG_ABORT		3
+	__u32 config;
+	__u32 s2vmid;
+	__u32 __reserved;
+	__u64 s1ctxptr;
+	__u64 s1cdmax;
+	__u64 s1fmt;
+	__u64 s1dss;
+};
+
 enum iommu_hwpt_data_type {
 	IOMMU_HWPT_DATA_NONE = 0,
 	IOMMU_HWPT_DATA_INTEL_VTD,
+	IOMMU_HWPT_DATA_ARM_SMMUV3,
 };
 
 /**
