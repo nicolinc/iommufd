@@ -319,6 +319,21 @@ struct iommu_user_intel_vtd {
 					 IOMMU_VTD_PGTBL_PCD |  \
 					 IOMMU_VTD_PGTBL_PWT)
 
+struct iommu_user_arm_smmuv3 {
+#define IOMMU_SMMU_FORMAT_SMMUV3	1
+	__u32 format;
+	__u32 vmid;
+#define IOMMU_SMMU_CONFIG_TRANSLATE	1
+#define IOMMU_SMMU_CONFIG_BYPASS	2
+#define IOMMU_SMMU_CONFIG_ABORT		3
+	__u32 config;
+	__u32 __reserved;
+	__u64 s1ctxptr;
+	__u64 s1cdmax;
+	__u64 s1fmt;
+	__u64 s1dss;
+};
+
 enum iommu_user_hwpt_type {
 	IOMMU_USER_HWPT_S2 = 0,
 	IOMMU_USER_HWPT_S1 = 1,
