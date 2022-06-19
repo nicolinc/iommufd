@@ -2120,6 +2120,19 @@ static const struct iommu_domain_ops arm_smmu_sva_domain_ops = {
 	.free			= arm_smmu_sva_domain_free,
 };
 
+static int arm_smmu_hw_info(struct device *dev, struct iommu_hw_info *info)
+{
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+
+	if (!master || !master->smmu)
+		return -ENODEV;
+
+	info->type = IOMMU_DRIVER_ARM_V1;
+	/* FIXME Do we need hw_info? */
+
+	return 0;
+}
+
 static struct iommu_domain *arm_smmu_domain_alloc(unsigned type)
 {
 	struct arm_smmu_domain *smmu_domain;
@@ -3193,6 +3206,7 @@ static int arm_smmu_dev_disable_feature(struct device *dev,
 
 static struct iommu_ops arm_smmu_ops = {
 	.capable		= arm_smmu_capable,
+	.hw_info		= arm_smmu_hw_info,
 	.domain_alloc		= arm_smmu_domain_alloc,
 	.nested_domain_alloc	= arm_smmu_nested_domain_alloc,
 	.probe_device		= arm_smmu_probe_device,
