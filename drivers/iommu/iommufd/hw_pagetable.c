@@ -447,6 +447,7 @@ out_put_ioas:
 static const size_t iommufd_hwpt_data_len[] = {
 	[IOMMU_HWPT_DATA_NONE] = 0,
 	[IOMMU_HWPT_DATA_INTEL_VTD] = sizeof(struct iommu_hwpt_intel_vtd),
+	[IOMMU_HWPT_DATA_ARM_SMMUV3] = sizeof(struct iommu_hwpt_arm_smmuv3),
 };
 
 int iommufd_alloc_hwpt(struct iommufd_ucmd *ucmd)
