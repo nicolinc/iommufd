@@ -1959,31 +1959,27 @@ EXPORT_SYMBOL(vfio_pin_pages);
  *		   PFNs should not be greater than VFIO_PIN_PAGES_MAX_ENTRIES.
  * @npage [in]   : count of elements in user_pfn array.  This count should not
  *                 be greater than VFIO_PIN_PAGES_MAX_ENTRIES.
- * Return error or number of pages unpinned.
  */
-int vfio_unpin_pages(struct vfio_device *device, unsigned long *user_pfn,
-		     int npage)
+void vfio_unpin_pages(struct vfio_device *device, unsigned long *user_pfn,
+		      int npage)
 {
 	struct vfio_container *container;
 	struct vfio_iommu_driver *driver;
-	int ret;
 
-	if (!user_pfn || !npage || !vfio_assert_device_open(device))
-		return -EINVAL;
+	if (WARN_ON_ONCE(!user_pfn || !npage || !vfio_assert_device_open(device)))
+		return;
 
-	if (npage > VFIO_PIN_PAGES_MAX_ENTRIES)
-		return -E2BIG;
+	if (WARN_ON_ONCE(npage > VFIO_PIN_PAGES_MAX_ENTRIES))
+		return;
 
 	/* group->container cannot change while a vfio device is open */
 	container = device->group->container;
 	driver = container->iommu_driver;
-	if (likely(driver && driver->ops->unpin_pages))
-		ret = driver->ops->unpin_pages(container->iommu_data, user_pfn,
-					       npage);
-	else
-		ret = -ENOTTY;
 
-	return ret;
+	if (WARN_ON_ONCE(unlikely(!driver || !driver->ops->unpin_pages)))
+		return;
+
+	driver->ops->unpin_pages(container->iommu_data, user_pfn, npage);
 }
 EXPORT_SYMBOL(vfio_unpin_pages);
 

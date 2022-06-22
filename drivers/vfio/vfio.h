@@ -53,7 +53,7 @@ struct vfio_iommu_driver_ops {
 				     unsigned long *user_pfn,
 				     int npage, int prot,
 				     unsigned long *phys_pfn);
-	int		(*unpin_pages)(void *iommu_data,
+	void		(*unpin_pages)(void *iommu_data,
 				       unsigned long *user_pfn, int npage);
 	int		(*register_notifier)(void *iommu_data,
 					     unsigned long *events,
