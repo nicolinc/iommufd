@@ -60,6 +60,10 @@ iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 		goto out_abort;
 	}
 
+	rc = iommu_enable_nesting(hwpt->domain);
+	if (rc)
+		goto out_abort;
+
 	xa_init_flags(&hwpt->devices, XA_FLAGS_ALLOC1 | XA_FLAGS_ACCOUNT);
 	mutex_init(&hwpt->devices_lock);
 	auto_hwpt = &hwpt->auto_hwpt;
