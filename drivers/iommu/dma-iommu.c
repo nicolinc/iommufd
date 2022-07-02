@@ -1600,6 +1600,7 @@ static struct iommu_dma_msi_page *iommu_dma_get_msi_page(struct device *dev,
 
 	if (iommu_map(domain, iova, msi_addr, size, prot))
 		goto out_free_iova;
+	pr_alert("-------%s: %px: iova %llx, msi_addr %llx\n", __func__, domain, (u64)iova, (u64)msi_addr);
 
 	INIT_LIST_HEAD(&msi_page->list);
 	msi_page->phys = msi_addr;

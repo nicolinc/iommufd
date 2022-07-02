@@ -709,11 +709,11 @@ struct arm_smmu_master {
 enum arm_smmu_domain_stage {
 	ARM_SMMU_DOMAIN_S1 = 0,
 	ARM_SMMU_DOMAIN_S2,
-	ARM_SMMU_DOMAIN_NESTED,
 	ARM_SMMU_DOMAIN_BYPASS,
 };
 
 struct arm_smmu_domain {
+	struct arm_smmu_domain		*s2;
 	struct arm_smmu_device		*smmu;
 	struct mutex			init_mutex; /* Protects smmu pointer */
 
@@ -737,6 +737,17 @@ struct arm_smmu_domain {
 static inline struct arm_smmu_domain *to_smmu_domain(struct iommu_domain *dom)
 {
 	return container_of(dom, struct arm_smmu_domain, domain);
+}
+
+static inline struct arm_smmu_s2_cfg *to_s2_cfg(struct arm_smmu_domain *domain)
+{
+	if (!domain)
+		return NULL;
+
+	if (domain->s2)
+		return &domain->s2->s2_cfg;
+
+	return &domain->s2_cfg;
 }
 
 extern struct xarray arm_smmu_asid_xa;

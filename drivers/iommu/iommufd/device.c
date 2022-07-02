@@ -238,10 +238,9 @@ static int iommufd_device_setup_msi(struct iommufd_device *idev,
 	return 0;
 }
 
-static int
-__iommufd_device_attach_kernel_hwpt(struct iommufd_device *idev,
-				    struct iommufd_hw_pagetable *hwpt,
-				    unsigned int flags)
+static int __iommufd_device_setup_msi(struct iommufd_device *idev,
+				      struct iommufd_hw_pagetable *hwpt,
+				      unsigned int flags)
 {
 	phys_addr_t sw_msi_start = 0;
 	int rc;
@@ -258,6 +257,20 @@ __iommufd_device_attach_kernel_hwpt(struct iommufd_device *idev,
 	rc = iommufd_device_setup_msi(idev, hwpt, sw_msi_start, flags);
 	if (rc)
 		iopt_remove_reserved_iova(&hwpt->kernel.ioas->iopt, idev->group);
+
+	return rc;
+}
+
+static int
+__iommufd_device_attach_kernel_hwpt(struct iommufd_device *idev,
+				    struct iommufd_hw_pagetable *hwpt,
+				    unsigned int flags)
+{
+	int rc;
+
+	rc = __iommufd_device_setup_msi(idev, hwpt, flags);
+	if (rc)
+		return rc;
 
 	if (xa_empty(&hwpt->devices)) {
 		rc = iopt_table_add_domain(&hwpt->kernel.ioas->iopt, hwpt->domain);
@@ -346,7 +359,8 @@ out:
 
 static struct iommufd_hwpt_device *
 iommufd_device_attach_s1_hwpt(struct iommufd_device *idev,
-			      struct iommufd_hw_pagetable *hwpt)
+			      struct iommufd_hw_pagetable *hwpt,
+			      unsigned int flags)
 {
 	struct iommufd_hwpt_device *hdev;
 	int rc;
@@ -360,6 +374,11 @@ iommufd_device_attach_s1_hwpt(struct iommufd_device *idev,
 	rc = iommu_attach_device(hwpt->domain, idev->dev);
 	if (rc)
 		goto out_free;
+
+	/* Re-setup MSI in the stage-2 hwpt  */
+	rc = __iommufd_device_setup_msi(idev, hwpt->s1.stage2, flags);
+	if (rc)
+		goto out_detach;
 
 	rc = iommufd_hwpt_device_finalize(hdev);
 	if (rc) {
@@ -412,7 +431,7 @@ int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id,
 	mutex_lock(&hwpt->devices_lock);
 
 	if (hwpt->type == IOMMUFD_HWPT_USER_S1) {
-		hdev = iommufd_device_attach_s1_hwpt(idev, hwpt);
+		hdev = iommufd_device_attach_s1_hwpt(idev, hwpt, flags);
 	} else if (hwpt->type == IOMMUFD_HWPT_KERNEL) {
 		hdev = iommufd_device_attach_kernel_hwpt(idev, hwpt, flags);
 	} else {
