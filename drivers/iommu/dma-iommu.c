@@ -328,12 +328,6 @@ int iommu_get_msi_cookie(struct iommu_domain *domain, dma_addr_t base)
 {
 	struct iommu_dma_cookie *cookie;
 
-	if (domain->type != IOMMU_DOMAIN_UNMANAGED)
-		return -EINVAL;
-
-	if (domain->iova_cookie)
-		return -EEXIST;
-
 	cookie = cookie_alloc(IOMMU_DMA_MSI_COOKIE);
 	if (!cookie)
 		return -ENOMEM;
