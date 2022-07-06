@@ -3044,6 +3044,7 @@ struct iommu_domain *arm_smmu_nested_domain_alloc(struct iommu_domain *s2_domain
 
 	mutex_lock(&smmu_domain->init_mutex);
 	smmu_domain->s2 = s2;
+	smmu_domain->msi_domain = s2_domain;
 
 	switch (smmu->config) {
 	case IOMMU_SMMU_CONFIG_ABORT:
@@ -3230,11 +3231,23 @@ static int arm_smmu_dev_disable_feature(struct device *dev,
 	}
 }
 
+static struct iommu_domain *arm_smmu_get_msi_domain(struct device *dev)
+{
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+	struct arm_smmu_domain *smmu_domain = master->domain;
+
+	if (smmu_domain->msi_domain)
+		return smmu_domain->msi_domain;
+
+	return &smmu_domain->domain;
+}
+
 static struct iommu_ops arm_smmu_ops = {
 	.capable		= arm_smmu_capable,
 	.hw_info		= arm_smmu_hw_info,
 	.domain_alloc		= arm_smmu_domain_alloc,
 	.nested_domain_alloc	= arm_smmu_nested_domain_alloc,
+	.get_msi_domain		= arm_smmu_get_msi_domain,
 	.probe_device		= arm_smmu_probe_device,
 	.release_device		= arm_smmu_release_device,
 	.device_group		= arm_smmu_device_group,

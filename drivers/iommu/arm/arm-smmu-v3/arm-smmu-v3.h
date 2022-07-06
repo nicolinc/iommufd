@@ -727,6 +727,7 @@ struct arm_smmu_domain {
 	bool				abort;
 
 	struct iommu_domain		domain;
+	struct iommu_domain		*msi_domain;
 
 	struct list_head		devices;
 	spinlock_t			devices_lock;
