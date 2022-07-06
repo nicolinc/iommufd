@@ -1282,22 +1282,23 @@ static void arm_smmu_write_strtab_ent(struct arm_smmu_master *master, u32 sid,
 
 	if (smmu_domain) {
 		s1_cfg = &smmu_domain->s1_cfg;
-		s2_cfg = &smmu_domain->s2_cfg;
+		s2_cfg = to_s2_cfg(smmu_domain);
 
 		switch (smmu_domain->stage) {
 		case ARM_SMMU_DOMAIN_S1:
+			/*
+			 * For a nesting domain, its s1_cfg is set in the
+			 * nested_domain_alloc(), while it uses s2->s2_cfg
+			 * that is also set when s2 domain gets allocated.
+			 */
+			if (smmu_domain->domain.type == IOMMU_DOMAIN_NESTING)
+				break;
+
 			s1_cfg->set = true;
 			s2_cfg->set = false;
 			break;
 		case ARM_SMMU_DOMAIN_S2:
 			s1_cfg->set = false;
-			s2_cfg->set = true;
-			break;
-		case ARM_SMMU_DOMAIN_NESTED:
-			/*
-			 * Actual usage of stage 1 depends on nested mode:
-			 * legacy (2d stage only) or true nested mode
-			 */
 			s2_cfg->set = true;
 			break;
 		default:
@@ -1927,6 +1928,7 @@ int arm_smmu_atc_inv_domain(struct arm_smmu_domain *smmu_domain, int ssid,
 static void __arm_smmu_tlb_inv_context(struct arm_smmu_domain *smmu_domain,
 				       int ext_asid)
 {
+	struct arm_smmu_s2_cfg *s2_cfg = to_s2_cfg(smmu_domain);
 	struct arm_smmu_device *smmu = smmu_domain->smmu;
 	struct arm_smmu_cmdq_ent cmd;
 
@@ -1940,13 +1942,13 @@ static void __arm_smmu_tlb_inv_context(struct arm_smmu_domain *smmu_domain,
 	if (ext_asid >= 0) { /* guest stage 1 invalidation */
 		cmd.opcode	= CMDQ_OP_TLBI_NH_ASID;
 		cmd.tlbi.asid	= ext_asid;
-		cmd.tlbi.vmid	= smmu_domain->s2_cfg.vmid;
+		cmd.tlbi.vmid	= s2_cfg->vmid;
 		arm_smmu_cmdq_issue_cmd_with_sync(smmu, &cmd);
 	} else if (smmu_domain->stage == ARM_SMMU_DOMAIN_S1) {
 		arm_smmu_tlb_inv_asid(smmu, smmu_domain->s1_cfg.cd.asid);
 	} else {
 		cmd.opcode	= CMDQ_OP_TLBI_S12_VMALL;
-		cmd.tlbi.vmid	= smmu_domain->s2_cfg.vmid;
+		cmd.tlbi.vmid	= s2_cfg->vmid;
 		arm_smmu_cmdq_issue_cmd_with_sync(smmu, &cmd);
 	}
 	arm_smmu_atc_inv_domain(smmu_domain, 0, 0, 0);
@@ -2025,6 +2027,7 @@ arm_smmu_tlb_inv_range_domain(unsigned long iova, size_t size,
 			      size_t granule, bool leaf, int ext_asid,
 			      struct arm_smmu_domain *smmu_domain)
 {
+	struct arm_smmu_s2_cfg *s2_cfg = to_s2_cfg(smmu_domain);
 	struct arm_smmu_cmdq_ent cmd = {
 		.tlbi = {
 			.leaf	= leaf,
@@ -2039,14 +2042,14 @@ arm_smmu_tlb_inv_range_domain(unsigned long iova, size_t size,
 		 */
 		cmd.opcode	= CMDQ_OP_TLBI_NH_VA;
 		cmd.tlbi.asid	= ext_asid;
-		cmd.tlbi.vmid	= smmu_domain->s2_cfg.vmid;
+		cmd.tlbi.vmid	= s2_cfg->vmid;
 	} else if (smmu_domain->stage == ARM_SMMU_DOMAIN_S1) {
 		cmd.opcode	= smmu_domain->smmu->features & ARM_SMMU_FEAT_E2H ?
 				  CMDQ_OP_TLBI_EL2_VA : CMDQ_OP_TLBI_NH_VA;
 		cmd.tlbi.asid	= smmu_domain->s1_cfg.cd.asid;
 	} else {
 		cmd.opcode	= CMDQ_OP_TLBI_S2_IPA;
-		cmd.tlbi.vmid	= smmu_domain->s2_cfg.vmid;
+		cmd.tlbi.vmid	= s2_cfg->vmid;
 	}
 
 	__arm_smmu_tlb_inv_range(&cmd, iova, size, granule, smmu_domain);
@@ -2319,12 +2322,28 @@ static int arm_smmu_domain_finalise(struct iommu_domain *domain,
 		return 0;
 	}
 
-	if (smmu_domain->stage == ARM_SMMU_DOMAIN_NESTED &&
+	if (domain->type == IOMMU_DOMAIN_NESTING &&
 	    (!(smmu->features & ARM_SMMU_FEAT_TRANS_S1) ||
 	     !(smmu->features & ARM_SMMU_FEAT_TRANS_S2))) {
 		dev_info(smmu_domain->smmu->dev,
 			 "does not implement two stages\n");
 		return -EINVAL;
+	}
+
+	if (domain->type == IOMMU_DOMAIN_NESTING && !smmu_domain->s2) {
+		dev_err(smmu_domain->smmu->dev,
+			"does not have stage-2 domain\n");
+		return -EINVAL;
+	}
+
+	if (domain->type == IOMMU_DOMAIN_NESTING) {
+		/*
+		 * A nested domain is a virtual object for a 2-stage setup:
+		 * its s1 pgtbl is maintained by a guest OS, and its s2 pgtbl
+		 * is hold in its s2 pointer. So no need to allocate anything.
+		 */
+		smmu_domain->stage = ARM_SMMU_DOMAIN_S1;
+		return 0;
 	}
 
 	/* Restrict the stage to what we can actually support */
@@ -2341,7 +2360,6 @@ static int arm_smmu_domain_finalise(struct iommu_domain *domain,
 		fmt = ARM_64_LPAE_S1;
 		finalise_stage_fn = arm_smmu_domain_finalise_s1;
 		break;
-	case ARM_SMMU_DOMAIN_NESTED:
 	case ARM_SMMU_DOMAIN_S2:
 		ias = smmu->ias;
 		oas = smmu->oas;
@@ -2615,7 +2633,7 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 		goto out_unlock;
 	}
 	/* Nested mode is not compatible with MSI HW reserved regions */
-	if (smmu_domain->stage == ARM_SMMU_DOMAIN_NESTED &&
+	if (domain->type == IOMMU_DOMAIN_NESTING &&
 	    arm_smmu_has_hw_msi_resv_region(dev)) {
 		ret = -EINVAL;
 		goto out_unlock;
@@ -2917,7 +2935,7 @@ static int arm_smmu_enable_nesting(struct iommu_domain *domain)
 	if (smmu_domain->smmu)
 		ret = -EPERM;
 	else
-		smmu_domain->stage = ARM_SMMU_DOMAIN_NESTED;
+		smmu_domain->stage = ARM_SMMU_DOMAIN_S2;
 	mutex_unlock(&smmu_domain->init_mutex);
 
 	return ret;
@@ -2956,7 +2974,7 @@ static int arm_smmu_attach_dev_pasid(struct iommu_domain *domain,
 
 	mutex_lock(&smmu_domain->init_mutex);
 
-	if (smmu_domain->stage != ARM_SMMU_DOMAIN_NESTED) {
+	if (domain->type != IOMMU_DOMAIN_NESTING) {
 		mutex_unlock(&smmu_domain->init_mutex);
 		return -EINVAL;
 	}
@@ -2980,7 +2998,7 @@ static void arm_smmu_detach_dev_pasid(struct iommu_domain *domain,
 
 	mutex_lock(&smmu_domain->init_mutex);
 
-	if (smmu_domain->stage != ARM_SMMU_DOMAIN_NESTED) {
+	if (domain->type != IOMMU_DOMAIN_NESTING) {
 		mutex_unlock(&smmu_domain->init_mutex);
 		return;
 	}
@@ -2997,6 +3015,7 @@ struct iommu_domain *arm_smmu_nested_domain_alloc(struct iommu_domain *s2_domain
 						  union iommu_stage1_config *cfg)
 {
 	struct iommu_stage1_config_smmu *smmu = &cfg->smmu;
+	struct arm_smmu_domain *s2 = to_smmu_domain(s2_domain);
 	struct arm_smmu_domain *smmu_domain;
 	struct iommu_domain *domain;
 
@@ -3008,15 +3027,23 @@ struct iommu_domain *arm_smmu_nested_domain_alloc(struct iommu_domain *s2_domain
 	    smmu->config != IOMMU_SMMU_CONFIG_TRANSLATE)
 		return NULL;
 
-	smmu_domain = to_smmu_domain(s2_domain);
-	domain = s2_domain;
+	mutex_lock(&s2->init_mutex);
+	if (s2->stage != ARM_SMMU_DOMAIN_S2) {
+		mutex_unlock(&s2->init_mutex);
+		return NULL;
+	}
+	mutex_unlock(&s2->init_mutex);
+
+	domain = arm_smmu_domain_alloc(IOMMU_DOMAIN_NESTING);
+	if (!domain)
+		return NULL;
+	domain->ops = arm_smmu_ops.default_domain_ops;
+
+	/* smmu_domain is nested stage-1 */
+	smmu_domain = to_smmu_domain(domain);
 
 	mutex_lock(&smmu_domain->init_mutex);
-
-	if (smmu_domain->stage != ARM_SMMU_DOMAIN_NESTED) {
-		domain = NULL;
-		goto unlock;
-	}
+	smmu_domain->s2 = s2;
 
 	switch (smmu->config) {
 	case IOMMU_SMMU_CONFIG_ABORT:
@@ -3038,7 +3065,6 @@ struct iommu_domain *arm_smmu_nested_domain_alloc(struct iommu_domain *s2_domain
 		break;
 	}
 
-unlock:
 	mutex_unlock(&smmu_domain->init_mutex);
 
 	return domain;
@@ -3052,7 +3078,7 @@ arm_smmu_cache_invalidate(struct iommu_domain *domain,
 	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
 	struct arm_smmu_device *smmu = smmu_domain->smmu;
 
-	if (smmu_domain->stage != ARM_SMMU_DOMAIN_NESTED)
+	if (domain->type != IOMMU_DOMAIN_NESTING || !smmu_domain->s2)
 		return -EINVAL;
 
 	if (!smmu)
@@ -3119,7 +3145,7 @@ arm_smmu_cache_invalidate(struct iommu_domain *domain,
 	}
 
 	/* Global S1 invalidation */
-	cmd.tlbi.vmid   = smmu_domain->s2_cfg.vmid;
+	cmd.tlbi.vmid   = smmu_domain->s2->s2_cfg.vmid;
 	arm_smmu_cmdq_issue_cmd_with_sync(smmu, &cmd);
 
 	return 0;
