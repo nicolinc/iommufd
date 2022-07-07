@@ -1408,6 +1408,27 @@ static void arm_smmu_get_ste_used(const struct arm_smmu_ste *ent,
 				    STRTAB_STE_2_S2PTW | STRTAB_STE_2_S2R);
 		used_bits->data[3] |= cpu_to_le64(STRTAB_STE_3_S2TTB_MASK);
 		break;
+	case STRTAB_STE_0_CFG_NESTED:
+		used_bits->data[0] |= cpu_to_le64(STRTAB_STE_0_S1FMT |
+						  STRTAB_STE_0_S1CTXPTR_MASK |
+						  STRTAB_STE_0_S1CDMAX);
+		used_bits->data[1] |=
+			cpu_to_le64(STRTAB_STE_1_S1DSS | STRTAB_STE_1_S1CIR |
+				    STRTAB_STE_1_S1COR | STRTAB_STE_1_S1CSH |
+				    STRTAB_STE_1_S1STALLD | STRTAB_STE_1_STRW);
+		used_bits->data[1] |= cpu_to_le64(STRTAB_STE_1_EATS);
+
+		/* See 13.5 Summary of attribute/permission configuration fields */
+		if (FIELD_GET(STRTAB_STE_1_S1DSS, le64_to_cpu(ent->data[1])) ==
+		    STRTAB_STE_1_S1DSS_BYPASS)
+			used_bits->data[1] |= cpu_to_le64(STRTAB_STE_1_SHCFG);
+
+		used_bits->data[2] |=
+			cpu_to_le64(STRTAB_STE_2_S2VMID | STRTAB_STE_2_VTCR |
+				    STRTAB_STE_2_S2AA64 | STRTAB_STE_2_S2ENDI |
+				    STRTAB_STE_2_S2PTW | STRTAB_STE_2_S2R);
+		used_bits->data[3] |= cpu_to_le64(STRTAB_STE_3_S2TTB_MASK);
+		break;
 
 	default:
 		memset(used_bits, 0xFF, sizeof(*used_bits));
