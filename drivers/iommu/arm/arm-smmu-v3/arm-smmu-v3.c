@@ -1415,6 +1415,8 @@ static void arm_smmu_setup_ste_by_domain(struct arm_smmu_domain *smmu_domain,
 
 	switch (smmu_domain->stage) {
 	case ARM_SMMU_DOMAIN_NESTED:
+		s2_cfg = &smmu_domain->s2->s2_cfg;
+		break;
 	case ARM_SMMU_DOMAIN_S2:
 		s2_cfg = &smmu_domain->s2_cfg;
 		break;
