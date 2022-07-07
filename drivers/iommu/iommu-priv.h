@@ -18,5 +18,6 @@ static inline const struct iommu_ops *dev_iommu_ops(struct device *dev)
 
 extern int iommu_group_replace_domain(struct iommu_group *group,
 				      struct iommu_domain *new_domain);
+extern struct iommu_domain *iommu_get_msi_domain(struct device *dev);
 
 #endif /* __LINUX_IOMMU_PRIV_H */
