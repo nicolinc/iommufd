@@ -198,8 +198,6 @@ static int iommufd_device_setup_msi(struct iommufd_device *idev,
 				    phys_addr_t sw_msi_start,
 				    unsigned int flags)
 {
-	int rc;
-
 	/*
 	 * IOMMU_CAP_INTR_REMAP means that the platform is isolating MSI,
 	 * nothing further to do.
@@ -207,26 +205,9 @@ static int iommufd_device_setup_msi(struct iommufd_device *idev,
 	if (iommu_capable(idev->dev->bus, IOMMU_CAP_INTR_REMAP))
 		return 0;
 
-	/*
-	 * On ARM systems that set the global IRQ_DOMAIN_FLAG_MSI_REMAP every
-	 * allocated iommu_domain will block interrupts by default and this
-	 * special flow is needed to turn them back on.
-	 */
-	if (irq_domain_check_msi_remap()) {
-		if (WARN_ON(!sw_msi_start))
-			return -EPERM;
-		/*
-		 * iommu_get_msi_cookie() can only be called once per domain,
-		 * it returns -EBUSY on later calls.
-		 */
-		if (hwpt->kernel.msi_cookie)
-			return 0;
-		rc = iommu_get_msi_cookie(hwpt->domain, sw_msi_start);
-		if (rc && rc != -ENODEV)
-			return rc;
-		hwpt->kernel.msi_cookie = true;
+	/* On ARM systems, check MSI remapping capability at IRQ domain level */
+	if (irq_domain_check_msi_remap())
 		return 0;
-	}
 
 	/*
 	 * Otherwise the platform has a MSI window that is not isolated. For
