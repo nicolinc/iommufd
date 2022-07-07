@@ -2484,6 +2484,9 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 
 	arm_smmu_enable_ats(master);
 
+	if (domain->type == IOMMU_DOMAIN_UNMANAGED && !domain->iova_cookie)
+		ret = iommu_get_msi_cookie(domain, MSI_IOVA_BASE);
+
 out_unlock:
 	mutex_unlock(&smmu_domain->init_mutex);
 	return ret;

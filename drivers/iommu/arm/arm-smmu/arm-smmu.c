@@ -1191,6 +1191,9 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 	pm_runtime_set_autosuspend_delay(smmu->dev, 20);
 	pm_runtime_use_autosuspend(smmu->dev);
 
+	if (domain->type == IOMMU_DOMAIN_UNMANAGED && !domain->iova_cookie)
+		ret = iommu_get_msi_cookie(domain, MSI_IOVA_BASE);
+
 rpm_put:
 	arm_smmu_rpm_put(smmu);
 	return ret;
