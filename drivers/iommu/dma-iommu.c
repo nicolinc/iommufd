@@ -329,11 +329,13 @@ int iommu_get_msi_cookie(struct iommu_domain *domain, dma_addr_t base)
 {
 	struct iommu_dma_cookie *cookie;
 
-	if (domain->type != IOMMU_DOMAIN_UNMANAGED)
-		return -EINVAL;
-
+	/*
+	 * Return 0 for now to keep VFIO flow unbroken. IOMMU drivers that call
+	 * this function check domain->iova_cookie, so will not be affected.
+	 * Once VFIO is cleaned up, it will be safe to remove this check.
+	 */
 	if (domain->iova_cookie)
-		return -EEXIST;
+		return 0;
 
 	cookie = cookie_alloc(IOMMU_DMA_MSI_COOKIE);
 	if (!cookie)
