@@ -208,6 +208,7 @@
 #define STRTAB_STE_0_CFG_BYPASS		4
 #define STRTAB_STE_0_CFG_S1_TRANS	5
 #define STRTAB_STE_0_CFG_S2_TRANS	6
+#define STRTAB_STE_0_CFG_NESTED		7
 
 #define STRTAB_STE_0_S1FMT		GENMASK_ULL(5, 4)
 #define STRTAB_STE_0_S1FMT_LINEAR	0
@@ -720,6 +721,8 @@ struct arm_smmu_domain {
 		struct arm_smmu_s1_cfg	s1_cfg;
 		struct arm_smmu_s2_cfg	s2_cfg;
 	};
+	bool				bypass;
+	bool				abort;
 
 	struct iommu_domain		domain;
 
