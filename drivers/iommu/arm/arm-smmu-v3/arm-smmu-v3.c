@@ -2260,11 +2260,23 @@ static void arm_smmu_domain_free_nested(struct iommu_domain *domain)
 	kfree(smmu_domain);
 }
 
+static struct iommu_domain *
+arm_smmu_get_msi_mapping_domain(struct iommu_domain *domain)
+{
+	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+
+	if (smmu_domain->s2)
+		return &smmu_domain->s2->domain;
+
+	return domain;
+}
+
 static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev);
 
 static const struct iommu_domain_ops arm_smmu_nested_domain_ops = {
 	.attach_dev = arm_smmu_attach_dev,
 	.free = arm_smmu_domain_free_nested,
+	.get_msi_mapping_domain	= arm_smmu_get_msi_mapping_domain,
 };
 
 struct arm_smmu_domain *arm_smmu_domain_alloc(void)
