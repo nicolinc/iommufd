@@ -39,6 +39,7 @@ enum {
 	IOMMUFD_CMD_DESTROY = IOMMUFD_CMD_BASE,
 	IOMMUFD_CMD_IOAS_ALLOC,
 	IOMMUFD_CMD_IOAS_IOVA_RANGES,
+	IOMMUFD_CMD_IOAS_ALLOW_IOVAS,
 	IOMMUFD_CMD_IOAS_MAP,
 	IOMMUFD_CMD_IOAS_COPY,
 	IOMMUFD_CMD_IOAS_UNMAP,
@@ -108,6 +109,35 @@ struct iommu_ioas_iova_ranges {
 	} out_valid_iovas[];
 };
 #define IOMMU_IOAS_IOVA_RANGES _IO(IOMMUFD_TYPE, IOMMUFD_CMD_IOAS_IOVA_RANGES)
+
+/**
+ * struct iommu_ioas_allow_iovas - ioctl(IOMMU_IOAS_ALLOW_IOVAS)
+ * @size: sizeof(struct iommu_ioas_allow_iovas)
+ * @ioas_id: IOAS ID to allow IOVAs from
+ * @start: First IOVA to allow
+ * @last: Inclusive last IOVA to allow
+ *
+ * Allow a range of IOVAs in an IOAS for kernel-managed IOVA allocations, or
+ * remove all allowed ranges in an IOAS.
+ *
+ * Apart from IOMMU_IOAS_MAP mapping a userspace pointer to a kernel-allocated
+ * IOVA, this ioctl allows limiting the range of IOVAs that the kernel allocator
+ * will allocate in. User space must query the overall available IOVA ranges via
+ * the IOMMU_IOAS_IOVA_RANGES ioctl, and then pass another smaller range within
+ * the overall range using this ioctl, which means that allowing an IOVA out of
+ * the overall range will just fail. If there is no allowed range being defined
+ * using this ioctl, kernel will simply allocate IOVAs within the overall range.
+ *
+ * For removing-all usage, simply pass an empty range, i.e. start > last
+ */
+struct iommu_ioas_allow_iovas {
+	__u32 size;
+	__u32 ioas_id;
+	__aligned_u64 start;
+	__aligned_u64 last;
+};
+#define IOMMU_IOAS_ALLOW_IOVAS \
+	_IO(IOMMUFD_TYPE, IOMMUFD_CMD_IOAS_ALLOW_IOVAS)
 
 /**
  * enum iommufd_ioas_map_flags - Flags for map and copy

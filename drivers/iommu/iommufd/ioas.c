@@ -119,6 +119,34 @@ out_put:
 	return rc;
 }
 
+int iommufd_ioas_allow_iovas(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_ioas_allow_iovas *cmd = ucmd->cmd;
+	struct iommufd_ioas *ioas;
+	struct io_pagetable *iopt;
+	int rc = 0;
+
+	ioas = iommufd_get_ioas(ucmd, cmd->ioas_id);
+	if (IS_ERR(ioas))
+		return PTR_ERR(ioas);
+
+	iopt = &ioas->iopt;
+
+	down_write(&iopt->iova_rwsem);
+	if (cmd->start > cmd->last)
+		iopt_remove_allowed_iova(iopt, 0, ULONG_MAX, iopt);
+	else
+		rc = iopt_allow_iova(iopt, cmd->start, cmd->last, iopt);
+	if (rc)
+		goto out_put;
+
+	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+out_put:
+	up_write(&iopt->iova_rwsem);
+	iommufd_put_object(&ioas->obj);
+	return rc;
+}
+
 static int conv_iommu_prot(u32 map_flags)
 {
 	int iommu_prot;
