@@ -555,9 +555,10 @@ int iopt_reserve_iova(struct io_pagetable *iopt, unsigned long start,
 	return 0;
 }
 
-static void __iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner)
+void __iopt_remove_reserved_iova(struct io_pagetable *iopt, unsigned long start,
+				 unsigned long last, void *owner)
 {
-
+	bool remove_all = start == 0 && last == ULONG_MAX;
 	struct interval_tree_node *node;
 
 	lockdep_assert_held_write(&iopt->iova_rwsem);
@@ -570,6 +571,9 @@ static void __iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner)
 
 		node = interval_tree_iter_next(node, 0, ULONG_MAX);
 
+		if (!remove_all && (node->start != start || node->last != last))
+			continue;
+
 		if (reserved->owner == owner) {
 			interval_tree_remove(&reserved->node,
 					     &iopt->reserved_iova_itree);
@@ -578,10 +582,10 @@ static void __iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner)
 	}
 }
 
-void iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner)
+void iopt_remove_reserved_iova_all(struct io_pagetable *iopt, void *owner)
 {
 	down_write(&iopt->iova_rwsem);
-	__iopt_remove_reserved_iova(iopt, owner);
+	__iopt_remove_reserved_iova(iopt, 0, ULONG_MAX, owner);
 	up_write(&iopt->iova_rwsem);
 }
 
@@ -606,7 +610,7 @@ int iopt_init_table(struct io_pagetable *iopt)
 void iopt_destroy_table(struct io_pagetable *iopt)
 {
 	if (IS_ENABLED(CONFIG_IOMMUFD_TEST))
-		iopt_remove_reserved_iova(iopt, NULL);
+		iopt_remove_reserved_iova_all(iopt, NULL);
 	WARN_ON(!RB_EMPTY_ROOT(&iopt->reserved_iova_itree.rb_root));
 	WARN_ON(!xa_empty(&iopt->domains));
 	WARN_ON(!RB_EMPTY_ROOT(&iopt->area_itree.rb_root));
@@ -826,7 +830,7 @@ int iopt_table_add_domain(struct io_pagetable *iopt,
 out_release:
 	xa_release(&iopt->domains, iopt->next_domain_id);
 out_reserved:
-	__iopt_remove_reserved_iova(iopt, domain);
+	__iopt_remove_reserved_iova(iopt, 0, ULONG_MAX, domain);
 out_unlock:
 	up_write(&iopt->iova_rwsem);
 	up_write(&iopt->domains_rwsem);
@@ -859,7 +863,7 @@ void iopt_table_remove_domain(struct io_pagetable *iopt,
 		xa_store(&iopt->domains, index, iter_domain, GFP_KERNEL);
 
 	iopt_unfill_domain(iopt, domain);
-	__iopt_remove_reserved_iova(iopt, domain);
+	__iopt_remove_reserved_iova(iopt, 0, ULONG_MAX, domain);
 
 	/* Recalculate the iova alignment without the domain */
 	new_iova_alignment = 1;
@@ -915,7 +919,7 @@ int iopt_table_enforce_group_resv_regions(struct io_pagetable *iopt,
 	goto out_free_resv;
 
 out_reserved:
-	__iopt_remove_reserved_iova(iopt, group);
+	__iopt_remove_reserved_iova(iopt, 0, ULONG_MAX, group);
 out_free_resv:
 	list_for_each_entry_safe (resv, tmp, &group_resv_regions, list)
 		kfree(resv);

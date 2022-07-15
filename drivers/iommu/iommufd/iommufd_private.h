@@ -62,7 +62,9 @@ int iopt_table_enforce_group_resv_regions(struct io_pagetable *iopt,
 					  phys_addr_t *sw_msi_start);
 int iopt_reserve_iova(struct io_pagetable *iopt, unsigned long start,
 		      unsigned long last, void *owner);
-void iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner);
+void __iopt_remove_reserved_iova(struct io_pagetable *iopt, unsigned long start,
+				 unsigned long last, void *owner);
+void iopt_remove_reserved_iova_all(struct io_pagetable *iopt, void *owner);
 
 struct iommufd_ctx {
 	struct file *filp;
