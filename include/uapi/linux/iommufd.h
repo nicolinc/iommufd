@@ -39,6 +39,7 @@ enum {
 	IOMMUFD_CMD_DESTROY = IOMMUFD_CMD_BASE,
 	IOMMUFD_CMD_IOAS_ALLOC,
 	IOMMUFD_CMD_IOAS_IOVA_RANGES,
+	IOMMUFD_CMD_IOAS_RESERVE_IOVA_RANGES,
 	IOMMUFD_CMD_IOAS_MAP,
 	IOMMUFD_CMD_IOAS_COPY,
 	IOMMUFD_CMD_IOAS_UNMAP,
@@ -108,6 +109,38 @@ struct iommu_ioas_iova_ranges {
 	} out_valid_iovas[];
 };
 #define IOMMU_IOAS_IOVA_RANGES _IO(IOMMUFD_TYPE, IOMMUFD_CMD_IOAS_IOVA_RANGES)
+
+/**
+ * struct iommu_ioas_reserve_iova_ranges - ioctl(IOMMU_IOAS_RESERVE_IOVA_RANGES)
+ * @size: sizeof(struct iommu_ioas_reserve_iova_ranges)
+ * @ioas_id: IOAS ID to reserve ranges from
+ * @num_iovas: Total number of ranges to reserve in the IOAS
+ * @__reserved: Must be 0
+ * @reserve_iovas: Array of IOVA ranges to reserve. The array length is the
+ *                 smaller of num_iovas or the length implied by size.
+ * @reserve_iovas.start: First IOVA in the range to reserve
+ * @reserve_iovas.last: Inclusive last IOVA in the range to reserve
+ *
+ * Reserve ranges of IOVAs in an IOAS. num_iovas is the total number of ranges
+ * of iovas and the reserve_iovas[] should be pre-allocated by user space. size
+ * should include the allocated flex array for reserve_iovas.
+ *
+ * A part from IOMMU_IOAS_MAP_FIXED_IOVA mapping a userspace pointer to a fixed
+ * IOVA, this ioctl allows reserving IOVAS from non-FIXED_IOVA mappings i.e. a
+ * non-FIXED-IOVA map ioctl will not allocate an IOVA from any reserved range.
+ */
+struct iommu_ioas_reserve_iova_ranges {
+        __u32 size;
+        __u32 ioas_id;
+        __u32 num_iovas;
+        __u32 __reserved;
+	struct iommu_reserve_iovas {
+		__aligned_u64 start;
+		__aligned_u64 last;
+	} reserve_iovas[];
+};
+#define IOMMU_IOAS_RESERVE_IOVA_RANGES \
+	_IO(IOMMUFD_TYPE, IOMMUFD_CMD_IOAS_RESERVE_IOVA_RANGES)
 
 /**
  * enum iommufd_ioas_map_flags - Flags for map and copy

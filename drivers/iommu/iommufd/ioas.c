@@ -121,6 +121,58 @@ out_put:
 	return rc;
 }
 
+int iommufd_ioas_reserve_iova_ranges(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_ioas_reserve_iova_ranges *cmd = ucmd->cmd;
+	struct iommu_reserve_iovas *range = cmd->reserve_iovas;
+	struct iommufd_ioas *ioas;
+	struct io_pagetable *iopt;
+	u32 iovas, max_iovas;
+	int rc;
+
+	if (cmd->__reserved)
+		return -EOPNOTSUPP;
+
+	max_iovas = cmd->size - sizeof(*cmd);
+	if (max_iovas % sizeof(cmd->reserve_iovas[0]))
+		return -EINVAL;
+	max_iovas /= sizeof(cmd->reserve_iovas[0]);
+	max_iovas = min_t(u32, max_iovas, cmd->num_iovas);
+	if (!max_iovas)
+		return -EINVAL;
+
+	ioas = iommufd_get_ioas(ucmd, cmd->ioas_id);
+	if (IS_ERR(ioas))
+		return PTR_ERR(ioas);
+
+	iopt = &ioas->iopt;
+	down_write(&iopt->iova_rwsem);
+
+	/* Check if ranges intersect the existing reserved iova ranges */
+	rc = -EEXIST;
+	for (iovas = 0; iovas < max_iovas; iovas++)
+		if (interval_tree_iter_first(&iopt->reserved_iova_itree,
+					     range[iovas].start,
+					     range[iovas].last))
+			goto out_put;
+	/* Reserve iova ranges as they are owned by iopt */
+	for (iovas = 0; iovas < max_iovas; iovas++) {
+		rc = iopt_reserve_iova(iopt, range[iovas].start,
+				       range[iovas].last, iopt);
+		if (rc)
+			goto out_remove;
+	}
+	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+out_remove:
+	for (; rc && iovas ; iovas--)
+		__iopt_remove_reserved_iova(iopt, range[iovas].start,
+					    range[iovas].last, iopt);
+out_put:
+	up_write(&ioas->iopt.iova_rwsem);
+	iommufd_put_object(&ioas->obj);
+	return rc;
+}
+
 static int conv_iommu_prot(u32 map_flags)
 {
 	int iommu_prot;

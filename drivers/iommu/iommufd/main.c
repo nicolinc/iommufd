@@ -207,6 +207,7 @@ static int iommufd_fops_release(struct inode *inode, struct file *filp)
 union ucmd_buffer {
 	struct iommu_ioas_alloc alloc;
 	struct iommu_ioas_iova_ranges iova_ranges;
+	struct iommu_ioas_reserve_iova_ranges reserve_iovas;
 	struct iommu_ioas_map map;
 	struct iommu_ioas_unmap unmap;
 	struct iommu_destroy destroy;
@@ -239,6 +240,8 @@ static struct iommufd_ioctl_op iommufd_ioctl_ops[] = {
 		 src_iova),
 	IOCTL_OP(IOMMU_IOAS_IOVA_RANGES, iommufd_ioas_iova_ranges,
 		 struct iommu_ioas_iova_ranges, __reserved),
+	IOCTL_OP(IOMMU_IOAS_RESERVE_IOVA_RANGES, iommufd_ioas_reserve_iova_ranges,
+		 struct iommu_ioas_reserve_iova_ranges, __reserved),
 	IOCTL_OP(IOMMU_IOAS_MAP, iommufd_ioas_map, struct iommu_ioas_map,
 		 __reserved),
 	IOCTL_OP(IOMMU_IOAS_UNMAP, iommufd_ioas_unmap, struct iommu_ioas_unmap,
