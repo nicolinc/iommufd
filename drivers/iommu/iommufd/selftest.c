@@ -249,24 +249,6 @@ out_ioas:
 	return rc;
 }
 
-/* Add an additional reserved IOVA to the IOAS */
-static int iommufd_test_add_reserved(struct iommufd_ucmd *ucmd,
-				     unsigned int mockpt_id,
-				     unsigned long start, size_t length)
-{
-	struct iommufd_ioas *ioas;
-	int rc;
-
-	ioas = iommufd_get_ioas(ucmd, mockpt_id);
-	if (IS_ERR(ioas))
-		return PTR_ERR(ioas);
-	down_write(&ioas->iopt.iova_rwsem);
-	rc = iopt_reserve_iova(&ioas->iopt, start, start + length - 1, NULL);
-	up_write(&ioas->iopt.iova_rwsem);
-	iommufd_put_object(&ioas->obj);
-	return rc;
-}
-
 /* Check that every pfn under each iova matches the pfn under a user VA */
 static int iommufd_test_md_check_pa(struct iommufd_ucmd *ucmd,
 				    unsigned int mockpt_id, unsigned long iova,
@@ -463,10 +445,6 @@ int iommufd_test(struct iommufd_ucmd *ucmd)
 	struct iommu_test_cmd *cmd = ucmd->cmd;
 
 	switch (cmd->op) {
-	case IOMMU_TEST_OP_ADD_RESERVED:
-		return iommufd_test_add_reserved(ucmd, cmd->id,
-						 cmd->add_reserved.start,
-						 cmd->add_reserved.length);
 	case IOMMU_TEST_OP_MOCK_DOMAIN:
 		return iommufd_test_mock_domain(ucmd, cmd);
 	case IOMMU_TEST_OP_MD_CHECK_MAP:

@@ -8,7 +8,6 @@
 #include <linux/iommufd.h>
 
 enum {
-	IOMMU_TEST_OP_ADD_RESERVED,
 	IOMMU_TEST_OP_MOCK_DOMAIN,
 	IOMMU_TEST_OP_MD_CHECK_MAP,
 	IOMMU_TEST_OP_MD_CHECK_REFS,
@@ -33,10 +32,6 @@ struct iommu_test_cmd {
 		struct {
 			__u32 device_id;
 		} mock_domain;
-		struct {
-			__aligned_u64 start;
-			__aligned_u64 length;
-		} add_reserved;
 		struct {
 			__aligned_u64 iova;
 			__aligned_u64 length;
