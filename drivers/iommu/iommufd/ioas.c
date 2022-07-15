@@ -119,6 +119,54 @@ out_put:
 	return rc;
 }
 
+int iommufd_ioas_allow_iovas(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_ioas_allow_iovas *cmd = ucmd->cmd;
+	struct iommufd_ioas *ioas;
+	int rc;
+
+	if (cmd->start > cmd->last)
+		return -EINVAL;
+
+	ioas = iommufd_get_ioas(ucmd, cmd->ioas_id);
+	if (IS_ERR(ioas))
+		return PTR_ERR(ioas);
+
+	down_write(&ioas->iopt.iova_rwsem);
+	rc = iopt_allow_iova(&ioas->iopt, cmd->start, cmd->last, &ioas->iopt);
+	if (rc)
+		goto out_put;
+
+	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+out_put:
+	up_write(&ioas->iopt.iova_rwsem);
+	iommufd_put_object(&ioas->obj);
+	return rc;
+}
+
+int iommufd_ioas_disallow_iovas(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_ioas_disallow_iovas *cmd = ucmd->cmd;
+	struct iommufd_ioas *ioas;
+	int rc;
+
+	if (cmd->start > cmd->last)
+		return -EINVAL;
+
+	ioas = iommufd_get_ioas(ucmd, cmd->ioas_id);
+	if (IS_ERR(ioas))
+		return PTR_ERR(ioas);
+
+	down_write(&ioas->iopt.iova_rwsem);
+	iopt_remove_allowed_iova(&ioas->iopt, cmd->start, cmd->last,
+				      &ioas->iopt);
+
+	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+	up_write(&ioas->iopt.iova_rwsem);
+	iommufd_put_object(&ioas->obj);
+	return rc;
+}
+
 static int conv_iommu_prot(u32 map_flags)
 {
 	int iommu_prot;

@@ -39,6 +39,8 @@ enum {
 	IOMMUFD_CMD_DESTROY = IOMMUFD_CMD_BASE,
 	IOMMUFD_CMD_IOAS_ALLOC,
 	IOMMUFD_CMD_IOAS_IOVA_RANGES,
+	IOMMUFD_CMD_IOAS_ALLOW_IOVAS,
+	IOMMUFD_CMD_IOAS_DISALLOW_IOVAS,
 	IOMMUFD_CMD_IOAS_MAP,
 	IOMMUFD_CMD_IOAS_COPY,
 	IOMMUFD_CMD_IOAS_UNMAP,
@@ -108,6 +110,56 @@ struct iommu_ioas_iova_ranges {
 	} out_valid_iovas[];
 };
 #define IOMMU_IOAS_IOVA_RANGES _IO(IOMMUFD_TYPE, IOMMUFD_CMD_IOAS_IOVA_RANGES)
+
+/**
+ * struct iommu_ioas_allow_iovas - ioctl(IOMMU_IOAS_ALLOW_IOVAS)
+ * @size: sizeof(struct iommu_ioas_allow_iovas)
+ * @ioas_id: IOAS ID to allow IOVAs from
+ * @start: First IOVA to allow
+ * @last: Inclusive last IOVA to allow
+ *
+ * Allow a range of IOVAs in an IOAS for kernel-managed IOVA allocations
+ *
+ * A part from IOMMU_IOAS_MAP mapping a userspace pointer to a kernel-allocated
+ * IOVA, this ioctl allows limiting the range of IOVAs that the kernel allocator
+ * will allocate from. User space must query the overall allowed IOVA ranges via
+ * the IOMMU_IOAS_IOVA_RANGES ioctl, and then pass a user space defined range
+ * within the overall range, using this ioctl. This means that allowing an IOVA
+ * out of the overall range will simply fail.
+ */
+struct iommu_ioas_allow_iovas {
+        __u32 size;
+        __u32 ioas_id;
+	__aligned_u64 start;
+	__aligned_u64 last;
+};
+#define IOMMU_IOAS_ALLOW_IOVAS \
+	_IO(IOMMUFD_TYPE, IOMMUFD_CMD_IOAS_ALLOW_IOVAS)
+
+/**
+ * struct iommu_ioas_disallow_iovas - ioctl(IOMMU_IOAS_DISALLOW_IOVAS)
+ * @size: sizeof(struct iommu_ioas_disallow_iovas)
+ * @ioas_id: IOAS ID to allow IOVAs from
+ * @start: First IOVA to allow
+ * @last: Inclusive last IOVA to allow
+ *
+ * Allow a range of IOVAs in an IOAS for kernel-managed IOVA allocations
+ *
+ * A part from IOMMU_IOAS_MAP mapping a userspace pointer to a kernel-allocated
+ * IOVA, this ioctl removes an allowed IOVA range that was previous added by an
+ * IOMMU_IOAS_ALLOW_IOVAS ioctl. This means that the kernel IOVA allocator will
+ * no longer allocate any kenrel-managed IOVA from this range. User space must
+ * pass a range of IOVAs that were previously added by itself. Otherwise, the
+ * request will be simply ignored.
+ */
+struct iommu_ioas_disallow_iovas {
+        __u32 size;
+        __u32 ioas_id;
+	__aligned_u64 start;
+	__aligned_u64 last;
+};
+#define IOMMU_IOAS_DISALLOW_IOVAS \
+	_IO(IOMMUFD_TYPE, IOMMUFD_CMD_IOAS_DISALLOW_IOVAS)
 
 /**
  * enum iommufd_ioas_map_flags - Flags for map and copy
