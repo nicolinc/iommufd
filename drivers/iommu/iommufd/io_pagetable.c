@@ -17,6 +17,11 @@
 
 #include "io_pagetable.h"
 
+struct iopt_reserved_iova {
+	struct interval_tree_node node;
+	void *owner;
+};
+
 static unsigned long iopt_area_iova_to_index(struct iopt_area *area,
 					     unsigned long iova)
 {
@@ -156,17 +161,24 @@ iopt_alloc_area(struct io_pagetable *iopt, struct iopt_pages *pages,
 	}
 
 	if (!(flags & IOPT_ALLOC_IOVA)) {
+		struct iopt_reserved_iova *reserved;
+		struct interval_tree_node *node;
+
 		if ((iova & (iopt->iova_alignment - 1)) ||
 		    (length & (iopt->iova_alignment - 1)) || !length) {
 			rc = -EINVAL;
 			goto out_unlock;
 		}
 
-		/* No reserved IOVA intersects the range */
-		if (interval_tree_iter_first(&iopt->reserved_iova_itree, iova,
-					     area->node.last)) {
-			rc = -ENOENT;
-			goto out_unlock;
+		/* Check if any intersected range that is not owned by iopt */
+		node = interval_tree_iter_first(&iopt->reserved_iova_itree,
+						iova, area->node.last);
+		if (node) {
+			reserved = container_of(node, struct iopt_reserved_iova, node);
+			if (reserved->owner != (void *)iopt) {
+				rc = -ENOENT;
+				goto out_unlock;
+			}
 		}
 
 		/* Check that there is not already a mapping in the range */
@@ -529,11 +541,6 @@ void iopt_unaccess_pages(struct io_pagetable *iopt, unsigned long iova,
 	}
 	up_read(&iopt->iova_rwsem);
 }
-
-struct iopt_reserved_iova {
-	struct interval_tree_node node;
-	void *owner;
-};
 
 int iopt_reserve_iova(struct io_pagetable *iopt, unsigned long start,
 		      unsigned long last, void *owner)
