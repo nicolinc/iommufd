@@ -617,7 +617,7 @@ int iopt_init_table(struct io_pagetable *iopt)
 void iopt_destroy_table(struct io_pagetable *iopt)
 {
 	if (IS_ENABLED(CONFIG_IOMMUFD_TEST))
-		iopt_remove_reserved_iova_all(iopt, NULL);
+		iopt_remove_reserved_iova_all(iopt, iopt);
 	WARN_ON(!RB_EMPTY_ROOT(&iopt->reserved_iova_itree.rb_root));
 	WARN_ON(!xa_empty(&iopt->domains));
 	WARN_ON(!RB_EMPTY_ROOT(&iopt->area_itree.rb_root));

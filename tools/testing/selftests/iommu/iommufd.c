@@ -403,13 +403,7 @@ TEST_F(iommufd_ioas, unmap_fully_contained_areas)
 
 TEST_F(iommufd_ioas, area_auto_iova)
 {
-	struct iommu_test_cmd test_cmd = {
-		.size = sizeof(test_cmd),
-		.op = IOMMU_TEST_OP_ADD_RESERVED,
-		.id = self->ioas_id,
-		.add_reserved = { .start = PAGE_SIZE * 4,
-				  .length = PAGE_SIZE * 100 },
-	};
+	struct iommu_ioas_reserve_iova_ranges *reserve_cmd = (void *)buffer;
 	struct iommu_ioas_map map_cmd = {
 		.size = sizeof(map_cmd),
 		.ioas_id = self->ioas_id,
@@ -456,9 +450,20 @@ TEST_F(iommufd_ioas, area_auto_iova)
 	}
 
 	/* Avoids a reserved region */
+	*reserve_cmd = (struct iommu_ioas_reserve_iova_ranges){
+		.size = sizeof(struct iommu_ioas_reserve_iova_ranges) +
+			sizeof(struct iommu_reserve_iovas),
+		.ioas_id = self->ioas_id,
+		.num_iovas = 1,
+	};
+	reserve_cmd->reserve_iovas[0].start = PAGE_SIZE * 4;
+	reserve_cmd->reserve_iovas[0].last = PAGE_SIZE * 100 - 1;
+	if (self->domain_id) {
+		reserve_cmd->reserve_iovas[0].start += MOCK_APERTURE_START;
+		reserve_cmd->reserve_iovas[0].last += MOCK_APERTURE_START;
+	}
 	ASSERT_EQ(0,
-		  ioctl(self->fd, _IOMMU_TEST_CMD(IOMMU_TEST_OP_ADD_RESERVED),
-			&test_cmd));
+		  ioctl(self->fd, IOMMU_IOAS_RESERVE_IOVA_RANGES, reserve_cmd));
 	for (i = 0; i != 10; i++) {
 		map_cmd.length = PAGE_SIZE * (i + 1);
 		ASSERT_EQ(0,
@@ -466,10 +471,8 @@ TEST_F(iommufd_ioas, area_auto_iova)
 		iovas[i] = map_cmd.iova;
 		EXPECT_EQ(0, map_cmd.iova % (1UL << (ffs(map_cmd.length)-1)));
 		EXPECT_EQ(false,
-			  map_cmd.iova > test_cmd.add_reserved.start &&
-				  map_cmd.iova <
-					  test_cmd.add_reserved.start +
-						  test_cmd.add_reserved.length);
+			  map_cmd.iova >= reserve_cmd->reserve_iovas->start &&
+			  map_cmd.iova <= reserve_cmd->reserve_iovas->last);
 	}
 	for (i = 0; i != 10; i++) {
 		unmap_cmd.length = PAGE_SIZE * (i + 1);
@@ -518,12 +521,7 @@ TEST_F(iommufd_ioas, copy_area)
 
 TEST_F(iommufd_ioas, iova_ranges)
 {
-	struct iommu_test_cmd test_cmd = {
-		.size = sizeof(test_cmd),
-		.op = IOMMU_TEST_OP_ADD_RESERVED,
-		.id = self->ioas_id,
-		.add_reserved = { .start = PAGE_SIZE, .length = PAGE_SIZE },
-	};
+	struct iommu_ioas_reserve_iova_ranges *reserve_cmd =(void *)buffer;
 	struct iommu_ioas_iova_ranges *cmd = (void *)buffer;
 
 	*cmd = (struct iommu_ioas_iova_ranges){
@@ -553,9 +551,18 @@ TEST_F(iommufd_ioas, iova_ranges)
 	EXPECT_EQ(0, cmd->out_valid_iovas[0].last);
 
 	/* 2 ranges */
-	ASSERT_EQ(0,
-		  ioctl(self->fd, _IOMMU_TEST_CMD(IOMMU_TEST_OP_ADD_RESERVED),
-			&test_cmd));
+	*reserve_cmd = (struct iommu_ioas_reserve_iova_ranges){
+		.size = sizeof(struct iommu_ioas_reserve_iova_ranges) +
+			sizeof(struct iommu_reserve_iovas),
+		.ioas_id = self->ioas_id,
+		.num_iovas = 1,
+	};
+	reserve_cmd->reserve_iovas[0].start = PAGE_SIZE;
+	reserve_cmd->reserve_iovas[0].last = PAGE_SIZE * 2 - 1;
+	if (!self->domain_id)
+		ASSERT_EQ(0, ioctl(self->fd, IOMMU_IOAS_RESERVE_IOVA_RANGES,
+				   reserve_cmd));
+	memset(reserve_cmd->reserve_iovas, 0, BUFFER_SIZE);
 	cmd->size = BUFFER_SIZE;
 	ASSERT_EQ(0, ioctl(self->fd, IOMMU_IOAS_IOVA_RANGES, cmd));
 	if (!self->domain_id) {
