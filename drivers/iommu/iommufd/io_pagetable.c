@@ -160,8 +160,7 @@ iopt_alloc_area(struct io_pagetable *iopt, struct iopt_pages *pages,
 		}
 
 		/* No reserved IOVA intersects the range */
-		if (interval_tree_iter_first(&iopt->reserved_itree, iova,
-					     area->node.last)) {
+		if (iopt_reserved_iter_first(iopt, iova, area->node.last)) {
 			rc = -ENOENT;
 			goto out_unlock;
 		}
@@ -527,11 +526,6 @@ void iopt_unaccess_pages(struct io_pagetable *iopt, unsigned long iova,
 	up_read(&iopt->iova_rwsem);
 }
 
-struct iopt_reserved {
-	struct interval_tree_node node;
-	void *owner;
-};
-
 int iopt_reserve_iova(struct io_pagetable *iopt, unsigned long start,
 		      unsigned long last, void *owner)
 {
@@ -554,18 +548,13 @@ int iopt_reserve_iova(struct io_pagetable *iopt, unsigned long start,
 
 static void __iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner)
 {
-
-	struct interval_tree_node *node;
+	struct iopt_reserved *reserved, *next;
 
 	lockdep_assert_held_write(&iopt->iova_rwsem);
 
-	for (node = interval_tree_iter_first(&iopt->reserved_itree, 0,
-					     ULONG_MAX);
-	     node;) {
-		struct iopt_reserved *reserved =
-			container_of(node, struct iopt_reserved, node);
-
-		node = interval_tree_iter_next(node, 0, ULONG_MAX);
+	for (reserved = iopt_reserved_iter_first(iopt, 0, ULONG_MAX);
+	     reserved; reserved = next) {
+		next = iopt_reserved_iter_next(reserved, 0, ULONG_MAX);
 
 		if (reserved->owner == owner) {
 			interval_tree_remove(&reserved->node,

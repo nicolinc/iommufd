@@ -47,6 +47,11 @@ struct iopt_area {
 	atomic_t num_users;
 };
 
+struct iopt_reserved {
+	struct interval_tree_node node;
+	void *owner;
+};
+
 int iopt_area_fill_domains(struct iopt_area *area, struct iopt_pages *pages);
 void iopt_area_unfill_domains(struct iopt_area *area, struct iopt_pages *pages);
 
@@ -80,31 +85,31 @@ static inline size_t iopt_area_length(struct iopt_area *area)
 	return (area->node.last - area->node.start) + 1;
 }
 
-static inline struct iopt_area *iopt_area_iter_first(struct io_pagetable *iopt,
-						     unsigned long start,
-						     unsigned long last)
-{
-	struct interval_tree_node *node;
+#define iopt_iter_first(name, iopt, start, last)                               \
+	({                                                                     \
+		struct interval_tree_node *node;                               \
+		lockdep_assert_held(&iopt->iova_rwsem);                        \
+		node = interval_tree_iter_first(&iopt->name##_itree,           \
+						start, last);                  \
+		node ? container_of(node, struct iopt_##name, node) : NULL;    \
+	})
 
-	lockdep_assert_held(&iopt->iova_rwsem);
+#define iopt_iter_next(name, start, last)                                      \
+	({                                                                     \
+		struct interval_tree_node *node;                               \
+		node = interval_tree_iter_next(&name->node, start, last);      \
+		node ? container_of(node, struct iopt_##name, node) : NULL;    \
+	})
 
-	node = interval_tree_iter_first(&iopt->area_itree, start, last);
-	if (!node)
-		return NULL;
-	return container_of(node, struct iopt_area, node);
-}
+#define iopt_area_iter_first(iopt, start, last) \
+	iopt_iter_first(area, iopt, start, last)
+#define iopt_area_iter_next(area, start, last) \
+	iopt_iter_next(area, start, last)
 
-static inline struct iopt_area *iopt_area_iter_next(struct iopt_area *area,
-						    unsigned long start,
-						    unsigned long last)
-{
-	struct interval_tree_node *node;
-
-	node = interval_tree_iter_next(&area->node, start, last);
-	if (!node)
-		return NULL;
-	return container_of(node, struct iopt_area, node);
-}
+#define iopt_reserved_iter_first(iopt, start, last) \
+	iopt_iter_first(reserved, iopt, start, last)
+#define iopt_reserved_iter_next(reserved, start, last) \
+	iopt_iter_next(reserved, start, last)
 
 /*
  * This holds a pinned page list for multiple areas of IO address space. The
