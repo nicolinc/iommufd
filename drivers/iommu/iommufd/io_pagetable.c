@@ -55,6 +55,26 @@ static bool __alloc_iova_check_hole(struct interval_tree_span_iter *span,
 	return true;
 }
 
+static bool __alloc_iova_is_allowed(struct rb_root_cached *allowed_itree,
+				    unsigned long start, unsigned long last,
+				    unsigned long length, unsigned long *iova)
+{
+	struct interval_tree_node *node;
+
+	for (node = interval_tree_iter_first(allowed_itree, start, last);
+	     node; node = interval_tree_iter_next(node, start, last)) {
+		start = max(start, node->start);
+		last = min(last, node->last);
+
+		if (start + length - 1 > last)
+			continue;
+
+		*iova = start;
+		return true;
+	}
+	return false;
+}
+
 /*
  * Automatically find a block of IOVA that is not being used and not reserved.
  * Does not return a 0 IOVA even if it is valid.
@@ -91,6 +111,15 @@ static int iopt_alloc_iova(struct io_pagetable *iopt, unsigned long *iova,
 		if (!__alloc_iova_check_hole(&area_span, length, iova_alignment,
 					     page_offset))
 			continue;
+
+		if (!RB_EMPTY_ROOT(&iopt->allowed_itree.rb_root)) {
+			if (!__alloc_iova_is_allowed(&iopt->allowed_itree,
+						     area_span.start_hole,
+						     area_span.last_hole,
+						     length, iova))
+				continue;
+			return 0;
+		}
 
 		interval_tree_for_each_span (&reserved_span,
 					     &iopt->reserved_itree,
@@ -526,6 +555,46 @@ void iopt_unaccess_pages(struct io_pagetable *iopt, unsigned long iova,
 	up_read(&iopt->iova_rwsem);
 }
 
+int iopt_allow_iova(struct io_pagetable *iopt, unsigned long start,
+		    unsigned long last, void *owner)
+{
+	struct iopt_allowed *allowed;
+
+	lockdep_assert_held_write(&iopt->iova_rwsem);
+
+	if (iopt_allowed_iter_first(iopt, start, last))
+		return -EEXIST;
+	if (iopt_area_iter_first(iopt, start, last) ||
+	    iopt_reserved_iter_first(iopt, start, last))
+		return -EADDRINUSE;
+
+	allowed = kzalloc(sizeof(*allowed), GFP_KERNEL_ACCOUNT);
+	if (!allowed)
+		return -ENOMEM;
+	allowed->node.start = start;
+	allowed->node.last = last;
+	allowed->owner = owner;
+	interval_tree_insert(&allowed->node, &iopt->allowed_itree);
+	return 0;
+}
+
+void iopt_remove_allowed_iova(struct io_pagetable *iopt, unsigned long start,
+			      unsigned long last, void *owner)
+{
+	struct iopt_allowed *allowed, *next;
+
+	lockdep_assert_held_write(&iopt->iova_rwsem);
+
+	for (allowed = iopt_allowed_iter_first(iopt, start, last);
+	     allowed; allowed = next) {
+		next = iopt_allowed_iter_next(allowed, start, last);
+		if (allowed->owner == owner) {
+			interval_tree_remove(&allowed->node, &iopt->allowed_itree);
+			kfree(allowed);
+		}
+	}
+}
+
 int iopt_reserve_iova(struct io_pagetable *iopt, unsigned long start,
 		      unsigned long last, void *owner)
 {
@@ -533,7 +602,8 @@ int iopt_reserve_iova(struct io_pagetable *iopt, unsigned long start,
 
 	lockdep_assert_held_write(&iopt->iova_rwsem);
 
-	if (iopt_area_iter_first(iopt, start, last))
+	if (iopt_area_iter_first(iopt, start, last) ||
+	    iopt_allowed_iter_first(iopt, start, last))
 		return -EADDRINUSE;
 
 	reserved = kzalloc(sizeof(*reserved), GFP_KERNEL_ACCOUNT);
@@ -576,6 +646,7 @@ int iopt_init_table(struct io_pagetable *iopt)
 	init_rwsem(&iopt->iova_rwsem);
 	init_rwsem(&iopt->domains_rwsem);
 	iopt->area_itree = RB_ROOT_CACHED;
+	iopt->allowed_itree = RB_ROOT_CACHED;
 	iopt->reserved_itree = RB_ROOT_CACHED;
 	xa_init_flags(&iopt->domains, XA_FLAGS_ACCOUNT);
 
@@ -594,6 +665,7 @@ void iopt_destroy_table(struct io_pagetable *iopt)
 	if (IS_ENABLED(CONFIG_IOMMUFD_TEST))
 		iopt_remove_reserved_iova(iopt, NULL);
 	WARN_ON(!RB_EMPTY_ROOT(&iopt->reserved_itree.rb_root));
+	WARN_ON(!RB_EMPTY_ROOT(&iopt->allowed_itree.rb_root));
 	WARN_ON(!xa_empty(&iopt->domains));
 	WARN_ON(!RB_EMPTY_ROOT(&iopt->area_itree.rb_root));
 }

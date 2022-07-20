@@ -47,6 +47,12 @@ struct iopt_area {
 	atomic_t num_users;
 };
 
+struct iopt_allowed {
+	struct interval_tree_node node;
+	void *owner;
+	bool mapped;
+};
+
 struct iopt_reserved {
 	struct interval_tree_node node;
 	void *owner;
@@ -105,6 +111,11 @@ static inline size_t iopt_area_length(struct iopt_area *area)
 	iopt_iter_first(area, iopt, start, last)
 #define iopt_area_iter_next(area, start, last) \
 	iopt_iter_next(area, start, last)
+
+#define iopt_allowed_iter_first(iopt, start, last) \
+	iopt_iter_first(allowed, iopt, start, last)
+#define iopt_allowed_iter_next(allowed, start, last) \
+	iopt_iter_next(allowed, start, last)
 
 #define iopt_reserved_iter_first(iopt, start, last) \
 	iopt_iter_first(reserved, iopt, start, last)
