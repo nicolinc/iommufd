@@ -68,4 +68,10 @@ interval_tree_span_iter_done(struct interval_tree_span_iter *state)
 	return state->is_hole == -1;
 }
 
+#define interval_tree_for_each_span(span, itree, first_index, last_index)      \
+	for (interval_tree_span_iter_first(span, itree,                        \
+					   first_index, last_index);           \
+	     !interval_tree_span_iter_done(span);                              \
+	     interval_tree_span_iter_next(span))
+
 #endif	/* _LINUX_INTERVAL_TREE_H */
