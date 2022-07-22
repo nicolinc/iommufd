@@ -251,10 +251,8 @@ static int iommufd_fill_cap_iova(struct iommufd_ioas *ioas,
 	};
 	struct interval_tree_span_iter span;
 
-	for (interval_tree_span_iter_first(
-		     &span, &ioas->iopt.reserved_iova_itree, 0, ULONG_MAX);
-	     !interval_tree_span_iter_done(&span);
-	     interval_tree_span_iter_next(&span)) {
+	interval_tree_for_each_span (&span, &ioas->iopt.reserved_iova_itree,
+				     0, ULONG_MAX) {
 		struct vfio_iova_range range;
 
 		if (!span.is_hole)

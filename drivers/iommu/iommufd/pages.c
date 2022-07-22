@@ -571,18 +571,13 @@ static void iopt_pages_unpin(struct iopt_pages *pages, struct pfn_batch *batch,
 
 	lockdep_assert_held(&pages->mutex);
 
-	for (interval_tree_span_iter_first(&user_span, &pages->users_itree, 0,
-					   last);
-	     !interval_tree_span_iter_done(&user_span);
-	     interval_tree_span_iter_next(&user_span)) {
+	interval_tree_for_each_span (&user_span, &pages->users_itree, 0, last) {
 		if (!user_span.is_hole)
 			continue;
 
-		for (interval_tree_span_iter_first(
-			     &area_span, &pages->domains_itree,
-			     user_span.start_hole, user_span.last_hole);
-		     !interval_tree_span_iter_done(&area_span);
-		     interval_tree_span_iter_next(&area_span)) {
+		interval_tree_for_each_span (&area_span, &pages->domains_itree,
+					     user_span.start_hole,
+					     user_span.last_hole) {
 			if (!area_span.is_hole)
 				continue;
 
@@ -867,10 +862,7 @@ void iopt_unmap_domain(struct io_pagetable *iopt, struct iommu_domain *domain)
 {
 	struct interval_tree_span_iter span;
 
-	for (interval_tree_span_iter_first(&span, &iopt->area_itree, 0,
-					   ULONG_MAX);
-	     !interval_tree_span_iter_done(&span);
-	     interval_tree_span_iter_next(&span))
+	interval_tree_for_each_span (&span, &iopt->area_itree, 0, ULONG_MAX)
 		if (!span.is_hole)
 			iommu_unmap_nofail(domain, span.start_used,
 					   span.last_used - span.start_used +
@@ -1062,10 +1054,7 @@ static void iopt_pages_clean_xarray(struct iopt_pages *pages,
 
 	lockdep_assert_held(&pages->mutex);
 
-	for (interval_tree_span_iter_first(&span, &pages->users_itree, index,
-					   last);
-	     !interval_tree_span_iter_done(&span);
-	     interval_tree_span_iter_next(&span))
+	interval_tree_for_each_span (&span, &pages->users_itree, index, last)
 		if (span.is_hole)
 			clear_xarray(&pages->pinned_pfns, span.start_hole,
 				     span.last_hole);
@@ -1093,10 +1082,7 @@ void iopt_pages_unfill_xarray(struct iopt_pages *pages, unsigned long start,
 		return iopt_pages_clean_xarray(pages, start, last);
 
 	batch_init_backup(&batch, last + 1, backup, sizeof(backup));
-	for (interval_tree_span_iter_first(&span, &pages->users_itree, start,
-					   last);
-	     !interval_tree_span_iter_done(&span);
-	     interval_tree_span_iter_next(&span)) {
+	interval_tree_for_each_span (&span, &pages->users_itree, start, last) {
 		unsigned long cur_index;
 
 		if (!span.is_hole)
@@ -1176,10 +1162,7 @@ int iopt_pages_fill_xarray(struct iopt_pages *pages, unsigned long start,
 	if (rc)
 		return rc;
 
-	for (interval_tree_span_iter_first(&span, &pages->users_itree, start,
-					   last);
-	     !interval_tree_span_iter_done(&span);
-	     interval_tree_span_iter_next(&span)) {
+	interval_tree_for_each_span (&span, &pages->users_itree, start, last) {
 		if (!span.is_hole) {
 			if (out_pages)
 				iopt_pages_fill_from_xarray(

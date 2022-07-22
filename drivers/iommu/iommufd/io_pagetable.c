@@ -86,19 +86,16 @@ static int iopt_alloc_iova(struct io_pagetable *iopt, unsigned long *iova,
 
 	if (iova_alignment < iopt->iova_alignment)
 		return -EINVAL;
-	for (interval_tree_span_iter_first(&area_span, &iopt->area_itree,
-					   PAGE_SIZE, ULONG_MAX - PAGE_SIZE);
-	     !interval_tree_span_iter_done(&area_span);
-	     interval_tree_span_iter_next(&area_span)) {
+	interval_tree_for_each_span (&area_span, &iopt->area_itree,
+				     PAGE_SIZE, ULONG_MAX - PAGE_SIZE) {
 		if (!__alloc_iova_check_hole(&area_span, length, iova_alignment,
 					     page_offset))
 			continue;
 
-		for (interval_tree_span_iter_first(
-			     &reserved_span, &iopt->reserved_iova_itree,
-			     area_span.start_hole, area_span.last_hole);
-		     !interval_tree_span_iter_done(&reserved_span);
-		     interval_tree_span_iter_next(&reserved_span)) {
+		interval_tree_for_each_span (&reserved_span,
+					     &iopt->reserved_iova_itree,
+					     area_span.start_hole,
+					     area_span.last_hole) {
 			if (!__alloc_iova_check_hole(&reserved_span, length,
 						     iova_alignment,
 						     page_offset))

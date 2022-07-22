@@ -90,10 +90,8 @@ int iommufd_ioas_iova_ranges(struct iommufd_ucmd *ucmd)
 
 	down_read(&ioas->iopt.iova_rwsem);
 	cmd->out_num_iovas = 0;
-	for (interval_tree_span_iter_first(
-		     &span, &ioas->iopt.reserved_iova_itree, 0, ULONG_MAX);
-	     !interval_tree_span_iter_done(&span);
-	     interval_tree_span_iter_next(&span)) {
+	interval_tree_for_each_span (&span, &ioas->iopt.reserved_iova_itree,
+				     0, ULONG_MAX) {
 		if (!span.is_hole)
 			continue;
 		if (cmd->out_num_iovas < max_iovas) {
