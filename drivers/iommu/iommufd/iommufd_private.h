@@ -29,7 +29,7 @@ struct io_pagetable {
 
 	struct rw_semaphore iova_rwsem;
 	struct rb_root_cached area_itree;
-	struct rb_root_cached reserved_iova_itree;
+	struct rb_root_cached reserved_itree;
 	unsigned long iova_alignment;
 };
 

@@ -93,7 +93,7 @@ static int iopt_alloc_iova(struct io_pagetable *iopt, unsigned long *iova,
 			continue;
 
 		interval_tree_for_each_span (&reserved_span,
-					     &iopt->reserved_iova_itree,
+					     &iopt->reserved_itree,
 					     area_span.start_hole,
 					     area_span.last_hole) {
 			if (!__alloc_iova_check_hole(&reserved_span, length,
@@ -160,7 +160,7 @@ iopt_alloc_area(struct io_pagetable *iopt, struct iopt_pages *pages,
 		}
 
 		/* No reserved IOVA intersects the range */
-		if (interval_tree_iter_first(&iopt->reserved_iova_itree, iova,
+		if (interval_tree_iter_first(&iopt->reserved_itree, iova,
 					     area->node.last)) {
 			rc = -ENOENT;
 			goto out_unlock;
@@ -527,7 +527,7 @@ void iopt_unaccess_pages(struct io_pagetable *iopt, unsigned long iova,
 	up_read(&iopt->iova_rwsem);
 }
 
-struct iopt_reserved_iova {
+struct iopt_reserved {
 	struct interval_tree_node node;
 	void *owner;
 };
@@ -535,7 +535,7 @@ struct iopt_reserved_iova {
 int iopt_reserve_iova(struct io_pagetable *iopt, unsigned long start,
 		      unsigned long last, void *owner)
 {
-	struct iopt_reserved_iova *reserved;
+	struct iopt_reserved *reserved;
 
 	lockdep_assert_held_write(&iopt->iova_rwsem);
 
@@ -548,7 +548,7 @@ int iopt_reserve_iova(struct io_pagetable *iopt, unsigned long start,
 	reserved->node.start = start;
 	reserved->node.last = last;
 	reserved->owner = owner;
-	interval_tree_insert(&reserved->node, &iopt->reserved_iova_itree);
+	interval_tree_insert(&reserved->node, &iopt->reserved_itree);
 	return 0;
 }
 
@@ -559,17 +559,17 @@ static void __iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner)
 
 	lockdep_assert_held_write(&iopt->iova_rwsem);
 
-	for (node = interval_tree_iter_first(&iopt->reserved_iova_itree, 0,
+	for (node = interval_tree_iter_first(&iopt->reserved_itree, 0,
 					     ULONG_MAX);
 	     node;) {
-		struct iopt_reserved_iova *reserved =
-			container_of(node, struct iopt_reserved_iova, node);
+		struct iopt_reserved *reserved =
+			container_of(node, struct iopt_reserved, node);
 
 		node = interval_tree_iter_next(node, 0, ULONG_MAX);
 
 		if (reserved->owner == owner) {
 			interval_tree_remove(&reserved->node,
-					     &iopt->reserved_iova_itree);
+					     &iopt->reserved_itree);
 			kfree(reserved);
 		}
 	}
@@ -587,7 +587,7 @@ int iopt_init_table(struct io_pagetable *iopt)
 	init_rwsem(&iopt->iova_rwsem);
 	init_rwsem(&iopt->domains_rwsem);
 	iopt->area_itree = RB_ROOT_CACHED;
-	iopt->reserved_iova_itree = RB_ROOT_CACHED;
+	iopt->reserved_itree = RB_ROOT_CACHED;
 	xa_init_flags(&iopt->domains, XA_FLAGS_ACCOUNT);
 
 	/*
@@ -604,7 +604,7 @@ void iopt_destroy_table(struct io_pagetable *iopt)
 {
 	if (IS_ENABLED(CONFIG_IOMMUFD_TEST))
 		iopt_remove_reserved_iova(iopt, NULL);
-	WARN_ON(!RB_EMPTY_ROOT(&iopt->reserved_iova_itree.rb_root));
+	WARN_ON(!RB_EMPTY_ROOT(&iopt->reserved_itree.rb_root));
 	WARN_ON(!xa_empty(&iopt->domains));
 	WARN_ON(!RB_EMPTY_ROOT(&iopt->area_itree.rb_root));
 }

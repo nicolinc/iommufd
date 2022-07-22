@@ -251,7 +251,7 @@ static int iommufd_fill_cap_iova(struct iommufd_ioas *ioas,
 	};
 	struct interval_tree_span_iter span;
 
-	interval_tree_for_each_span (&span, &ioas->iopt.reserved_iova_itree,
+	interval_tree_for_each_span (&span, &ioas->iopt.reserved_itree,
 				     0, ULONG_MAX) {
 		struct vfio_iova_range range;
 
