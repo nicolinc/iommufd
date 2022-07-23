@@ -410,6 +410,12 @@ TEST_F(iommufd_ioas, area_auto_iova)
 		.add_reserved = { .start = PAGE_SIZE * 4,
 				  .length = PAGE_SIZE * 100 },
 	};
+	struct iommu_ioas_allow_iovas allow_cmd = {
+		.size = sizeof(allow_cmd),
+		.ioas_id = self->ioas_id,
+		.start = PAGE_SIZE,
+		.last = PAGE_SIZE * 600 - 1,
+	};
 	struct iommu_ioas_map map_cmd = {
 		.size = sizeof(map_cmd),
 		.ioas_id = self->ioas_id,
@@ -477,6 +483,38 @@ TEST_F(iommufd_ioas, area_auto_iova)
 		ASSERT_EQ(0, ioctl(self->fd, IOMMU_IOAS_UNMAP,
 				   &unmap_cmd));
 	}
+
+	/* Allocate from an allowed region */
+	EXPECT_ERRNO(EADDRINUSE,
+		     ioctl(self->fd, IOMMU_IOAS_ALLOW_IOVAS, &allow_cmd));
+	if (self->domain_id) {
+		/* Shift the allowed region into the domain aperture */
+		allow_cmd.start += MOCK_APERTURE_START;
+		allow_cmd.last += MOCK_APERTURE_START;
+	} else {
+		allow_cmd.start = PAGE_SIZE * 200;
+	}
+	ASSERT_EQ(0, ioctl(self->fd, IOMMU_IOAS_ALLOW_IOVAS, &allow_cmd));
+	for (i = 0; i != 10; i++) {
+		map_cmd.length = PAGE_SIZE * (i + 1);
+		ASSERT_EQ(0, ioctl(self->fd, IOMMU_IOAS_MAP, &map_cmd));
+		iovas[i] = map_cmd.iova;
+		EXPECT_EQ(0, map_cmd.iova % (1UL << (ffs(map_cmd.length)-1)));
+		EXPECT_EQ(true, map_cmd.iova >= allow_cmd.start);
+		EXPECT_EQ(true, map_cmd.iova <= allow_cmd.last);
+		EXPECT_EQ(true,
+			  map_cmd.iova + map_cmd.length > allow_cmd.start);
+		EXPECT_EQ(true,
+			  map_cmd.iova + map_cmd.length <= allow_cmd.last + 1);
+	}
+	for (i = 0; i != 10; i++) {
+		unmap_cmd.length = PAGE_SIZE * (i + 1);
+		unmap_cmd.iova = iovas[i];
+		ASSERT_EQ(0, ioctl(self->fd, IOMMU_IOAS_UNMAP, &unmap_cmd));
+	}
+	allow_cmd.start = 1;
+	allow_cmd.last = 0;
+	ASSERT_EQ(0, ioctl(self->fd, IOMMU_IOAS_ALLOW_IOVAS, &allow_cmd));
 }
 
 TEST_F(iommufd_ioas, copy_area)
