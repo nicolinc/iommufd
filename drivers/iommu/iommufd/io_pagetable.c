@@ -595,6 +595,13 @@ void iopt_remove_allowed_iova(struct io_pagetable *iopt, unsigned long start,
 	}
 }
 
+static void iopt_remove_allowed_iova_all(struct io_pagetable *iopt)
+{
+	down_write(&iopt->iova_rwsem);
+	iopt_remove_allowed_iova(iopt, 0, ULONG_MAX, iopt);
+	up_write(&iopt->iova_rwsem);
+}
+
 int iopt_reserve_iova(struct io_pagetable *iopt, unsigned long start,
 		      unsigned long last, void *owner)
 {
@@ -662,8 +669,10 @@ int iopt_init_table(struct io_pagetable *iopt)
 
 void iopt_destroy_table(struct io_pagetable *iopt)
 {
-	if (IS_ENABLED(CONFIG_IOMMUFD_TEST))
+	if (IS_ENABLED(CONFIG_IOMMUFD_TEST)) {
 		iopt_remove_reserved_iova(iopt, NULL);
+		iopt_remove_allowed_iova_all(iopt);
+	}
 	WARN_ON(!RB_EMPTY_ROOT(&iopt->reserved_itree.rb_root));
 	WARN_ON(!RB_EMPTY_ROOT(&iopt->allowed_itree.rb_root));
 	WARN_ON(!xa_empty(&iopt->domains));
