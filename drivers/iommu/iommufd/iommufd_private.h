@@ -243,6 +243,7 @@ struct iommufd_hw_pagetable_s1 {
 	struct iommufd_hw_pagetable *stage2;
 	u64 stage1_ptr;
 	union iommu_stage1_config config;
+	struct device *fault_dev;
 	struct file *fault_file;
 	int fault_fd;
 	struct mutex fault_queue_lock;

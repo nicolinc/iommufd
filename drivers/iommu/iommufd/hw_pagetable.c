@@ -198,29 +198,36 @@ static int iommufd_hw_pagetable_get_fault_fd(struct iommufd_hw_pagetable_s1 *s1_
 	return 0;
 }
 
-static enum iommu_page_response_code
-iommufd_hw_pagetable_iopf_handler(struct iommu_fault *fault,
-				  struct device *dev, void *data)
+static int iommufd_hw_pagetable_fault_handler(struct device *dev,
+					      struct iommu_fault *fault,
+					      void *cookie)
 {
 	struct iommufd_hw_pagetable_s1 *s1_hwpt =
-				(struct iommufd_hw_pagetable_s1 *)data;
+				(struct iommufd_hw_pagetable_s1 *)cookie;
 	struct iommufd_hw_pagetable *hwpt =
 		container_of(s1_hwpt, struct iommufd_hw_pagetable, s1_hwpt);
 	struct iommufd_stage1_dma_fault *header =
 		(struct iommufd_stage1_dma_fault *)s1_hwpt->fault_pages;
 	struct iommu_fault *new;
-	int head, tail, size;
+	int head, tail, size, rc = 0;
+	ioasid_t pasid;
 	u32 dev_id;
-	ioasid_t pasid = (fault->prm.flags & IOMMU_FAULT_PAGE_REQUEST_PASID_VALID) ?
-			 fault->prm.pasid : INVALID_IOASID;
-	enum iommu_page_response_code resp = IOMMU_PAGE_RESP_ASYNC;
 
 	if (WARN_ON(!header))
-		return IOMMU_PAGE_RESP_FAILURE;
+		return -ENOENT;
+
+	if (fault->type == IOMMU_FAULT_PAGE_REQ &&
+	    fault->prm.flags & IOMMU_FAULT_PAGE_REQUEST_PASID_VALID)
+                pasid = fault->prm.pasid;
+	else if (fault->type == IOMMU_FAULT_DMA_UNRECOV &&
+		 fault->event.flags & IOMMU_FAULT_UNRECOV_PASID_VALID)
+		pasid = fault->event.pasid;
+	else
+		pasid = INVALID_IOASID;
 
 	dev_id = iommufd_hw_pagetable_get_dev_id(hwpt, dev, pasid);
 	if (dev_id == IOMMUFD_INVALID_ID)
-		return IOMMU_PAGE_RESP_FAILURE;
+		return -ENODEV;
 
 	fault->dev_id = dev_id;
 	mutex_lock(&s1_hwpt->fault_queue_lock);
@@ -234,7 +241,7 @@ iommufd_hw_pagetable_iopf_handler(struct iommu_fault *fault,
 	size = header->nb_entries;
 
 	if (CIRC_SPACE(head, tail, size) < 1) {
-		resp = IOMMU_PAGE_RESP_FAILURE;
+		rc = -EINVAL;
 		goto unlock;
 	}
 
@@ -242,8 +249,8 @@ iommufd_hw_pagetable_iopf_handler(struct iommu_fault *fault,
 	header->head = (head + 1) % size;
 unlock:
 	mutex_unlock(&s1_hwpt->fault_queue_lock);
-	if (resp != IOMMU_PAGE_RESP_ASYNC)
-		return resp;
+	if (rc)
+		return rc;
 
 	mutex_lock(&s1_hwpt->notify_gate);
 	pr_debug("%s, signal userspace!\n", __func__);
@@ -251,14 +258,14 @@ unlock:
 		eventfd_signal(s1_hwpt->trigger, 1);
 	mutex_unlock(&s1_hwpt->notify_gate);
 
-	return resp;
+	return rc;
 }
 
 #define DMA_FAULT_RING_LENGTH 512
 
 static int
 iommufd_hw_pagetable_dma_fault_init(struct iommufd_hw_pagetable_s1 *s1_hwpt,
-				    int eventfd)
+				    struct device *fault_dev, int eventfd)
 {
 	struct iommufd_stage1_dma_fault *header;
 	size_t size;
@@ -292,8 +299,17 @@ iommufd_hw_pagetable_dma_fault_init(struct iommufd_hw_pagetable_s1 *s1_hwpt,
 	if (rc)
 		goto out_destroy_eventfd;
 
+	rc = iommu_register_device_fault_handler(fault_dev,
+			iommufd_hw_pagetable_fault_handler, s1_hwpt);
+	if (rc)
+		goto out_put_fault_fd;
+
+	s1_hwpt->fault_dev = fault_dev;
+
 	return rc;
 
+out_put_fault_fd:
+	put_unused_fd(s1_hwpt->fault_fd);
 out_destroy_eventfd:
 	iommufd_hw_pagetable_eventfd_destroy(&s1_hwpt->trigger);
 out_free:
@@ -308,6 +324,9 @@ iommufd_hw_pagetable_dma_fault_destroy(struct iommufd_hw_pagetable_s1 *s1_hwpt)
 		(struct iommufd_stage1_dma_fault *)s1_hwpt->fault_pages;
 
 	WARN_ON(header->tail != header->head);
+	if (s1_hwpt->fault_dev)
+		iommu_unregister_device_fault_handler(s1_hwpt->fault_dev);
+	put_unused_fd(s1_hwpt->fault_fd);
 	iommufd_hw_pagetable_eventfd_destroy(&s1_hwpt->trigger);
 	kfree(s1_hwpt->fault_pages);
 	mutex_destroy(&s1_hwpt->fault_queue_lock);
@@ -372,16 +391,14 @@ iommufd_alloc_s1_hwpt(struct iommufd_ctx *ictx,
 	s1_hwpt = &hwpt->s1_hwpt;
 	s1_hwpt->stage2 = stage2;
 
-	rc = iommufd_hw_pagetable_dma_fault_init(s1_hwpt, s1_data.eventfd);
+	rc = iommufd_hw_pagetable_dma_fault_init(s1_hwpt, idev->dev,
+						 s1_data.eventfd);
 	if (rc)
 		goto out_free_domain;
 
 	rc = put_user((__s32)s1_hwpt->fault_fd, &uptr->out_fault_fd);
 	if (rc)
 		goto out_destroy_dma_fault;
-
-	hwpt->domain->iopf_handler = iommufd_hw_pagetable_iopf_handler;
-	hwpt->domain->fault_data = s1_hwpt;
 
 	/* Caller is a user of stage2 until destroy */
 	iommufd_put_object_keep_user(stage2_obj);
