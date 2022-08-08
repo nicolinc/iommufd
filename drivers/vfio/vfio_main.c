@@ -526,6 +526,11 @@ static int __vfio_register_dev(struct vfio_device *device,
 	if (IS_ERR(group))
 		return PTR_ERR(group);
 
+	if (WARN_ON(device->ops->bind_iommufd &&
+		    (!device->ops->unbind_iommufd ||
+		     !device->ops->attach_ioas)))
+		return -EINVAL;
+
 	/*
 	 * If the driver doesn't specify a set then the device is added to a
 	 * singleton set just for itself.
@@ -780,6 +785,10 @@ static int vfio_device_first_open(struct vfio_device *device)
 		ret = vfio_group_use_container(device->group);
 		if (ret)
 			goto err_module_put;
+	} else if (device->group->iommufd) {
+		ret = vfio_iommufd_bind(device, device->group->iommufd);
+		if (ret)
+			goto err_module_put;
 	}
 
 	device->kvm = device->group->kvm;
@@ -796,6 +805,7 @@ static int vfio_device_first_open(struct vfio_device *device)
 err_container:
 	if (device->group->container)
 		vfio_group_unuse_container(device->group);
+	vfio_iommufd_unbind(device);
 	device->kvm = NULL;
 err_module_put:
 	mutex_unlock(&device->group->group_lock);
@@ -815,6 +825,7 @@ static void vfio_device_last_close(struct vfio_device *device)
 	device->kvm = NULL;
 	if (device->group->container)
 		vfio_group_unuse_container(device->group);
+	vfio_iommufd_unbind(device);
 	mutex_unlock(&device->group->group_lock);
 	module_put(device->dev->driver->owner);
 }
@@ -1642,6 +1653,24 @@ bool vfio_file_enforced_coherent(struct file *file)
 	if (group->container) {
 		ret = vfio_container_ioctl_check_extension(group->container,
 							   VFIO_DMA_CC_IOMMU);
+	} else if (group->iommufd) {
+		struct vfio_device *device;
+
+		/*
+		 * FIXME this is in the wrong order for KVM, the KVM will be set
+		 * after the group is opened and container set, but before the
+		 * device fds are created, so it will not see the iommufd bind
+		 * at this point.
+		 */
+		mutex_lock(&group->device_lock);
+		ret = true;
+		list_for_each_entry(device, &group->device_list, group_next) {
+			if (!vfio_device_try_get_registration(device))
+				continue;
+			ret &= vfio_iommufd_enforced_coherent(device);
+			vfio_device_put_registration(device);
+		}
+		mutex_unlock(&group->device_lock);
 	} else {
 		/*
 		 * Since the coherency state is determined only once a container
@@ -1886,8 +1915,6 @@ static void __exit vfio_cleanup(void)
 module_init(vfio_init);
 module_exit(vfio_cleanup);
 
-MODULE_IMPORT_NS(IOMMUFD);
-MODULE_IMPORT_NS(IOMMUFD_VFIO);
 MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR(DRIVER_AUTHOR);
