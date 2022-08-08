@@ -528,6 +528,11 @@ static int __vfio_register_dev(struct vfio_device *device,
 	if (IS_ERR(group))
 		return PTR_ERR(group);
 
+	if (WARN_ON(device->ops->bind_iommufd &&
+		    (!device->ops->unbind_iommufd ||
+		     !device->ops->attach_ioas)))
+		return -EINVAL;
+
 	/*
 	 * If the driver doesn't specify a set then the device is added to a
 	 * singleton set just for itself.
@@ -790,6 +795,10 @@ static int vfio_device_first_open(struct vfio_device *device)
 		ret = vfio_group_use_container(device->group);
 		if (ret)
 			goto err_module_put;
+	} else if (device->group->iommufd) {
+		ret = vfio_iommufd_bind(device, device->group->iommufd);
+		if (ret)
+			goto err_module_put;
 	}
 
 	device->kvm = device->group->kvm;
@@ -806,6 +815,7 @@ static int vfio_device_first_open(struct vfio_device *device)
 err_container:
 	if (device->group->container)
 		vfio_group_unuse_container(device->group);
+	vfio_iommufd_unbind(device);
 	device->kvm = NULL;
 err_module_put:
 	mutex_unlock(&device->group->group_lock);
@@ -825,6 +835,7 @@ static void vfio_device_last_close(struct vfio_device *device)
 	device->kvm = NULL;
 	if (device->group->container)
 		vfio_group_unuse_container(device->group);
+	vfio_iommufd_unbind(device);
 	mutex_unlock(&device->group->group_lock);
 	module_put(device->dev->driver->owner);
 }
@@ -1923,8 +1934,6 @@ static void __exit vfio_cleanup(void)
 module_init(vfio_init);
 module_exit(vfio_cleanup);
 
-MODULE_IMPORT_NS(IOMMUFD);
-MODULE_IMPORT_NS(IOMMUFD_VFIO);
 MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR(DRIVER_AUTHOR);
