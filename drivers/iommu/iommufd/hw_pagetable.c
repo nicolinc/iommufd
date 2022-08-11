@@ -393,7 +393,8 @@ out_put_obj:
 static struct iommufd_hw_pagetable *
 iommufd_alloc_s2_hwpt(struct iommufd_ctx *ictx,
 		      struct iommufd_device *idev,
-		      struct iommu_alloc_hwpt *cmd)
+		      struct iommu_alloc_hwpt *cmd,
+		      void *user_data)
 {
 	struct iommufd_object *obj;
 	struct iommufd_ioas *ioas;
@@ -414,7 +415,8 @@ iommufd_alloc_s2_hwpt(struct iommufd_ctx *ictx,
 	}
 
 	hwpt->type = IOMMUFD_HWPT_IOAS_USER;
-	hwpt->domain = iommu_domain_alloc(idev->dev->bus);
+	hwpt->domain = iommu_domain_alloc_user(idev->dev, NULL, user_data,
+					       IOMMU_DOMAIN_UNMANAGED);
 	if (!hwpt->domain) {
 		rc = -ENOMEM;
 		goto out_abort;
@@ -487,7 +489,7 @@ int iommufd_alloc_hwpt(struct iommufd_ucmd *ucmd)
 
 	switch (cmd->hwpt_type) {
 	case IOMMU_HWPT_TYPE_S2:
-		hwpt = iommufd_alloc_s2_hwpt(ucmd->ictx, idev, cmd);
+		hwpt = iommufd_alloc_s2_hwpt(ucmd->ictx, idev, cmd, user_data);
 		break;
 	case IOMMU_HWPT_TYPE_S1:
 		hwpt = iommufd_alloc_s1_hwpt(ucmd->ictx, idev, cmd, user_data);
