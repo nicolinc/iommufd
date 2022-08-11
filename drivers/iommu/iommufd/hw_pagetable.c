@@ -419,6 +419,7 @@ iommufd_alloc_s2_hwpt(struct iommufd_ctx *ictx,
 	struct iommufd_ioas *ioas;
 	struct iommufd_hw_pagetable *hwpt;
 	struct iommufd_hw_pagetable_ioas *ioas_hwpt;
+	struct iommu_domain_user_data user_data;
 	u32 ioas_id;
 	int rc;
 
@@ -440,8 +441,10 @@ iommufd_alloc_s2_hwpt(struct iommufd_ctx *ictx,
 		goto out_put_ioas;
 	}
 
+	user_data.flags = IOMMU_DOMAIN_USER_FLAGS_NESTING;
+	user_data.stage = IOMMU_DOMAIN_USER_STAGE_2;
 	hwpt->type = IOMMUFD_HWPT_IOAS_USER;
-	hwpt->domain = iommu_domain_alloc(idev->dev->bus);
+	hwpt->domain = iommu_domain_alloc_user(idev->dev, NULL, &user_data);
 	if (!hwpt->domain) {
 		rc = -ENOMEM;
 		goto out_abort;
