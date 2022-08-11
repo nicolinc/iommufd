@@ -365,9 +365,8 @@ iommufd_alloc_s1_hwpt(struct iommufd_ctx *ictx,
 	}
 
 	hwpt->type = IOMMUFD_HWPT_USER_S1;
-	hwpt->domain = iommu_alloc_nested_domain(idev->dev->bus,
-						 parent_domain,
-						 user_data);
+	hwpt->domain = iommu_domain_alloc_user(idev->dev, parent_domain,
+					       user_data, IOMMU_DOMAIN_NESTING);
 	if (!hwpt->domain) {
 		rc = -ENOMEM;
 		goto out_abort;
