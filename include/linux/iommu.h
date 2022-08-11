@@ -192,6 +192,16 @@ enum iommu_dev_features {
 
 #define IOMMU_PASID_INVALID	(-1U)
 
+struct iommu_domain_user_data {
+#define IOMMU_DOMAIN_USER_FLAGS_NESTING 1
+	u32 flags;
+#define IOMMU_DOMAIN_USER_STAGE_1	0
+#define IOMMU_DOMAIN_USER_STAGE_2	1
+	u32 stage;
+	u64 stage1_ptr;
+	union iommu_stage1_vendor vendor;
+};
+
 #ifdef CONFIG_IOMMU_API
 
 /**
@@ -250,9 +260,9 @@ struct iommu_ops {
 
 	/* Domain allocation and freeing by the iommu driver */
 	struct iommu_domain *(*domain_alloc)(unsigned iommu_domain_type);
-	struct iommu_domain *(*nested_domain_alloc)(struct iommu_domain *s2_domain,
-						    unsigned long s1_ptr,
-						    union iommu_stage1_vendor *cfg);
+	struct iommu_domain *(*domain_alloc_user)(struct device *dev,
+			struct iommu_domain *s2_domain,
+			struct iommu_domain_user_data *user_data);
 
 	struct iommu_device *(*probe_device)(struct device *dev);
 	void (*release_device)(struct device *dev);
@@ -721,8 +731,9 @@ struct iommu_domain *
 iommu_get_domain_for_dev_pasid(struct device *dev, ioasid_t pasid);
 
 struct iommu_domain *
-iommu_alloc_nested_domain(struct bus_type *bus, struct iommu_domain *s2_domain,
-			  unsigned long s1_ptr, union iommu_stage1_vendor *cfg);
+iommu_domain_alloc_user(struct device *dev, struct iommu_domain *parent,
+			struct iommu_domain_user_data *user_data);
+
 void iommu_domain_cache_inv(struct iommu_domain *domain,
 			    struct iommu_cache_invalidate_info *inv_info);
 #else /* CONFIG_IOMMU_API */
@@ -1108,8 +1119,8 @@ iommu_get_domain_for_dev_pasid(struct device *dev, ioasid_t pasid)
 }
 
 static inline struct iommu_domain *
-iommu_alloc_nested_domain(struct bus_type *bus, struct iommu_domain *s2_domain,
-			  unsigned long s1_ptr, union iommu_stage1_vendor *cfg)
+iommu_domain_alloc_user(struct device *dev, struct iommu_domain *parent,
+			struct iommu_domain_user_data *user_data);
 {
 	return NULL;
 }

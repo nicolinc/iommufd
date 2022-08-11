@@ -331,8 +331,8 @@ iommufd_alloc_s1_hwpt(struct iommufd_ctx *ictx,
 	struct iommufd_hw_pagetable *stage2;
 	struct iommufd_hw_pagetable_s1 *s1_hwpt;
 	struct iommu_hwpt_s1_data __user *uptr = (void __user *)cmd->data_uptr;
+	struct iommu_domain_user_data user_data;
 	struct iommu_hwpt_s1_data s1_data;
-	union iommu_stage1_vendor s1_vendor;
 	int rc;
 
 	rc = copy_struct_from_user(&s1_data, sizeof(s1_data),
@@ -344,11 +344,15 @@ iommufd_alloc_s1_hwpt(struct iommufd_ctx *ictx,
 	if (s1_data.eventfd < 0)
 		return ERR_PTR(-EINVAL);
 
-	rc = copy_struct_from_user(&s1_vendor, sizeof(s1_vendor),
+	rc = copy_struct_from_user(&user_data.vendor, sizeof(user_data.vendor),
 				   (void __user *)s1_data.stage1_vendor_uptr,
 				   s1_data.stage1_vendor_len);
 	if (rc)
 		return ERR_PTR(rc);
+
+	user_data.flags = IOMMU_DOMAIN_USER_FLAGS_NESTING;
+	user_data.stage = IOMMU_DOMAIN_USER_STAGE_1;
+	user_data.stage1_ptr = s1_data.stage1_ptr;
 
 	stage2_obj = iommufd_get_object(ictx, s1_data.stage2_hwpt_id,
 					IOMMUFD_OBJ_HW_PAGETABLE);
@@ -364,10 +368,8 @@ iommufd_alloc_s1_hwpt(struct iommufd_ctx *ictx,
 	}
 
 	hwpt->type = IOMMUFD_HWPT_USER_S1;
-	hwpt->domain = iommu_alloc_nested_domain(idev->dev->bus,
-						 stage2->domain,
-						 s1_data.stage1_ptr,
-						 &s1_vendor);
+	hwpt->domain = iommu_domain_alloc_user(idev->dev,
+					       stage2->domain, &user_data);
 	if (!hwpt->domain) {
 		rc = -ENOMEM;
 		goto out_abort;

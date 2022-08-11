@@ -3314,24 +3314,29 @@ iommu_get_domain_for_dev_pasid(struct device *dev, ioasid_t pasid)
 }
 
 /*
- * Nesting domain interfaces.
+ * User domain interfaces.
  */
 struct iommu_domain *
-iommu_alloc_nested_domain(struct bus_type *bus, struct iommu_domain *s2_domain,
-			  unsigned long s1_ptr, union iommu_stage1_vendor *cfg)
+iommu_domain_alloc_user(struct device *dev, struct iommu_domain *parent,
+			struct iommu_domain_user_data *user_data)
 {
+	bool nesting = user_data->flags & IOMMU_DOMAIN_USER_FLAGS_NESTING;
+	bool stage1 = user_data->stage == IOMMU_DOMAIN_USER_STAGE_1;
+	const struct iommu_ops *ops = dev_iommu_ops(dev);
 	struct iommu_domain *domain;
 
-	if (!bus || !bus->iommu_ops || !bus->iommu_ops->nested_domain_alloc)
+	domain = ops->domain_alloc_user(dev, parent, user_data);
+	if (!domain)
 		return NULL;
 
-	domain = bus->iommu_ops->nested_domain_alloc(s2_domain, s1_ptr, cfg);
-	if (domain)
+	if (nesting && stage1)
 		domain->type = IOMMU_DOMAIN_NESTING;
+	else
+		domain->type = IOMMU_DOMAIN_UNMANAGED;
 
 	return domain;
 }
-EXPORT_SYMBOL_GPL(iommu_alloc_nested_domain);
+EXPORT_SYMBOL_GPL(iommu_domain_alloc_user);
 
 void iommu_domain_cache_inv(struct iommu_domain *domain,
 			    struct iommu_cache_invalidate_info *inv_info)
