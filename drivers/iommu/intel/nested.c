@@ -287,7 +287,7 @@ static const struct iommu_domain_ops intel_nested_domain_ops = {
 
 struct iommu_domain *intel_nested_domain_alloc(struct iommu_domain *s2_domain,
 					       unsigned long s1_pgtbl,
-					       union iommu_stage1_config *cfg)
+					       union iommu_stage1_vendor *cfg)
 {
 	struct nested_domain *ndomain;
 

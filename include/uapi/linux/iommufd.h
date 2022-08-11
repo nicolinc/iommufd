@@ -315,23 +315,23 @@ struct iommu_stage1_config_vtd {
 					 IOMMU_VTD_PGTBL_PCD |  \
 					 IOMMU_VTD_PGTBL_PWT)
 
-union iommu_stage1_config {
+union iommu_stage1_vendor {
 	struct iommu_stage1_config_vtd vtd;
 };
 
 /*
  * @stage2_hwpt_id: hwpt ID for the stage2 object
  * @eventfd: user provided eventfd for kernel to notify userspace for dma fault
- * @stage1_config_len: vendor specific stage1 config length
- * @stage1_config_uptr: vendor specific stage1 config pointer
+ * @stage1_vendor_len: vendor specific stage1 config length
+ * @stage1_vendor_uptr: vendor specific stage1 config pointer
  * @stage1_ptr: the stage1 (a.k.a user managed page table) pointer,
  *		This pointer should be subjected to stage2 translation.
  * @out_fault_fd: output fd for user access dma fault data
  */
 struct iommu_hwpt_s1_data {
 	__u32 stage2_hwpt_id;
-	__u32 stage1_config_len;
-	__aligned_u64 stage1_config_uptr;
+	__u32 stage1_vendor_len;
+	__aligned_u64 stage1_vendor_uptr;
 	__aligned_u64 stage1_ptr;
 	__s32 eventfd;
 	__s32 out_fault_fd;

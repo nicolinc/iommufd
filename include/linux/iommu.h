@@ -252,7 +252,7 @@ struct iommu_ops {
 	struct iommu_domain *(*domain_alloc)(unsigned iommu_domain_type);
 	struct iommu_domain *(*nested_domain_alloc)(struct iommu_domain *s2_domain,
 						    unsigned long s1_ptr,
-						    union iommu_stage1_config *cfg);
+						    union iommu_stage1_vendor *cfg);
 
 	struct iommu_device *(*probe_device)(struct device *dev);
 	void (*release_device)(struct device *dev);
@@ -722,7 +722,7 @@ iommu_get_domain_for_dev_pasid(struct device *dev, ioasid_t pasid);
 
 struct iommu_domain *
 iommu_alloc_nested_domain(struct bus_type *bus, struct iommu_domain *s2_domain,
-			  unsigned long s1_ptr, union iommu_stage1_config *cfg);
+			  unsigned long s1_ptr, union iommu_stage1_vendor *cfg);
 void iommu_domain_cache_inv(struct iommu_domain *domain,
 			    struct iommu_cache_invalidate_info *inv_info);
 #else /* CONFIG_IOMMU_API */
@@ -1109,7 +1109,7 @@ iommu_get_domain_for_dev_pasid(struct device *dev, ioasid_t pasid)
 
 static inline struct iommu_domain *
 iommu_alloc_nested_domain(struct bus_type *bus, struct iommu_domain *s2_domain,
-			  unsigned long s1_ptr, union iommu_stage1_config *cfg)
+			  unsigned long s1_ptr, union iommu_stage1_vendor *cfg)
 {
 	return NULL;
 }

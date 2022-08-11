@@ -3318,7 +3318,7 @@ iommu_get_domain_for_dev_pasid(struct device *dev, ioasid_t pasid)
  */
 struct iommu_domain *
 iommu_alloc_nested_domain(struct bus_type *bus, struct iommu_domain *s2_domain,
-			  unsigned long s1_ptr, union iommu_stage1_config *cfg)
+			  unsigned long s1_ptr, union iommu_stage1_vendor *cfg)
 {
 	struct iommu_domain *domain;
 
