@@ -19,7 +19,7 @@
 struct nested_domain {
 	struct dmar_domain *s2_domain;
 	unsigned long s1_pgtbl;
-	struct iommu_stage1_config_vtd s1_cfg;
+	struct iommu_hwpt_intel_vtd s1_cfg;
 
 	/* Protect the device list. */
 	struct mutex mutex;
@@ -286,9 +286,9 @@ static const struct iommu_domain_ops intel_nested_domain_ops = {
 };
 
 struct iommu_domain *intel_nested_domain_alloc(struct iommu_domain *s2_domain,
-					       unsigned long s1_pgtbl,
-					       union iommu_stage1_config *cfg)
+					       void *user_data)
 {
+	struct iommu_hwpt_intel_vtd *vtd = user_data;
 	struct nested_domain *ndomain;
 
 	ndomain = kzalloc(sizeof(*ndomain), GFP_KERNEL);
@@ -296,8 +296,8 @@ struct iommu_domain *intel_nested_domain_alloc(struct iommu_domain *s2_domain,
 		return NULL;
 
 	ndomain->s2_domain = to_dmar_domain(s2_domain);
-	ndomain->s1_pgtbl = s1_pgtbl;
-	ndomain->s1_cfg = cfg->vtd;
+	ndomain->s1_pgtbl = vtd->s1_pgtbl;
+	ndomain->s1_cfg = *vtd;
 	ndomain->domain.ops = &intel_nested_domain_ops;
 	mutex_init(&ndomain->mutex);
 	INIT_LIST_HEAD(&ndomain->devices);

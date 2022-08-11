@@ -232,7 +232,7 @@ union ucmd_buffer {
 	struct iommu_ioas_iova_ranges iova_ranges;
 	struct iommu_ioas_map map;
 	struct iommu_ioas_unmap unmap;
-	struct iommu_alloc_user_hwpt s1_hwpt;
+	struct iommu_alloc_hwpt alloc_hwpt;
 	struct iommu_hwpt_invalidate_s1_cache cache;
 	struct iommu_destroy destroy;
 	struct iommu_device_info info;
@@ -276,7 +276,7 @@ static struct iommufd_ioctl_op iommufd_ioctl_ops[] = {
 		 __reserved),
 	IOCTL_OP(IOMMU_DEVICE_GET_INFO, iommufd_device_get_info, struct iommu_device_info,
 		 hw_data_ptr),
-	IOCTL_OP(IOMMU_ALLOC_USER_HWPT, iommufd_alloc_user_hwpt, struct iommu_alloc_user_hwpt,
+	IOCTL_OP(IOMMU_ALLOC_HWPT, iommufd_alloc_hwpt, struct iommu_alloc_hwpt,
 		 out_hwpt_id),
 	IOCTL_OP(IOMMU_ADD_HWPT_EVENT, iommufd_add_hwpt_event, struct iommu_add_hwpt_event,
 		 out_fd),

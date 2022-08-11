@@ -122,7 +122,7 @@ int intel_pasid_setup_nested(struct intel_iommu *iommu,
 			     struct device *dev,
 			     u32 pasid, pgd_t *s1_gpgd,
 			     struct dmar_domain *s2_domain,
-			     struct iommu_stage1_config_vtd *s1_cfg);
+			     struct iommu_hwpt_intel_vtd *s1_cfg);
 void intel_pasid_tear_down_entry(struct intel_iommu *iommu,
 				 struct device *dev, u32 pasid,
 				 bool fault_ignore);

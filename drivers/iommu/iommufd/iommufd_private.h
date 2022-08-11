@@ -218,7 +218,7 @@ int iommufd_ioas_copy(struct iommufd_ucmd *ucmd);
 int iommufd_ioas_unmap(struct iommufd_ucmd *ucmd);
 int iommufd_vfio_ioas(struct iommufd_ucmd *ucmd);
 int iommufd_device_get_info(struct iommufd_ucmd *ucmd);
-int iommufd_alloc_user_hwpt(struct iommufd_ucmd *ucmd);
+int iommufd_alloc_hwpt(struct iommufd_ucmd *ucmd);
 int iommufd_add_hwpt_event(struct iommufd_ucmd *ucmd);
 int iommufd_hwpt_invalidate_cache(struct iommufd_ucmd *ucmd);
 int iommufd_alloc_pasid(struct iommufd_ucmd *ucmd);
@@ -243,7 +243,6 @@ struct iommufd_hw_pagetable_ioas {
 struct iommufd_hw_pagetable_s1 {
 	struct iommufd_hw_pagetable *stage2;
 	u64 stage1_ptr;
-	union iommu_stage1_config config;
 	struct device *fault_dev;
 	struct file *fault_file;
 	int fault_fd;
@@ -267,6 +266,7 @@ struct iommufd_hw_pagetable {
 	struct iommu_domain *domain;
 	struct mutex devices_lock;
 	struct xarray devices;
+	void *user_data;
 	enum iommufd_hw_pagetable_type type;
 	union {
 		struct iommufd_hw_pagetable_ioas ioas_hwpt;

@@ -44,7 +44,7 @@ enum {
 	IOMMUFD_CMD_IOAS_UNMAP,
 	IOMMUFD_CMD_VFIO_IOAS,
 	IOMMUFD_CMD_DEVICE_GET_INFO,
-	IOMMUFD_CMD_ALLOC_USER_HWPT,
+	IOMMUFD_CMD_ALLOC_HWPT,
 	IOMMUFD_CMD_HWPT_INVAL_S1_CACHE,
 	IOMMUFD_CMD_ALLOC_PASID,
 	IOMMUFD_CMD_FREE_PASID,
@@ -285,9 +285,11 @@ struct iommu_device_info {
 #define IOMMU_DEVICE_GET_INFO _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DEVICE_GET_INFO)
 
 /**
- * struct iommu_stage1_config_vtd - Intel VT-d specific config for stage1
+ * struct iommu_hwpt_intel_vtd - Intel VT-d specific hwpt data
  *
  * @flags:	VT-d PASID table entry attributes
+ * @s1_pgtbl: 	the stage1 (a.k.a user managed page table) pointer,
+ *		This pointer should be subjected to stage2 translation.
  * @pat:	Page attribute table data to compute effective memory type
  * @emt:	Extended memory type
  * @addr_width: the input address width of VT-d stage1 page table
@@ -295,7 +297,7 @@ struct iommu_device_info {
  * Only guest vIOMMU selectable and effective options are passed down to
  * the host IOMMU.
  */
-struct iommu_stage1_config_vtd {
+struct iommu_hwpt_intel_vtd {
 #define IOMMU_VTD_PGTBL_SRE	(1 << 0) /* supervisor request */
 #define IOMMU_VTD_PGTBL_EAFE	(1 << 1) /* extended access enable */
 #define IOMMU_VTD_PGTBL_PCD	(1 << 2) /* page-level cache disable */
@@ -305,6 +307,7 @@ struct iommu_stage1_config_vtd {
 #define IOMMU_VTD_PGTBL_WPE	(1 << 6) /* Write protect enable */
 #define IOMMU_VTD_PGTBL_LAST	(1 << 7)
 	__u64 flags;
+	__u64 s1_pgtbl;
 	__u32 pat;
 	__u32 emt;
 	__u32 addr_width;
@@ -316,60 +319,52 @@ struct iommu_stage1_config_vtd {
 					 IOMMU_VTD_PGTBL_PCD |  \
 					 IOMMU_VTD_PGTBL_PWT)
 
-union iommu_stage1_config {
-	struct iommu_stage1_config_vtd vtd;
+enum iommu_hwpt_type {
+	IOMMU_HWPT_TYPE_S2 = 0,
+	IOMMU_HWPT_TYPE_S1 = 1,
 };
 
-/*
- * @stage2_hwpt_id: hwpt ID for the stage2 object
- * @stage1_config_len: vendor specific stage1 config length
- * @stage1_config_uptr: vendor specific stage1 config pointer
- * @stage1_ptr: the stage1 (a.k.a user managed page table) pointer,
- *		This pointer should be subjected to stage2 translation.
- */
-struct iommu_hwpt_s1_data {
-	__u32 stage2_hwpt_id;
-	__u32 stage1_config_len;
-	__aligned_u64 stage1_config_uptr;
-	__aligned_u64 stage1_ptr;
-};
-
-enum iommu_user_hwpt_type {
-	IOMMU_USER_HWPT_S2 = 0,
-	IOMMU_USER_HWPT_S1 = 1,
+enum iommu_hwpt_data_type {
+	IOMMU_HWPT_DATA_NONE = 0,
+	IOMMU_HWPT_DATA_INTEL_VTD,
 };
 
 /**
- * struct iommu_alloc_user_hwpt - ioctl(IOMMU_ALLOC_USER_HWPT)
- * @size: sizeof(struct iommu_alloc_user_hwpt)
- * @flags: must be 0
+ * struct iommu_alloc_hwpt - ioctl(IOMMU_ALLOC_HWPT)
+ * @size: sizeof(struct iommu_alloc_hwpt)
+ * @flags: indicates the special use of the hwpt
  * @dev_id: the device to allocate hwpt for
  * @hwpt_type: the type of the requested hwpt
- * @data_len: the legnth of the the type specific data
+ * @parent_id: the parent of this hwpt (hwpt_type dependent)
+ *     +=====================+=======================================+
+ *     | hwpt_type           |     parent_id                         |
+ *     +---------------------+---------------------------------------+
+ *     | IOMMU_HWPT_TYPE_S2  |     ioas_id                           |
+ *     +---------------------+---------------------------------------+
+ *     | IOMMU_HWPT_TYPE_S1  |     Stage-2 hwpt_id                   |
+ *     +=====================+=======================================+
+ * @data_type: the type of the user data
+ * @data_len: the legnth of the type specific data
  * @reserved: must be 0
  * @data_uptr: user pointer of the type specific data
- *     +=====================+=======================================+
- *     | hwpt_type           |     Type specific data struct         |
- *     +---------------------+---------------------------------------+
- *     | IOMMU_USER_HWPT_S2  |     u32                               |
- *     +---------------------+---------------------------------------+
- *     | IOMMU_USER_HWPT_S1  |     struct iommu_hwpt_s1_data         |
- *     +=====================+=======================================+
  * @out_hwpt_id: output hwpt ID for the allocated object
  *
  * Allocate a hardware page table for userspace
  */
-struct iommu_alloc_user_hwpt {
+struct iommu_alloc_hwpt {
 	__u32 size;
+#define IOMMU_HWPT_FLAG_NESTING		(1 << 0)
 	__u32 flags;
 	__u32 dev_id;
 	__u32 hwpt_type;
+	__u32 parent_id;
+	__u32 data_type;
 	__u32 data_len;
 	__u32 reserved;
 	__aligned_u64 data_uptr;
 	__u32 out_hwpt_id;
 };
-#define IOMMU_ALLOC_USER_HWPT _IO(IOMMUFD_TYPE, IOMMUFD_CMD_ALLOC_USER_HWPT)
+#define IOMMU_ALLOC_HWPT _IO(IOMMUFD_TYPE, IOMMUFD_CMD_ALLOC_HWPT)
 
 enum iommu_hwpt_event_type {
 	IOMMU_HWPT_EVENT_FAULT,
