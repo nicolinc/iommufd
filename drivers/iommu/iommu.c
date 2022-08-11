@@ -3318,14 +3318,14 @@ iommu_get_domain_for_dev_pasid(struct device *dev, ioasid_t pasid)
  */
 struct iommu_domain *
 iommu_alloc_nested_domain(struct bus_type *bus, struct iommu_domain *s2_domain,
-			  unsigned long s1_ptr, union iommu_stage1_config *cfg)
+			  void *user_data)
 {
 	struct iommu_domain *domain;
 
 	if (!bus || !bus->iommu_ops || !bus->iommu_ops->nested_domain_alloc)
 		return NULL;
 
-	domain = bus->iommu_ops->nested_domain_alloc(s2_domain, s1_ptr, cfg);
+	domain = bus->iommu_ops->nested_domain_alloc(s2_domain, user_data);
 	if (domain)
 		domain->type = IOMMU_DOMAIN_NESTING;
 
