@@ -250,8 +250,10 @@ struct iommu_ops {
 
 	/* Domain allocation and freeing by the iommu driver */
 	struct iommu_domain *(*domain_alloc)(unsigned iommu_domain_type);
-	struct iommu_domain *(*nested_domain_alloc)(struct iommu_domain *s2_domain,
-						    void *user_data);
+	struct iommu_domain *(*domain_alloc_user)(struct device *dev,
+						  struct iommu_domain *parent,
+						  void *user_data,
+						  unsigned iommu_domain_type);
 
 	struct iommu_device *(*probe_device)(struct device *dev);
 	void (*release_device)(struct device *dev);
@@ -720,8 +722,8 @@ struct iommu_domain *
 iommu_get_domain_for_dev_pasid(struct device *dev, ioasid_t pasid);
 
 struct iommu_domain *
-iommu_alloc_nested_domain(struct bus_type *bus, struct iommu_domain *s2_domain,
-			  void *user_data);
+iommu_domain_alloc_user(struct device *dev, struct iommu_domain *parent,
+			void *user_data, unsigned iommu_domain_type);
 void iommu_domain_cache_inv(struct iommu_domain *domain,
 			    struct iommu_cache_invalidate_info *inv_info);
 #else /* CONFIG_IOMMU_API */
@@ -1107,8 +1109,8 @@ iommu_get_domain_for_dev_pasid(struct device *dev, ioasid_t pasid)
 }
 
 static inline struct iommu_domain *
-iommu_alloc_nested_domain(struct bus_type *bus, struct iommu_domain *s2_domain,
-			  void *user_data)
+iommu_domain_alloc_user(struct device *dev, struct iommu_domain *parent,
+			void *user_data, unsigned iommu_domain_type)
 {
 	return NULL;
 }
