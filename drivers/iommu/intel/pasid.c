@@ -818,7 +818,7 @@ void intel_pasid_setup_page_snoop_control(struct intel_iommu *iommu,
 int intel_pasid_setup_nested(struct intel_iommu *iommu, struct device *dev,
 			     u32 pasid, pgd_t *s1_gpgd,
 			     struct dmar_domain *s2_domain,
-			     struct iommu_stage1_config_vtd *s1_cfg)
+			     struct iommu_user_intel_vtd *s1_cfg)
 {
 	struct pasid_entry *pte;
 	struct dma_pte *pgd;

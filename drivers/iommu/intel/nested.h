@@ -11,7 +11,6 @@
 #include <uapi/linux/iommufd.h>
 
 struct iommu_domain *intel_nested_domain_alloc(struct iommu_domain *s2_domain,
-					       unsigned long s1_ptr,
-					       union iommu_stage1_config *cfg);
+					       void *user_data);
 
 #endif /* __INTEL_NESTED_H */
