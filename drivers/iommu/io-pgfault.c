@@ -96,8 +96,7 @@ static void iopf_handler(struct work_struct *work)
 			kfree(iopf);
 	}
 
-	if (status != IOMMU_PAGE_RESP_ASYNC)
-		iopf_complete_group(group->dev, &group->last_fault, status);
+	iopf_complete_group(group->dev, &group->last_fault, status);
 	kfree(group);
 }
 
