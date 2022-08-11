@@ -31,10 +31,13 @@ void iommufd_hw_pagetable_destroy(struct iommufd_object *obj)
 	} else if (hwpt->type == IOMMUFD_HWPT_USER_S1) {
 		struct iommufd_hw_pagetable_s1 *s1_hwpt = &hwpt->s1_hwpt;
 
-		refcount_dec(&s1_hwpt->stage2->obj.users);
+		if (s1_hwpt->stage2)
+			refcount_dec(&s1_hwpt->stage2->obj.users);
 		iommufd_hw_pagetable_dma_fault_destroy(s1_hwpt);
 	}
 
+	if (hwpt->user_data)
+		kfree(hwpt->user_data);
 	iommu_domain_free(hwpt->domain);
 	mutex_destroy(&hwpt->devices_lock);
 }
@@ -336,46 +339,35 @@ iommufd_hw_pagetable_dma_fault_destroy(struct iommufd_hw_pagetable_s1 *s1_hwpt)
 static struct iommufd_hw_pagetable *
 iommufd_alloc_s1_hwpt(struct iommufd_ctx *ictx,
 		      struct iommufd_device *idev,
-		      struct iommu_alloc_user_hwpt *cmd)
+		      struct iommu_alloc_user_hwpt *cmd,
+		      void *user_data)
 {
-	struct iommufd_hw_pagetable *hwpt;
-	struct iommufd_object *stage2_obj;
-	struct iommufd_hw_pagetable *stage2;
+	struct iommu_domain *parent_domain = NULL;
 	struct iommufd_hw_pagetable_s1 *s1_hwpt;
-	struct iommu_hwpt_s1_data s1_data;
-	union iommu_stage1_config s1_config;
+	struct iommufd_hw_pagetable *stage2;
+	struct iommufd_hw_pagetable *hwpt;
+	struct iommufd_object *obj;
 	int rc;
 
-	rc = copy_struct_from_user(&s1_data, sizeof(s1_data),
-				   (void __user *)cmd->data_uptr,
-				   cmd->data_len);
-	if (rc)
-		return ERR_PTR(rc);
+	if (cmd->flags & IOMMU_USER_FLAG_NESTING) {
+		obj = iommufd_get_object(ictx, cmd->parent_id,
+					 IOMMUFD_OBJ_HW_PAGETABLE);
+		if (IS_ERR(obj))
+			return ERR_PTR(-EINVAL);
 
-	rc = copy_struct_from_user(&s1_config, sizeof(s1_config),
-				   (void __user *)s1_data.stage1_config_uptr,
-				   s1_data.stage1_config_len);
-	if (rc)
-		return ERR_PTR(rc);
-
-	stage2_obj = iommufd_get_object(ictx, s1_data.stage2_hwpt_id,
-					IOMMUFD_OBJ_HW_PAGETABLE);
-	if (IS_ERR(stage2_obj))
-		return ERR_PTR(-EINVAL);
-
-	stage2 = container_of(stage2_obj, struct iommufd_hw_pagetable, obj);
+		stage2 = container_of(obj, struct iommufd_hw_pagetable, obj);
+	}
 
 	hwpt = iommufd_object_alloc(ictx, hwpt, IOMMUFD_OBJ_HW_PAGETABLE);
 	if (IS_ERR(hwpt)) {
 		rc = PTR_ERR(hwpt);
-		goto out_put_stage2;
+		goto out_put_obj;
 	}
 
 	hwpt->type = IOMMUFD_HWPT_USER_S1;
 	hwpt->domain = iommu_alloc_nested_domain(idev->dev->bus,
-						 stage2->domain,
-						 s1_data.stage1_ptr,
-						 &s1_config);
+						 parent_domain,
+						 user_data);
 	if (!hwpt->domain) {
 		rc = -ENOMEM;
 		goto out_abort;
@@ -385,15 +377,19 @@ iommufd_alloc_s1_hwpt(struct iommufd_ctx *ictx,
 	mutex_init(&hwpt->devices_lock);
 
 	s1_hwpt = &hwpt->s1_hwpt;
-	s1_hwpt->stage2 = stage2;
 
 	/* Caller is a user of stage2 until destroy */
-	iommufd_put_object_keep_user(stage2_obj);
+	if (cmd->flags & IOMMU_USER_FLAG_NESTING) {
+		s1_hwpt->stage2 = stage2;
+		iommufd_put_object_keep_user(obj);
+	}
+
 	return hwpt;
 out_abort:
 	iommufd_object_abort(ictx, &hwpt->obj);
-out_put_stage2:
-	iommufd_put_object(stage2_obj);
+out_put_obj:
+	if (cmd->flags & IOMMU_USER_FLAG_NESTING)
+		iommufd_put_object(obj);
 	return ERR_PTR(rc);
 }
 
@@ -406,16 +402,9 @@ iommufd_alloc_s2_hwpt(struct iommufd_ctx *ictx,
 	struct iommufd_ioas *ioas;
 	struct iommufd_hw_pagetable *hwpt;
 	struct iommufd_hw_pagetable_ioas *ioas_hwpt;
-	u32 ioas_id;
 	int rc;
 
-	rc = copy_struct_from_user(&ioas_id, sizeof(ioas_id),
-				   (void __user *)cmd->data_uptr,
-				   cmd->data_len);
-	if (rc)
-		return ERR_PTR(rc);
-
-	obj = iommufd_get_object(ictx, ioas_id, IOMMUFD_OBJ_IOAS);
+	obj = iommufd_get_object(ictx, cmd->parent_id, IOMMUFD_OBJ_IOAS);
 	if (IS_ERR(obj))
 		return ERR_PTR(-EINVAL);
 
@@ -456,12 +445,17 @@ out_put_ioas:
 	return ERR_PTR(rc);
 }
 
+static const size_t iommufd_user_data_len[] = {
+	[IOMMU_USER_INTEL_VTD] = sizeof(struct iommu_user_intel_vtd),
+};
+
 int iommufd_alloc_user_hwpt(struct iommufd_ucmd *ucmd)
 {
 	struct iommu_alloc_user_hwpt *cmd = ucmd->cmd;
 	struct iommufd_object *dev_obj;
 	struct iommufd_device *idev;
 	struct iommufd_hw_pagetable *hwpt;
+	void *user_data = NULL;
 	int rc;
 
 	if (cmd->flags || cmd->reserved ||
@@ -475,23 +469,43 @@ int iommufd_alloc_user_hwpt(struct iommufd_ucmd *ucmd)
 
 	idev = container_of(dev_obj, struct iommufd_device, obj);
 
+	if (cmd->data_len) {
+		if (iommufd_user_data_len[cmd->data_type] != cmd->data_len) {
+			rc = -EINVAL;
+			goto out_put_dev;
+		}
+
+		user_data = kzalloc(cmd->data_len, GFP_KERNEL);
+		if (!user_data) {
+			rc = -ENOMEM;
+			goto out_put_dev;
+		}
+
+		rc = copy_struct_from_user(user_data, cmd->data_len,
+					   (void __user *)cmd->data_uptr,
+					   cmd->data_len);
+		if (rc)
+			goto out_put_dev;
+	}
+
 	switch (cmd->hwpt_type) {
 	case IOMMU_USER_HWPT_S2:
 		hwpt = iommufd_alloc_s2_hwpt(ucmd->ictx, idev, cmd);
 		break;
 	case IOMMU_USER_HWPT_S1:
-		hwpt = iommufd_alloc_s1_hwpt(ucmd->ictx, idev, cmd);
+		hwpt = iommufd_alloc_s1_hwpt(ucmd->ictx, idev, cmd, user_data);
 		break;
 	default:
 		rc = -EINVAL;
-		goto out_put_dev;
+		goto out_free_data;
 	}
 
 	if (IS_ERR(hwpt)) {
 		rc = PTR_ERR(hwpt);
-		goto out_put_dev;
+		goto out_free_data;
 	}
 
+	hwpt->user_data = user_data;
 	cmd->out_hwpt_id = hwpt->obj.id;
 
 	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
@@ -504,6 +518,9 @@ int iommufd_alloc_user_hwpt(struct iommufd_ucmd *ucmd)
 	return 0;
 out_destroy_hwpt:
 	iommufd_object_abort_and_destroy(ucmd->ictx, &hwpt->obj);
+out_free_data:
+	if (user_data)
+		kfree(user_data);
 out_put_dev:
 	iommufd_put_object(dev_obj);
 	return rc;
