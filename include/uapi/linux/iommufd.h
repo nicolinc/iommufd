@@ -49,6 +49,7 @@ enum {
 	IOMMUFD_CMD_ALLOC_PASID,
 	IOMMUFD_CMD_FREE_PASID,
 	IOMMUFD_CMD_PAGE_RESPONSE,
+	IOMMUFD_CMD_ADD_USER_EVENT,
 };
 
 /**
@@ -321,20 +322,16 @@ union iommu_stage1_config {
 
 /*
  * @stage2_hwpt_id: hwpt ID for the stage2 object
- * @eventfd: user provided eventfd for kernel to notify userspace for dma fault
  * @stage1_config_len: vendor specific stage1 config length
  * @stage1_config_uptr: vendor specific stage1 config pointer
  * @stage1_ptr: the stage1 (a.k.a user managed page table) pointer,
  *		This pointer should be subjected to stage2 translation.
- * @out_fault_fd: output fd for user access dma fault data
  */
 struct iommu_hwpt_s1_data {
 	__u32 stage2_hwpt_id;
 	__u32 stage1_config_len;
 	__aligned_u64 stage1_config_uptr;
 	__aligned_u64 stage1_ptr;
-	__s32 eventfd;
-	__s32 out_fault_fd;
 };
 
 enum iommu_user_hwpt_type {
@@ -373,6 +370,31 @@ struct iommu_alloc_user_hwpt {
 	__u32 out_hwpt_id;
 };
 #define IOMMU_ALLOC_USER_HWPT _IO(IOMMUFD_TYPE, IOMMUFD_CMD_ALLOC_USER_HWPT)
+
+enum iommu_user_event_type {
+	IOMMU_USER_EVENT_FAUT,
+};
+
+/*
+ * struct iommu_add_user_event - ioctl(IOMMU_ADD_USER_EVENT)
+ * @size: sizeof(struct iommu_add_user_event)
+ * @flags: must be 0
+ * @type: the type of event, defined in enum iommu_user_event_type
+ * @dev_id: the device to add the event
+ * @hwpt_id: the hwpt to add the event
+ * @eventfd: user provided eventfd for kernel to notify userspace
+ * @out_fd: output fd for user access data
+ */
+struct iommu_add_user_event {
+	__u32 size;
+	__u32 flags;
+	__u32 type;
+	__u32 dev_id;
+	__u32 hwpt_id;
+	__s32 eventfd;
+	__s32 out_fd;
+};
+#define IOMMU_ADD_USER_EVENT _IO(IOMMUFD_TYPE, IOMMUFD_CMD_ADD_USER_EVENT)
 
 /*
  * DMA Fault Region Layout
