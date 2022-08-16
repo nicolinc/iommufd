@@ -219,6 +219,7 @@ int iommufd_ioas_unmap(struct iommufd_ucmd *ucmd);
 int iommufd_vfio_ioas(struct iommufd_ucmd *ucmd);
 int iommufd_device_get_info(struct iommufd_ucmd *ucmd);
 int iommufd_alloc_user_hwpt(struct iommufd_ucmd *ucmd);
+int iommufd_add_user_event(struct iommufd_ucmd *ucmd);
 int iommufd_hwpt_invalidate_cache(struct iommufd_ucmd *ucmd);
 int iommufd_alloc_pasid(struct iommufd_ucmd *ucmd);
 int iommufd_free_pasid(struct iommufd_ucmd *ucmd);
