@@ -48,6 +48,7 @@ enum {
 	IOMMUFD_CMD_HWPT_ALLOC,
 	IOMMUFD_CMD_DEVICE_GET_HW_INFO,
 	IOMMUFD_CMD_HWPT_INVALIDATE,
+	IOMMUFD_CMD_HWPT_ADD_EVENT,
 };
 
 /**
@@ -683,3 +684,48 @@ struct iommu_hwpt_invalidate {
 };
 #define IOMMU_HWPT_INVALIDATE _IO(IOMMUFD_TYPE, IOMMUFD_CMD_HWPT_INVALIDATE)
 #endif
+
+enum iommu_hwpt_event_type {
+	IOMMU_HWPT_EVENT_FAULT,
+};
+
+/*
+ * struct iommu_hwpt_add_event - ioctl(IOMMU_ADD_HWPT_EVENT)
+ * @size: sizeof(struct iommu_hwpt_add_event)
+ * @flags: must be 0
+ * @type: the type of event, defined in enum iommu_hwpt_event_type
+ * @dev_id: the device to add the event
+ * @hwpt_id: the hwpt to add the event
+ * @eventfd: user provided eventfd for kernel to notify userspace
+ * @out_fd: output fd for user access data
+ */
+struct iommu_hwpt_add_event {
+	__u32 size;
+	__u32 flags;
+	__u32 type;
+	__u32 dev_id;
+	__u32 hwpt_id;
+	__s32 eventfd;
+	__s32 out_fd;
+};
+#define IOMMU_ADD_HWPT_EVENT _IO(IOMMUFD_TYPE, IOMMUFD_CMD_ADD_HWPT_EVENT)
+
+/*
+ * DMA Fault Region Layout
+ * @tail: index relative to the start of the ring buffer at which the
+ *        consumer finds the next item in the buffer
+ * @entry_size: fault ring buffer entry size in bytes
+ * @nb_entries: max capacity of the fault ring buffer
+ * @offset: ring buffer offset relative to the start of the region
+ * @head: index relative to the start of the ring buffer at which the
+ *        producer (kernel) inserts items into the buffers
+ */
+struct iommufd_stage1_dma_fault {
+	/* Write-Only */
+	__u32   tail;
+	/* Read-Only */
+	__u32   entry_size;
+	__u32	nb_entries;
+	__u32	offset;
+	__u32   head;
+};

@@ -390,3 +390,94 @@ out_put_hwpt:
 	iommufd_put_object(&hwpt->obj);
 	return rc;
 }
+
+static void
+iommufd_hw_pagetable_dma_fault_destroy(struct iommufd_hw_pagetable *hwpt)
+{
+	struct iommufd_stage1_dma_fault *header =
+		(struct iommufd_stage1_dma_fault *)hwpt->fault_pages;
+
+	WARN_ON(header->tail != header->head);
+	if (hwpt->fault_dev)
+		iommu_unregister_device_fault_handler(hwpt->fault_dev);
+	iommufd_hw_pagetable_eventfd_destroy(&hwpt->trigger);
+	kfree(hwpt->fault_pages);
+	mutex_destroy(&hwpt->fault_queue_lock);
+	mutex_destroy(&hwpt->notify_gate);
+}
+
+static int iommufd_hwpt_add_event_fault(struct iommufd_hw_pagetable *hwpt,
+					struct iommufd_device *idev,
+					s32 eventfd, s32 *out_fd)
+{
+	int rc;
+
+	if (hwpt->type != IOMMUFD_HWPT_USER_S1)
+		return -EINVAL;
+
+	rc = iommufd_hw_pagetable_dma_fault_init(&hwpt->hwpt, idev->dev,
+						 eventfd);
+	if (rc)
+		return rc;
+
+	*out_fd = hwpt->hwpt.fault_fd;
+
+	return 0;
+}
+
+int iommufd_hwpt_add_event(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_hwpt_add_event *cmd = ucmd->cmd;
+	struct iommufd_object *dev_obj, *hwpt_obj;
+	struct iommufd_hw_pagetable *hwpt;
+	struct iommufd_device *idev;
+	int rc;
+
+	if (cmd->flags)
+		return -EOPNOTSUPP;
+
+	if (cmd->eventfd < 0)
+		return -EINVAL;
+
+	dev_obj = iommufd_get_object(ucmd->ictx, cmd->dev_id,
+				     IOMMUFD_OBJ_DEVICE);
+	if (IS_ERR(dev_obj))
+		return PTR_ERR(dev_obj);
+
+	idev = container_of(dev_obj, struct iommufd_device, obj);
+
+	hwpt_obj = iommufd_get_object(ucmd->ictx, cmd->hwpt_id,
+				      IOMMUFD_OBJ_HW_PAGETABLE);
+	if (IS_ERR(hwpt_obj)) {
+		rc = PTR_ERR(hwpt_obj);
+		goto out_put_dev;
+	}
+
+	hwpt = container_of(hwpt_obj, struct iommufd_hw_pagetable, obj);
+
+	switch (cmd->type) {
+	case IOMMU_HWPT_EVENT_FAULT:
+		rc = iommufd_hwpt_add_event_fault(hwpt, idev, cmd->eventfd,
+						  &cmd->out_fd);
+		break;
+	default:
+		rc = -EOPNOTSUPP;
+	}
+	if (rc)
+		goto out_put_hwpt;
+
+	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+	if (rc)
+		goto out_destroy_dma_fault;
+
+	iommufd_put_object(hwpt_obj);
+	iommufd_put_object(dev_obj);
+	return 0;
+out_destroy_dma_fault:
+	iommufd_hw_pagetable_dma_fault_destroy(&hwpt->hwpt);
+out_put_hwpt:
+	iommufd_put_object(hwpt_obj);
+out_put_dev:
+	iommufd_put_object(dev_obj);
+	return rc;
+}

@@ -307,6 +307,8 @@ static const struct iommufd_ioctl_op iommufd_ioctl_ops[] = {
 		 struct iommu_hw_info, out_hwpt_type_bitmap),
 	IOCTL_OP(IOMMU_HWPT_INVALIDATE, iommufd_hwpt_invalidate,
 		 struct iommu_hwpt_invalidate, data_uptr),
+	IOCTL_OP(IOMMU_HWPT_ADD_EVENT, iommufd_hwpt_add_event,
+		 struct iommu_hwpt_add_event, out_fd),
 	IOCTL_OP(IOMMU_IOAS_ALLOC, iommufd_ioas_alloc_ioctl,
 		 struct iommu_ioas_alloc, out_ioas_id),
 	IOCTL_OP(IOMMU_IOAS_ALLOW_IOVAS, iommufd_ioas_allow_iovas,
