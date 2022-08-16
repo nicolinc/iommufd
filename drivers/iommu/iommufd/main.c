@@ -278,6 +278,8 @@ static struct iommufd_ioctl_op iommufd_ioctl_ops[] = {
 		 hw_data_ptr),
 	IOCTL_OP(IOMMU_ALLOC_USER_HWPT, iommufd_alloc_user_hwpt, struct iommu_alloc_user_hwpt,
 		 out_hwpt_id),
+	IOCTL_OP(IOMMU_ADD_HWPT_EVENT, iommufd_add_hwpt_event, struct iommu_add_hwpt_event,
+		 out_fd),
 	IOCTL_OP(IOMMU_HWPT_INVAL_S1_CACHE, iommufd_hwpt_invalidate_cache,
 		 struct iommu_hwpt_invalidate_s1_cache, info),
 	IOCTL_OP(IOMMU_ALLOC_PASID, iommufd_alloc_pasid, struct iommu_alloc_pasid,
