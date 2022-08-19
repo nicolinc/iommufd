@@ -442,7 +442,7 @@ iommufd_alloc_s2_hwpt(struct iommufd_ctx *ictx,
 	INIT_LIST_HEAD(&ioas_hwpt->auto_domains_item);
 	ioas_hwpt->ioas = ioas;
 	/* The calling driver is a user until the hw_pagetable is destroyed */
-	refcount_inc(&ioas->obj.users);
+	iommufd_put_object_keep_user(obj);
 	return hwpt;
 out_free_domain:
 	iommu_domain_free(hwpt->domain);
