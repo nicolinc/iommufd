@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2016, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2016-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #ifndef __TEGRA_IVC_H
+#define __TEGRA_IVC_H
 
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
