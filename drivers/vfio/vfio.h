@@ -135,7 +135,7 @@ vfio_container_from_file(struct file *filep)
 	return NULL;
 }
 
-static inline int vfio_container_use(struct vfio_group *group);
+static inline int vfio_container_use(struct vfio_group *group)
 {
 	return -EOPNOTSUPP;
 }
