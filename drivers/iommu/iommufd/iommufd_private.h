@@ -231,6 +231,7 @@ int iommufd_option_rlimit_mode(struct iommu_option *cmd,
 
 int iommufd_vfio_ioas(struct iommufd_ucmd *ucmd);
 int iommufd_device_get_info(struct iommufd_ucmd *ucmd);
+int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd);
 
 /*
  * A HW pagetable is called an iommu_domain inside the kernel. This user object
@@ -240,6 +241,7 @@ int iommufd_device_get_info(struct iommufd_ucmd *ucmd);
  */
 struct iommufd_hw_pagetable {
 	struct iommufd_object obj;
+	struct iommufd_hw_pagetable *parent;
 	struct iommufd_ioas *ioas;
 	struct iommu_domain *domain;
 	bool auto_domain : 1;
@@ -247,8 +249,14 @@ struct iommufd_hw_pagetable {
 	bool msi_cookie : 1;
 	/* Head at iommufd_ioas::hwpt_list */
 	struct list_head hwpt_item;
-	struct mutex devices_lock;
 	struct list_head devices;
+	/*
+	 * If hwpt->parent is valid, always reuse parent's devices_lock and
+	 * devices_users. Otherwise, the current hwpt should allocate them.
+	 */
+	struct mutex *devices_lock;
+	refcount_t *devices_users;
+	void *user_data;
 };
 
 struct iommufd_hw_pagetable *
@@ -272,6 +280,8 @@ int iopt_add_access(struct io_pagetable *iopt, struct iommufd_access *access);
 void iopt_remove_access(struct io_pagetable *iopt,
 			struct iommufd_access *access);
 void iommufd_access_destroy_object(struct iommufd_object *obj);
+
+struct device *iommufd_find_dev_by_id(struct iommufd_ctx *ctx, u32 devi_id);
 
 #ifdef CONFIG_IOMMUFD_TEST
 struct iommufd_hw_pagetable *
