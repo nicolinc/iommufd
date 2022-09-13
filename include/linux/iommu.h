@@ -266,6 +266,17 @@ struct iommu_ops {
 /**
  * struct iommu_domain_ops - domain specific operations
  * @attach_dev: attach an iommu domain to a device
+ *              Rules of its return errno:
+ *               EINVAL  - Exclusively, device and domain are incompatible. Must
+ *                         avoid kernel prints along with this errno. Any EINVAL
+ *                         returned from kAPIs must be converted to ENODEV if it
+ *                         is device-specific, or to some other reasonable errno
+ *                         being listed below
+ *               ENOMEM  - Out of memory
+ *               ENOSPC  - No space left on device
+ *               EBUSY   - Device is attached to a domain and cannot be changed
+ *               ENODEV  - Device specific errors, not able to be attached
+ *              <others> - Treated as ENODEV by the caller. Use is discouraged
  * @detach_dev: detach an iommu domain from a device
  * @map: map a physically contiguous memory region to an iommu domain
  * @map_pages: map a physically contiguous set of pages of the same size to
