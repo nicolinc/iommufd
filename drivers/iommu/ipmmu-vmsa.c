@@ -607,7 +607,7 @@ static int ipmmu_attach_device(struct iommu_domain *io_domain,
 
 	if (!mmu) {
 		dev_err(dev, "Cannot attach to IPMMU\n");
-		return -ENXIO;
+		return -ENODEV;
 	}
 
 	mutex_lock(&domain->mutex);

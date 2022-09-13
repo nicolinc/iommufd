@@ -562,10 +562,12 @@ static int mtk_iommu_config(struct mtk_iommu_data *data, struct device *dev,
 			peri_mmuen = enable ? peri_mmuen_msk : 0;
 			ret = regmap_update_bits(data->pericfg, PERICFG_IOMMU_1,
 						 peri_mmuen_msk, peri_mmuen);
-			if (ret)
+			if (ret) {
 				dev_err(dev, "%s iommu(%s) inframaster 0x%x fail(%d).\n",
 					enable ? "enable" : "disable",
 					dev_name(data->dev), peri_mmuen_msk, ret);
+				ret = -ENODEV;
+			}
 		}
 	}
 	return ret;
@@ -607,7 +609,7 @@ static int mtk_iommu_domain_finalise(struct mtk_iommu_domain *dom,
 	dom->iop = alloc_io_pgtable_ops(ARM_V7S, &dom->cfg, data);
 	if (!dom->iop) {
 		dev_err(data->dev, "Failed to alloc io pgtable\n");
-		return -EINVAL;
+		return -ENOMEM;
 	}
 
 	/* Update our support page sizes bitmap */
@@ -655,7 +657,7 @@ static int mtk_iommu_attach_device(struct iommu_domain *domain,
 
 	region_id = mtk_iommu_get_iova_region_id(dev, data->plat_data);
 	if (region_id < 0)
-		return region_id;
+		return -ENODEV;
 
 	bankid = mtk_iommu_get_bank_id(dev, data->plat_data);
 	mutex_lock(&dom->mutex);
@@ -678,6 +680,7 @@ static int mtk_iommu_attach_device(struct iommu_domain *domain,
 		ret = pm_runtime_resume_and_get(m4udev);
 		if (ret < 0) {
 			dev_err(m4udev, "pm get fail(%d) in attach.\n", ret);
+			ret = -ENODEV;
 			goto err_unlock;
 		}
 

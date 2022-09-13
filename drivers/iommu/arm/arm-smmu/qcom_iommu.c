@@ -367,7 +367,7 @@ static int qcom_iommu_attach_dev(struct iommu_domain *domain, struct device *dev
 
 	if (!qcom_iommu) {
 		dev_err(dev, "cannot attach to IOMMU, is it on the same bus?\n");
-		return -ENXIO;
+		return -ENODEV;
 	}
 
 	/* Ensure that the domain is finalized */

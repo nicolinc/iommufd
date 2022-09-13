@@ -487,7 +487,7 @@ static int tegra_smmu_attach_dev(struct iommu_domain *domain,
 	int err;
 
 	if (!fwspec)
-		return -ENOENT;
+		return -ENODEV;
 
 	for (index = 0; index < fwspec->num_ids; index++) {
 		err = tegra_smmu_as_prepare(smmu, as);

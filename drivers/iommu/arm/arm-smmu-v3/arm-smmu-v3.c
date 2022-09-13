@@ -2402,7 +2402,7 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 	struct arm_smmu_master *master;
 
 	if (!fwspec)
-		return -ENOENT;
+		return -ENODEV;
 
 	master = dev_iommu_priv_get(dev);
 	smmu = master->smmu;

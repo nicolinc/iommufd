@@ -126,7 +126,7 @@ int pamu_disable_liodn(int liodn)
 	ppaace = pamu_get_ppaace(liodn);
 	if (!ppaace) {
 		pr_debug("Invalid primary paace entry\n");
-		return -ENOENT;
+		return -ENODEV;
 	}
 
 	set_bf(ppaace->addr_bitfields, PAACE_AF_V, PAACE_V_INVALID);
@@ -194,7 +194,7 @@ int pamu_config_ppaace(int liodn, u32 omi, u32 stashid, int prot)
 
 	ppaace = pamu_get_ppaace(liodn);
 	if (!ppaace)
-		return -ENOENT;
+		return -ENODEV;
 
 	/* window size is 2^(WSE+1) bytes */
 	set_bf(ppaace->addr_bitfields, PPAACE_AF_WSE,
@@ -211,7 +211,7 @@ int pamu_config_ppaace(int liodn, u32 omi, u32 stashid, int prot)
 		ppaace->op_encode.index_ot.omi = omi;
 	} else if (~omi != 0) {
 		pr_debug("bad operation mapping index: %d\n", omi);
-		return -EINVAL;
+		return -ENODEV;
 	}
 
 	/* configure stash id */
