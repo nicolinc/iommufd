@@ -452,8 +452,10 @@ static int ipmmu_domain_init_context(struct ipmmu_vmsa_domain *domain)
 	 * Find an unused context.
 	 */
 	ret = ipmmu_domain_allocate_context(domain->mmu->root, domain);
-	if (ret < 0)
+	if (ret < 0) {
+		ret = -ENOMEM;
 		return ret;
+	}
 
 	domain->context_id = ret;
 
@@ -462,7 +464,7 @@ static int ipmmu_domain_init_context(struct ipmmu_vmsa_domain *domain)
 	if (!domain->iop) {
 		ipmmu_domain_free_context(domain->mmu->root,
 					  domain->context_id);
-		return -EINVAL;
+		return -ENOMEM;
 	}
 
 	ipmmu_domain_setup_context(domain);
@@ -607,7 +609,7 @@ static int ipmmu_attach_device(struct iommu_domain *io_domain,
 
 	if (!mmu) {
 		dev_err(dev, "Cannot attach to IPMMU\n");
-		return -ENXIO;
+		return -ENODEV;
 	}
 
 	mutex_lock(&domain->mutex);
@@ -628,8 +630,6 @@ static int ipmmu_attach_device(struct iommu_domain *io_domain,
 		 * Something is wrong, we can't attach two devices using
 		 * different IOMMUs to the same domain.
 		 */
-		dev_err(dev, "Can't attach IPMMU %s to domain on IPMMU %s\n",
-			dev_name(mmu->dev), dev_name(domain->mmu->dev));
 		ret = -EINVAL;
 	} else
 		dev_info(dev, "Reusing IPMMU context %u\n", domain->context_id);
