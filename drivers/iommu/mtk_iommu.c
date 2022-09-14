@@ -655,7 +655,7 @@ static int mtk_iommu_attach_device(struct iommu_domain *domain,
 
 	region_id = mtk_iommu_get_iova_region_id(dev, data->plat_data);
 	if (region_id < 0)
-		return region_id;
+		return -ENODEV;
 
 	bankid = mtk_iommu_get_bank_id(dev, data->plat_data);
 	mutex_lock(&dom->mutex);
@@ -678,12 +678,14 @@ static int mtk_iommu_attach_device(struct iommu_domain *domain,
 		ret = pm_runtime_resume_and_get(m4udev);
 		if (ret < 0) {
 			dev_err(m4udev, "pm get fail(%d) in attach.\n", ret);
+			ret = -ENODEV;
 			goto err_unlock;
 		}
 
 		ret = mtk_iommu_hw_init(data, bankid);
 		if (ret) {
 			pm_runtime_put(m4udev);
+			ret = -ENODEV;
 			goto err_unlock;
 		}
 		bank->m4u_dom = dom;
@@ -693,7 +695,10 @@ static int mtk_iommu_attach_device(struct iommu_domain *domain,
 	}
 	mutex_unlock(&data->mutex);
 
-	return mtk_iommu_config(data, dev, true, region_id);
+	ret = mtk_iommu_config(data, dev, true, region_id);
+	if (ret)
+		ret = -ENODEV;
+	return ret;
 
 err_unlock:
 	mutex_unlock(&data->mutex);
