@@ -1464,15 +1464,14 @@ omap_iommu_attach_dev(struct iommu_domain *domain, struct device *dev)
 
 	if (!arch_data || !arch_data->iommu_dev) {
 		dev_err(dev, "device doesn't have an associated iommu\n");
-		return -EINVAL;
+		return -ENODEV;
 	}
 
 	spin_lock(&omap_domain->lock);
 
 	/* only a single client device can be attached to a domain */
 	if (omap_domain->dev) {
-		dev_err(dev, "iommu domain is already attached\n");
-		ret = -EBUSY;
+		ret = -EINVAL;
 		goto out;
 	}
 
@@ -1480,6 +1479,7 @@ omap_iommu_attach_dev(struct iommu_domain *domain, struct device *dev)
 	if (ret) {
 		dev_err(dev, "failed to allocate required iommu data %d\n",
 			ret);
+		ret = -ENODEV;
 		goto init_fail;
 	}
 
@@ -1490,6 +1490,7 @@ omap_iommu_attach_dev(struct iommu_domain *domain, struct device *dev)
 		ret = omap_iommu_attach(oiommu, iommu->pgtable);
 		if (ret) {
 			dev_err(dev, "can't get omap iommu: %d\n", ret);
+			ret = -ENODEV;
 			goto attach_fail;
 		}
 
