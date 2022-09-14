@@ -1051,8 +1051,10 @@ static int rk_iommu_attach_device(struct iommu_domain *domain,
 		return 0;
 
 	ret = rk_iommu_enable(iommu);
-	if (ret)
+	if (ret) {
 		rk_iommu_detach_device(iommu->domain, dev);
+		ret = -ENODEV;
+	}
 
 	pm_runtime_put(iommu->dev);
 
