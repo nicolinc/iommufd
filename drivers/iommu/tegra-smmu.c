@@ -432,8 +432,10 @@ static int tegra_smmu_as_prepare(struct tegra_smmu *smmu,
 	}
 
 	err = tegra_smmu_alloc_asid(smmu, &as->id);
-	if (err < 0)
+	if (err < 0) {
+		err = -ENOSPC;
 		goto err_unmap;
+	}
 
 	smmu_flush_ptc(smmu, as->pd_dma, 0);
 	smmu_flush_tlb_asid(smmu, as->id);
@@ -487,7 +489,7 @@ static int tegra_smmu_attach_dev(struct iommu_domain *domain,
 	int err;
 
 	if (!fwspec)
-		return -ENOENT;
+		return -ENODEV;
 
 	for (index = 0; index < fwspec->num_ids; index++) {
 		err = tegra_smmu_as_prepare(smmu, as);
