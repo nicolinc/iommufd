@@ -2043,6 +2043,26 @@ static bool arm_smmu_capable(struct device *dev, enum iommu_cap cap)
 	}
 }
 
+static int arm_smmu_hw_info(struct device *dev, void *data, size_t length)
+{
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+	struct iommu_device_info_smmuv3 *info = data;
+	void *base_idr;
+	int i;
+
+	if (!master || !master->smmu)
+		return -ENODEV;
+
+	if (!info || length != sizeof(*info))
+		return -EINVAL;
+
+	base_idr = master->smmu->base + ARM_SMMU_IDR0;
+	for (i = 0; i <= 5; i++)
+		info->idr[i] = readl_relaxed(base_idr + 0x4 * i);
+
+	return 0;
+}
+
 static struct iommu_domain *arm_smmu_domain_alloc(unsigned type)
 {
 	struct arm_smmu_domain *smmu_domain;
@@ -3063,6 +3083,7 @@ static void arm_smmu_remove_dev_pasid(struct device *dev, ioasid_t pasid)
 
 static struct iommu_ops arm_smmu_ops = {
 	.capable		= arm_smmu_capable,
+	.hw_info		= arm_smmu_hw_info,
 	.domain_alloc		= arm_smmu_domain_alloc,
 	.domain_alloc_user	= arm_smmu_domain_alloc_user,
 	.get_msi_domain		= arm_smmu_get_msi_domain,
