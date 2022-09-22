@@ -33,6 +33,7 @@
 #define IDR0_ASID16			(1 << 12)
 #define IDR0_ATS			(1 << 10)
 #define IDR0_HYP			(1 << 9)
+#define IDR0_BTM			(1 << 5)
 #define IDR0_COHACC			(1 << 4)
 #define IDR0_TTF			GENMASK(3, 2)
 #define IDR0_TTF_AARCH64		2
@@ -74,6 +75,8 @@
 #define IIDR_VARIANT			GENMASK(19, 16)
 #define IIDR_REVISION			GENMASK(15, 12)
 #define IIDR_IMPLEMENTER		GENMASK(11, 0)
+
+#define ARM_SMMU_AIDR			0x1C
 
 #define ARM_SMMU_CR0			0x20
 #define CR0_ATSCHK			(1 << 4)
