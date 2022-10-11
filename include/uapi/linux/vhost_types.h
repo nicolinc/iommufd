@@ -147,6 +147,36 @@ struct vhost_vdpa_iova_range {
 	__u64 last;
 };
 
+/*
+ * Bind a vhost_vdpa device to the specified iommufd
+ *
+ * The user should provide a device cookie when calling this ioctl. The
+ * cookie is carried only in event e.g. I/O fault reported to userspace
+ * via iommufd. The user should use devid returned by this ioctl to mark
+ * the target device in other ioctls (e.g. capability query via iommufd).
+ *
+ * User is not allowed to access the device before the binding operation
+ * is completed.
+ *
+ * Unbind is automatically conducted when device fd is closed.
+ *
+ * Input parameters:
+ *	- iommufd;
+ *	- dev_cookie;
+ *
+ * Output parameters:
+ *	- out_devid;
+ *
+ * Return: 0 on success, -errno on failure.
+ */
+struct vhost_vdpa_bind_iommufd {
+	__u32		argsz;
+	__u32		flags;
+	__aligned_u64	dev_cookie;
+	__s32		iommufd;
+	__u32		out_devid;
+};
+
 /* Feature bits */
 /* Log all write descriptors. Can be changed while device is active. */
 #define VHOST_F_LOG_ALL 26

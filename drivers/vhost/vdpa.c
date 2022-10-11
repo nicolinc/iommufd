@@ -18,12 +18,15 @@
 #include <linux/mm.h>
 #include <linux/slab.h>
 #include <linux/iommu.h>
+#include <linux/iommufd.h>
 #include <linux/uuid.h>
 #include <linux/vdpa.h>
 #include <linux/nospec.h>
 #include <linux/vhost.h>
 
 #include "vhost.h"
+
+MODULE_IMPORT_NS(IOMMUFD);
 
 enum {
 	VHOST_VDPA_BACKEND_FEATURES =
@@ -44,6 +47,7 @@ struct vhost_vdpa_as {
 
 struct vhost_vdpa {
 	struct vhost_dev vdev;
+	struct iommufd_ctx *iommufd_ctx;
 	struct iommu_domain *domain;
 	struct vhost_virtqueue *vqs;
 	struct completion completion;
@@ -588,6 +592,43 @@ static long vhost_vdpa_vring_ioctl(struct vhost_vdpa *v, unsigned int cmd,
 	return r;
 }
 
+static long vhost_vdpa_bind_iommufd(struct vhost_vdpa *v, void __user *argp)
+{
+	struct vhost_vdpa_bind_iommufd bind;
+	struct vdpa_device *vdpa = v->vdpa;
+	struct device *dma_dev = vdpa_get_dma_dev(vdpa);
+	struct iommufd_device *idev;
+	struct iommufd_ctx *ictx;
+	unsigned long minsz;
+	struct fd f;
+	int ret;
+
+	minsz = offsetofend(struct vhost_vdpa_bind_iommufd, iommufd);
+	if (copy_from_user(&bind, argp, minsz))
+		return -EFAULT;
+
+	if (bind.argsz < minsz || bind.flags || bind.iommufd < 0)
+		return -EINVAL;
+
+	f = fdget(bind.iommufd);
+	if (!f.file)
+		return -EBADF;
+
+	ictx = iommufd_ctx_from_file(f.file);
+	if (IS_ERR(ictx))
+		return -EINVAL;
+
+	idev = iommufd_device_bind(ictx, dma_dev, &bind.out_devid);
+	if (ret)
+		return ret;
+
+	vdpa->iommufd_dev = idev;
+	v->iommufd_ctx = ictx;
+
+	return copy_to_user(argp + minsz, &bind.out_devid,
+			    sizeof(bind.out_devid)) ? -EFAULT : 0;
+}
+
 static long vhost_vdpa_unlocked_ioctl(struct file *filep,
 				      unsigned int cmd, unsigned long arg)
 {
@@ -650,6 +691,9 @@ static long vhost_vdpa_unlocked_ioctl(struct file *filep,
 	case VHOST_SET_LOG_BASE:
 	case VHOST_SET_LOG_FD:
 		r = -ENOIOCTLCMD;
+		break;
+	case VHOST_BIND_IOMMUFD:
+		r = vhost_vdpa_bind_iommufd(v, argp);
 		break;
 	case VHOST_VDPA_SET_CONFIG_CALL:
 		r = vhost_vdpa_set_config_call(v, argp);
@@ -1135,6 +1179,12 @@ static void vhost_vdpa_free_domain(struct vhost_vdpa *v)
 	if (v->domain) {
 		iommu_detach_device(v->domain, dma_dev);
 		iommu_domain_free(v->domain);
+	}
+
+	if (v->iommufd_ctx) {
+		iommufd_device_unbind(vdpa->iommufd_dev);
+		vdpa->iommufd_dev = NULL;
+		v->iommufd_ctx = NULL;
 	}
 
 	v->domain = NULL;
