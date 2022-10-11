@@ -22,17 +22,11 @@ struct iommufd_access {
 	struct io_pagetable *iopt;
 };
 
-struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
-					   struct device *dev, u32 *id);
-void iommufd_device_unbind(struct iommufd_device *idev);
 bool iommufd_device_enforced_coherent(struct iommufd_device *idev);
 
 enum {
 	IOMMUFD_ATTACH_FLAGS_ALLOW_UNSAFE_INTERRUPT = 1 << 0,
 };
-int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id,
-			  unsigned int flags);
-void iommufd_device_detach(struct iommufd_device *idev);
 
 struct iommufd_access_ops {
 	void (*unmap)(void *data, unsigned long iova, unsigned long length);
@@ -93,6 +87,12 @@ void iommufd_ctx_get(struct iommufd_ctx *ictx);
 #if IS_ENABLED(CONFIG_IOMMUFD)
 struct iommufd_ctx *iommufd_ctx_from_file(struct file *file);
 void iommufd_ctx_put(struct iommufd_ctx *ictx);
+struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
+					   struct device *dev, u32 *id);
+void iommufd_device_unbind(struct iommufd_device *idev);
+int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id,
+			  unsigned int flags);
+void iommufd_device_detach(struct iommufd_device *idev);
 
 int iommufd_vfio_compat_ioas_id(struct iommufd_ctx *ictx, u32 *out_ioas_id);
 #else /* !CONFIG_IOMMUFD */
@@ -102,6 +102,25 @@ static inline struct iommufd_ctx *iommufd_ctx_from_file(struct file *file)
 }
 
 static inline void iommufd_ctx_put(struct iommufd_ctx *ictx)
+{
+}
+
+static inline struct iommufd_device *
+iommufd_device_bind(struct iommufd_ctx *ictx, struct device *dev, u32 *id)
+{
+	return ERR_PTR(-EOPNOTSUPP);
+}
+static inline void iommufd_device_unbind(struct iommufd_device *idev)
+{
+}
+
+static inline int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id,
+					unsigned int flags)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void iommufd_device_detach(struct iommufd_device *idev)
 {
 }
 
