@@ -629,6 +629,66 @@ static long vhost_vdpa_bind_iommufd(struct vhost_vdpa *v, void __user *argp)
 			    sizeof(bind.out_devid)) ? -EFAULT : 0;
 }
 
+static long vhost_vdpa_attach_ioas(struct vhost_vdpa *v, void __user *argp)
+{
+	struct vdpa_device *vdpa = v->vdpa;
+	struct device *dma_dev = vdpa_get_dma_dev(vdpa);
+	struct vhost_vdpa_attach_ioas attach;
+	unsigned long minsz;
+	u32 pt_id;
+	int rc;
+
+	if (!v->iommufd_ctx || !vdpa->iommufd_dev)
+		return -ENODEV;
+
+	minsz = offsetofend(struct vhost_vdpa_attach_ioas, ioas_id);
+	if (copy_from_user(&attach, argp, minsz))
+		return -EFAULT;
+
+	if (attach.argsz < minsz || attach.flags ||
+	    attach.iommufd < 0 || attach.ioas_id == 0)	/* FIXME IOMMUFD_INVALID_ID */
+		return -EINVAL;
+
+	pt_id = attach.ioas_id;
+
+	iommu_detach_device(v->domain, dma_dev);
+	/* FIXME lock protection? */
+	rc = iommufd_device_attach(vdpa->iommufd_dev, &pt_id, 0);
+	if (rc) {
+		iommu_attach_device(v->domain, dma_dev);
+		return rc;
+	}
+
+	iommu_domain_free(v->domain);
+	v->domain = NULL;
+
+	attach.out_hwpt_id = pt_id;
+	return copy_to_user(argp + minsz, &attach.out_hwpt_id,
+			    sizeof(attach.out_hwpt_id)) ? -EFAULT : 0;
+}
+
+static long vhost_vdpa_detach_hwpt(struct vhost_vdpa *v, void __user *argp)
+{
+	struct vdpa_device *vdpa = v->vdpa;
+	struct vhost_vdpa_detach_hwpt detach;
+	unsigned long minsz;
+
+	if (!v->iommufd_ctx || !vdpa->iommufd_dev)
+		return -ENODEV;
+
+	minsz = offsetofend(struct vhost_vdpa_detach_hwpt, flags);
+	if (copy_from_user(&detach, argp, minsz))
+		return -EFAULT;
+
+	if (detach.argsz < minsz || detach.flags)
+		return -EINVAL;
+
+	iommufd_device_detach(vdpa->iommufd_dev);
+
+	return 0;
+}
+
+
 static long vhost_vdpa_unlocked_ioctl(struct file *filep,
 				      unsigned int cmd, unsigned long arg)
 {
@@ -694,6 +754,12 @@ static long vhost_vdpa_unlocked_ioctl(struct file *filep,
 		break;
 	case VHOST_BIND_IOMMUFD:
 		r = vhost_vdpa_bind_iommufd(v, argp);
+		break;
+	case VHOST_ATTACH_IOAS:
+		r = vhost_vdpa_attach_ioas(v, argp);
+		break;
+	case VHOST_DETACH_HWPT:
+		r = vhost_vdpa_detach_hwpt(v, argp);
 		break;
 	case VHOST_VDPA_SET_CONFIG_CALL:
 		r = vhost_vdpa_set_config_call(v, argp);

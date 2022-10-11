@@ -177,6 +177,42 @@ struct vhost_vdpa_bind_iommufd {
 	__u32		out_devid;
 };
 
+/*
+ * Attach a vhost_vdpa device to the specified IOAS.
+ *
+ * Multiple vhost_vdpa devices can be attached to the same IOAS Page Table.
+ * One device can be attached to only one ioas at this point.
+ *
+ * @argsz:	user filled size of this data.
+ * @flags:	reserved for future extension.
+ * @iommufd:	iommufd where the ioas comes from.
+ * @ioas_id:	Input the target I/O address space page table.
+ * @hwpt_id:	Output the hw page table id
+ *
+ * Return: 0 on success, -errno on failure.
+ */
+struct vhost_vdpa_attach_ioas {
+	__u32	argsz;
+	__u32	flags;
+	__s32	iommufd;
+	__u32	ioas_id;
+	__u32	out_hwpt_id;
+};
+
+/*
+ * Detach a vhost_vdpa device from the hardware page table it was attached
+ * to.
+ *
+ * @argsz:	user filled size of this data.
+ * @flags:	reserved for future extension.
+ *
+ * Return: 0 on success, -errno on failure.
+ */
+struct vhost_vdpa_detach_hwpt {
+	__u32	argsz;
+	__u32	flags;
+};
+
 /* Feature bits */
 /* Log all write descriptors. Can be changed while device is active. */
 #define VHOST_F_LOG_ALL 26

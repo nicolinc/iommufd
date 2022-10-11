@@ -46,6 +46,8 @@
 /* Specify an eventfd file descriptor to signal on log write. */
 #define VHOST_SET_LOG_FD _IOW(VHOST_VIRTIO, 0x07, int)
 #define VHOST_BIND_IOMMUFD _IOW(VHOST_VIRTIO, 0x08, struct vhost_vdpa_bind_iommufd)
+#define VHOST_ATTACH_IOAS _IOW(VHOST_VIRTIO, 0x09, struct vhost_vdpa_attach_ioas)
+#define VHOST_DETACH_HWPT _IOW(VHOST_VIRTIO, 0x0A, struct vhost_vdpa_detach_hwpt)
 
 /* Ring setup. */
 /* Set number of descriptors in ring. This parameter can not
