@@ -47,6 +47,10 @@ static struct vfio {
 	struct ida			device_ida;
 } vfio;
 
+struct vfio_device_private {
+	struct vfio_device *device;
+};
+
 bool vfio_allow_unsafe_interrupts;
 EXPORT_SYMBOL_GPL(vfio_allow_unsafe_interrupts);
 
@@ -435,21 +439,40 @@ static void vfio_device_close(struct vfio_device *device)
 	mutex_unlock(&device->dev_set->lock);
 }
 
+static struct vfio_device_private *
+vfio_allocate_device_private(struct vfio_device *device)
+{
+	struct vfio_device_private *private;
+
+	private = kzalloc(sizeof(*private), GFP_KERNEL);
+	if (!private)
+		return ERR_PTR(-ENOMEM);
+
+	private->device = device;
+
+	return private;
+}
+
 struct file *vfio_device_open_file(struct vfio_device *device)
 {
 	struct file *filep;
+	struct vfio_device_private *private;
 	int ret;
+
+	private = vfio_allocate_device_private(device);
+	if (IS_ERR(private))
+		return ERR_PTR(-ENOMEM);
 
 	ret = vfio_device_open(device);
 	if (ret)
-		goto err_out;
+		goto err_free;
 
 	/*
 	 * We can't use anon_inode_getfd() because we need to modify
 	 * the f_mode flags directly to allow more than just ioctls
 	 */
 	filep = anon_inode_getfile("[vfio-device]", &vfio_device_fops,
-				   device, O_RDWR);
+				   private, O_RDWR);
 	if (IS_ERR(filep)) {
 		ret = PTR_ERR(filep);
 		goto err_close_device;
@@ -470,7 +493,8 @@ struct file *vfio_device_open_file(struct vfio_device *device)
 
 err_close_device:
 	vfio_device_close(device);
-err_out:
+err_free:
+	kfree(private);
 	return ERR_PTR(ret);
 }
 
@@ -512,9 +536,12 @@ static inline void vfio_device_pm_runtime_put(struct vfio_device *device)
  */
 static int vfio_device_fops_release(struct inode *inode, struct file *filep)
 {
-	struct vfio_device *device = filep->private_data;
+	struct vfio_device_private *private = filep->private_data;
+	struct vfio_device *device = private->device;
 
 	vfio_device_close(device);
+
+	kfree(private);
 
 	vfio_device_put_registration(device);
 
@@ -980,7 +1007,8 @@ static int vfio_ioctl_device_feature(struct vfio_device *device,
 static long vfio_device_fops_unl_ioctl(struct file *filep,
 				       unsigned int cmd, unsigned long arg)
 {
-	struct vfio_device *device = filep->private_data;
+	struct vfio_device_private *private = filep->private_data;
+	struct vfio_device *device = private->device;
 	int ret;
 
 	ret = vfio_device_pm_runtime_get(device);
@@ -1007,7 +1035,8 @@ static long vfio_device_fops_unl_ioctl(struct file *filep,
 static ssize_t vfio_device_fops_read(struct file *filep, char __user *buf,
 				     size_t count, loff_t *ppos)
 {
-	struct vfio_device *device = filep->private_data;
+	struct vfio_device_private *private = filep->private_data;
+	struct vfio_device *device = private->device;
 
 	if (unlikely(!device->ops->read))
 		return -EINVAL;
@@ -1019,7 +1048,8 @@ static ssize_t vfio_device_fops_write(struct file *filep,
 				      const char __user *buf,
 				      size_t count, loff_t *ppos)
 {
-	struct vfio_device *device = filep->private_data;
+	struct vfio_device_private *private = filep->private_data;
+	struct vfio_device *device = private->device;
 
 	if (unlikely(!device->ops->write))
 		return -EINVAL;
@@ -1029,7 +1059,8 @@ static ssize_t vfio_device_fops_write(struct file *filep,
 
 static int vfio_device_fops_mmap(struct file *filep, struct vm_area_struct *vma)
 {
-	struct vfio_device *device = filep->private_data;
+	struct vfio_device_private *private = filep->private_data;
+	struct vfio_device *device = private->device;
 
 	if (unlikely(!device->ops->mmap))
 		return -EINVAL;
