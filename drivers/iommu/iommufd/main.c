@@ -24,6 +24,7 @@
 #include <uapi/linux/iommufd.h>
 #include <linux/iommufd.h>
 
+#include "io_pagetable.h"
 #include "iommufd_private.h"
 #include "iommufd_test.h"
 
@@ -31,6 +32,7 @@ struct iommufd_object_ops {
 	void (*destroy)(struct iommufd_object *obj);
 };
 static const struct iommufd_object_ops iommufd_object_ops[];
+static struct miscdevice vfio_misc_dev;
 
 struct iommufd_object *_iommufd_object_alloc(struct iommufd_ctx *ictx,
 					     size_t size,
@@ -166,6 +168,13 @@ static int iommufd_fops_open(struct inode *inode, struct file *filp)
 	ictx = kzalloc(sizeof(*ictx), GFP_KERNEL_ACCOUNT);
 	if (!ictx)
 		return -ENOMEM;
+
+	/*
+	 * For compatibility with VFIO when /dev/vfio/vfio is opened we default
+	 * to the same rlimit accounting as vfio uses.
+	 */
+	if (filp->private_data == &vfio_misc_dev)
+		ictx->account_mode = IOPT_PAGES_ACCOUNT_MM;
 
 	xa_init_flags(&ictx->objects, XA_FLAGS_ALLOC1 | XA_FLAGS_ACCOUNT);
 	ictx->file = filp;
@@ -392,26 +401,46 @@ static struct miscdevice iommu_misc_dev = {
 	.mode = 0660,
 };
 
+
+static struct miscdevice vfio_misc_dev = {
+	.minor = VFIO_MINOR,
+	.name = "vfio",
+	.fops = &iommufd_fops,
+	.nodename = "vfio/vfio",
+	.mode = 0666,
+};
+
 static int __init iommufd_init(void)
 {
 	int ret;
 
 	ret = misc_register(&iommu_misc_dev);
-	if (ret) {
-		pr_err("Failed to register misc device\n");
+	if (ret)
 		return ret;
-	}
 
+	if (IS_ENABLED(CONFIG_IOMMUFD_VFIO_CONTAINER)) {
+		ret = misc_register(&vfio_misc_dev);
+		if (ret)
+			goto err_misc;
+	}
 	return 0;
+err_misc:
+	misc_deregister(&iommu_misc_dev);
+	return ret;
 }
 
 static void __exit iommufd_exit(void)
 {
+	if (IS_ENABLED(CONFIG_IOMMUFD_VFIO_CONTAINER))
+		misc_deregister(&vfio_misc_dev);
 	misc_deregister(&iommu_misc_dev);
 }
 
 module_init(iommufd_init);
 module_exit(iommufd_exit);
 
+#if IS_ENABLED(CONFIG_IOMMUFD_VFIO_CONTAINER)
+MODULE_ALIAS_MISCDEV(VFIO_MINOR);
+#endif
 MODULE_DESCRIPTION("I/O Address Space Management for passthrough devices");
 MODULE_LICENSE("GPL");
