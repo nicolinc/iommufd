@@ -388,4 +388,32 @@ struct iommu_device_info {
 	__aligned_u64 data_ptr;
 };
 #define IOMMU_DEVICE_GET_INFO _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DEVICE_GET_INFO)
+
+/**
+ * struct iommu_hwpt_intel_vtd - Intel VT-d specific page table data
+ *
+ * @flags: VT-d page table entry attributes
+ * @s1_pgtbl: the stage1 (a.k.a user managed page table) pointer.
+ *            This pointer should be subjected to stage2 translation
+ * @pat: Page attribute table data to compute effective memory type
+ * @emt: Extended memory type
+ * @addr_width: the input address width of VT-d page table
+ * @__reserved: Must be 0
+ */
+struct iommu_hwpt_intel_vtd {
+#define IOMMU_VTD_PGTBL_SRE	(1 << 0) /* supervisor request */
+#define IOMMU_VTD_PGTBL_EAFE	(1 << 1) /* extended access enable */
+#define IOMMU_VTD_PGTBL_PCD	(1 << 2) /* page-level cache disable */
+#define IOMMU_VTD_PGTBL_PWT	(1 << 3) /* page-level write through */
+#define IOMMU_VTD_PGTBL_EMTE	(1 << 4) /* extended mem type enable */
+#define IOMMU_VTD_PGTBL_CD	(1 << 5) /* PASID-level cache disable */
+#define IOMMU_VTD_PGTBL_WPE	(1 << 6) /* Write protect enable */
+#define IOMMU_VTD_PGTBL_LAST	(1 << 7)
+	__u64 flags;
+	__u64 s1_pgtbl;
+	__u32 pat;
+	__u32 emt;
+	__u32 addr_width;
+	__u32 __reserved;
+};
 #endif
