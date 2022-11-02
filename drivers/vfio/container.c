@@ -540,40 +540,42 @@ void vfio_group_unuse_container(struct vfio_group *group)
 	fput(group->opened_file);
 }
 
-int vfio_container_pin_pages(struct vfio_container *container,
-			     struct iommu_group *iommu_group, dma_addr_t iova,
-			     int npage, int prot, struct page **pages)
+int vfio_group_container_pin_pages(struct vfio_group *group,
+				   dma_addr_t iova, int npage,
+				   int prot, struct page **pages)
 {
-	struct vfio_iommu_driver *driver = container->iommu_driver;
+	struct vfio_iommu_driver *driver = group->container->iommu_driver;
 
 	if (npage > VFIO_PIN_PAGES_MAX_ENTRIES)
 		return -E2BIG;
 
 	if (unlikely(!driver || !driver->ops->pin_pages))
 		return -ENOTTY;
-	return driver->ops->pin_pages(container->iommu_data, iommu_group, iova,
-				      npage, prot, pages);
+	return driver->ops->pin_pages(container->iommu_data,
+				      group->iommu_group,
+				      iova, npage, prot, pages);
 }
 
-void vfio_container_unpin_pages(struct vfio_container *container,
-				dma_addr_t iova, int npage)
+void vfio_group_container_unpin_pages(struct vfio_group *group,
+				      dma_addr_t iova, int npage)
 {
 	if (WARN_ON(npage <= 0 || npage > VFIO_PIN_PAGES_MAX_ENTRIES))
 		return;
 
-	container->iommu_driver->ops->unpin_pages(container->iommu_data, iova,
-						  npage);
+	container->iommu_driver->ops->unpin_pages(group->container->iommu_data,
+						  iova, npage);
 }
 
-int vfio_container_dma_rw(struct vfio_container *container, dma_addr_t iova,
-			  void *data, size_t len, bool write)
+int vfio_group_container_dma_rw(struct vfio_group *group,
+				dma_addr_t iova, void *data,
+				size_t len, bool write)
 {
 	struct vfio_iommu_driver *driver = container->iommu_driver;
 
 	if (unlikely(!driver || !driver->ops->dma_rw))
 		return -ENOTTY;
-	return driver->ops->dma_rw(container->iommu_data, iova, data, len,
-				   write);
+	return driver->ops->dma_rw(group->container->iommu_data,
+				   iova, data, len, write);
 }
 
 int __init vfio_container_init(void)
