@@ -15,6 +15,10 @@ struct iommu_group;
 struct vfio_device;
 struct vfio_container;
 
+void vfio_device_put_registration(struct vfio_device *device);
+bool vfio_device_try_get_registration(struct vfio_device *device);
+struct file *vfio_device_open_file(struct vfio_device *device);
+
 enum vfio_group_type {
 	/*
 	 * Physical device with IOMMU backing.
@@ -65,6 +69,22 @@ struct vfio_group {
 	struct blocking_notifier_head	notifier;
 	struct iommufd_ctx		*iommufd;
 };
+
+void vfio_device_remove_group(struct vfio_device *device);
+struct vfio_group *vfio_noiommu_group_alloc(struct device *dev,
+					    enum vfio_group_type type);
+struct vfio_group *vfio_group_find_or_alloc(struct device *dev);
+void vfio_device_group_register(struct vfio_device *device);
+void vfio_device_group_unregister(struct vfio_device *device);
+int vfio_device_group_use_iommu(struct vfio_device *device);
+void vfio_device_group_unuse_iommu(struct vfio_device *device);
+struct kvm *vfio_group_get_kvm(struct vfio_group *group);
+void vfio_group_put_kvm(struct vfio_group *group);
+void vfio_device_group_finalize_open(struct vfio_device *device);
+void vfio_device_group_abort_open(struct vfio_device *device);
+bool vfio_group_has_container(struct vfio_group *group);
+int __init vfio_group_init(void);
+void vfio_group_cleanup(void);
 
 #if IS_ENABLED(CONFIG_VFIO_CONTAINER)
 /* events for the backend driver notify callback */
