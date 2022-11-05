@@ -10,7 +10,8 @@
 MODULE_IMPORT_NS(IOMMUFD);
 MODULE_IMPORT_NS(IOMMUFD_VFIO);
 
-int vfio_iommufd_bind(struct vfio_device *vdev, struct iommufd_ctx *ictx)
+int vfio_iommufd_bind(struct vfio_device *vdev, struct iommufd_ctx *ictx,
+		      u32 *pt_id, u32 *devid)
 {
 	u32 ioas_id;
 	u32 device_id;
@@ -29,18 +30,22 @@ int vfio_iommufd_bind(struct vfio_device *vdev, struct iommufd_ctx *ictx)
 	if (ret)
 		return ret;
 
-	ret = iommufd_vfio_compat_ioas_id(ictx, &ioas_id);
-	if (ret)
-		goto err_unbind;
+	if (pt_id) {
+		ioas_id = *pt_id;
+	} else {
+		ret = iommufd_vfio_compat_ioas_id(ictx, &ioas_id);
+		if (ret)
+			goto err_unbind;
+	}
 	ret = vdev->ops->attach_ioas(vdev, &ioas_id);
 	if (ret)
 		goto err_unbind;
 	vdev->iommufd_attached = true;
+	if (pt_id)
+		*pt_id = ioas_id;
+	if (devid)
+		*devid = device_id;
 
-	/*
-	 * The legacy path has no way to return the device id or the selected
-	 * pt_id
-	 */
 	return 0;
 
 err_unbind:

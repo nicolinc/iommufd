@@ -50,6 +50,10 @@ static struct vfio {
 struct vfio_device_private {
 	struct vfio_device *device;
 	struct kvm *kvm;
+	atomic_t access_granted;
+	struct iommufd_ctx *iommufd;
+	u32 devid;
+	u32 pt_id;
 };
 
 bool vfio_allow_unsafe_interrupts;
@@ -364,8 +368,9 @@ static bool vfio_assert_device_open(struct vfio_device *device)
 	return !WARN_ON_ONCE(!READ_ONCE(device->open_count));
 }
 
-static int vfio_device_first_open(struct vfio_device *device)
+static int vfio_device_first_open(struct vfio_device_private *private)
 {
+	struct vfio_device *device = private->device;
 	struct kvm *kvm;
 	int ret;
 
@@ -374,14 +379,30 @@ static int vfio_device_first_open(struct vfio_device *device)
 	if (!try_module_get(device->dev->driver->owner))
 		return -ENODEV;
 
-	ret = vfio_device_group_use_iommu(device);
-	if (ret)
-		goto err_module_put;
+	/*
+	 * access_granted == true implies an device open via group fd
+	 * otherwise it’s an open via bind_iommufd.
+	 */
+	if (atomic_read(&private->access_granted)) {
+		ret = vfio_device_group_use_iommu(device);
+		if (ret)
+			goto err_module_put;
 
-	kvm = vfio_group_get_kvm(device->group);
-	if (!kvm) {
-		ret = -EINVAL;
-		goto err_unuse_iommu;
+		kvm = vfio_group_get_kvm(device->group);
+		if (!kvm) {
+			ret = -EINVAL;
+			goto err_unuse_iommu;
+		}
+	} else {
+		ret = vfio_iommufd_bind(device, private->iommufd,
+					&private->pt_id, &private->devid);
+		if (ret)
+			goto err_module_put;
+		if (!private->kvm) {
+			ret = -EINVAL;
+			goto err_unuse_iommu;
+		}
+		kvm = private->kvm;
 	}
 
 	device->kvm = kvm;
@@ -390,12 +411,17 @@ static int vfio_device_first_open(struct vfio_device *device)
 		if (ret)
 			goto err_container;
 	}
-	vfio_group_put_kvm(device->group);
+
+	if (atomic_read(&private->access_granted))
+		vfio_group_put_kvm(device->group);
+	else
+		atomic_set(&private->access_granted, 1);
 	return 0;
 
 err_container:
 	device->kvm = NULL;
-	vfio_group_put_kvm(device->group);
+	if (atomic_read(&private->access_granted))
+		vfio_group_put_kvm(device->group);
 err_unuse_iommu:
 	vfio_device_group_unuse_iommu(device);
 err_module_put:
@@ -414,14 +440,15 @@ static void vfio_device_last_close(struct vfio_device *device)
 	module_put(device->dev->driver->owner);
 }
 
-static int vfio_device_open(struct vfio_device *device)
+static int vfio_device_open(struct vfio_device_private *private)
 {
+	struct vfio_device *device = private->device;
 	int ret = 0;
 
 	mutex_lock(&device->dev_set->lock);
 	device->open_count++;
 	if (device->open_count == 1) {
-		ret = vfio_device_first_open(device);
+		ret = vfio_device_first_open(private);
 		if (ret)
 			device->open_count--;
 	}
@@ -441,7 +468,7 @@ static void vfio_device_close(struct vfio_device *device)
 }
 
 static struct vfio_device_private *
-vfio_allocate_device_private(struct vfio_device *device)
+vfio_allocate_device_private(struct vfio_device *device, bool allow_access)
 {
 	struct vfio_device_private *private;
 
@@ -449,7 +476,12 @@ vfio_allocate_device_private(struct vfio_device *device)
 	if (!private)
 		return ERR_PTR(-ENOMEM);
 
+	if (allow_access)
+		atomic_set(&private->access_granted, 1);
+
 	private->device = device;
+	private->devid = IOMMUFD_INVALID_ID;
+	private->pt_id = IOMMUFD_INVALID_ID;
 
 	return private;
 }
@@ -460,11 +492,11 @@ struct file *vfio_device_open_file(struct vfio_device *device)
 	struct vfio_device_private *private;
 	int ret;
 
-	private = vfio_allocate_device_private(device);
+	private = vfio_allocate_device_private(device, true);
 	if (IS_ERR(private))
 		return ERR_PTR(-ENOMEM);
 
-	ret = vfio_device_open(device);
+	ret = vfio_device_open(private);
 	if (ret)
 		goto err_free;
 
@@ -1012,6 +1044,9 @@ static long vfio_device_fops_unl_ioctl(struct file *filep,
 	struct vfio_device *device = private->device;
 	int ret;
 
+	if (!atomic_read(&private->access_granted))
+		return -EINVAL;
+
 	ret = vfio_device_pm_runtime_get(device);
 	if (ret)
 		return ret;
@@ -1039,7 +1074,8 @@ static ssize_t vfio_device_fops_read(struct file *filep, char __user *buf,
 	struct vfio_device_private *private = filep->private_data;
 	struct vfio_device *device = private->device;
 
-	if (unlikely(!device->ops->read))
+	if (!atomic_read(&private->access_granted) ||
+	    unlikely(!device->ops->read))
 		return -EINVAL;
 
 	return device->ops->read(device, buf, count, ppos);
@@ -1052,7 +1088,8 @@ static ssize_t vfio_device_fops_write(struct file *filep,
 	struct vfio_device_private *private = filep->private_data;
 	struct vfio_device *device = private->device;
 
-	if (unlikely(!device->ops->write))
+	if (!atomic_read(&private->access_granted) ||
+	    unlikely(!device->ops->write))
 		return -EINVAL;
 
 	return device->ops->write(device, buf, count, ppos);
@@ -1063,7 +1100,8 @@ static int vfio_device_fops_mmap(struct file *filep, struct vm_area_struct *vma)
 	struct vfio_device_private *private = filep->private_data;
 	struct vfio_device *device = private->device;
 
-	if (unlikely(!device->ops->mmap))
+	if (!atomic_read(&private->access_granted) ||
+	    unlikely(!device->ops->mmap))
 		return -EINVAL;
 
 	return device->ops->mmap(device, vma);

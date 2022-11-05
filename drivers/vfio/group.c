@@ -441,7 +441,10 @@ int vfio_device_group_use_iommu(struct vfio_device *device)
 			goto out_unlock;
 		vfio_device_container_register(device);
 	} else if (device->group->iommufd) {
-		ret = vfio_iommufd_bind(device, device->group->iommufd);
+		ret = vfio_iommufd_bind(device,
+					device->group->iommufd, NULL, NULL);
+		if (ret)
+			goto out_unlock;
 	}
 
 out_unlock:
@@ -455,7 +458,7 @@ void vfio_device_group_unuse_iommu(struct vfio_device *device)
 	if (device->group->container) {
 		vfio_device_container_unregister(device);
 		vfio_group_unuse_container(device->group);
-	} else if (device->group->iommufd) {
+	} else {
 		vfio_iommufd_unbind(device);
 	}
 	mutex_unlock(&device->group->group_lock);
