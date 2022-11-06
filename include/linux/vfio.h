@@ -63,6 +63,7 @@ struct vfio_device {
 	struct iommufd_device *iommufd_device;
 	struct iommufd_ctx *iommufd_ictx;
 	bool iommufd_attached;
+	bool single_open;
 #endif
 };
 

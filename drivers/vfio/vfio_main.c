@@ -419,10 +419,12 @@ static int vfio_device_first_open(struct vfio_device_private *private)
 			goto err_container;
 	}
 
-	if (atomic_read(&private->access_granted))
+	if (atomic_read(&private->access_granted)) {
 		vfio_group_put_kvm(device->group);
-	else
+	} else {
 		atomic_set(&private->access_granted, 1);
+		device->single_open = true;
+	}
 	return 0;
 
 err_container:
@@ -430,7 +432,10 @@ err_container:
 	if (atomic_read(&private->access_granted))
 		vfio_group_put_kvm(device->group);
 err_unuse_iommu:
-	vfio_device_group_unuse_iommu(device);
+	if (atomic_read(&private->access_granted))
+		vfio_device_group_unuse_iommu(device);
+	else
+		vfio_iommufd_unbind(device);
 err_module_put:
 	module_put(device->dev->driver->owner);
 	return ret;
@@ -443,7 +448,11 @@ static void vfio_device_last_close(struct vfio_device *device)
 	if (device->ops->close_device)
 		device->ops->close_device(device);
 	device->kvm = NULL;
-	vfio_device_group_unuse_iommu(device);
+	if (device->single_open)
+		vfio_device_group_unuse_iommu(device);
+	else
+		vfio_iommufd_unbind(device);
+	device->single_open = false;
 	module_put(device->dev->driver->owner);
 }
 
@@ -458,6 +467,10 @@ static int vfio_device_open(struct vfio_device_private *private)
 		ret = vfio_device_first_open(private);
 		if (ret)
 			device->open_count--;
+	} else if (device->single_open ||
+		   !atomic_read(&private->access_granted)) {
+		device->open_count--;
+		ret = -EBUSY;
 	}
 	mutex_unlock(&device->dev_set->lock);
 

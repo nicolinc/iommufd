@@ -458,7 +458,7 @@ void vfio_device_group_unuse_iommu(struct vfio_device *device)
 	if (device->group->container) {
 		vfio_device_container_unregister(device);
 		vfio_group_unuse_container(device->group);
-	} else {
+	} else if (device->group->iommufd) {
 		vfio_iommufd_unbind(device);
 	}
 	mutex_unlock(&device->group->group_lock);
