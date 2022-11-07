@@ -5,6 +5,7 @@
 #include <linux/kernel.h>
 #include <linux/device.h>
 #include <linux/interrupt.h>
+#include <linux/iommufd.h>
 #include <linux/vhost_iotlb.h>
 #include <linux/virtio_net.h>
 #include <linux/if_ether.h>
@@ -91,6 +92,14 @@ struct vdpa_device {
 	struct vdpa_mgmt_dev *mdev;
 	unsigned int ngroups;
 	unsigned int nas;
+	struct iommufd_access *iommufd_access;
+#if IS_ENABLED(CONFIG_IOMMUFD)
+	struct iommufd_device *iommufd_device;
+	struct iommufd_ctx *iommufd_ictx;
+	unsigned long *vq_bitmap;
+	atomic_t iommufd_users;
+	bool iommufd_attached;
+#endif
 };
 
 /**
@@ -282,6 +291,15 @@ struct vdpa_map_file {
  *				@iova: iova to be unmapped
  *				@size: size of the area
  *				Returns integer: success (0) or error (< 0)
+ * @bind_iommufd:		use vdpa_iommufd_physical_bind for an IOMMU
+ *				backed device.
+ *				otherwise use vdpa_iommufd_emulated_bind
+ * @unbind_iommufd:		use vdpa_iommufd_physical_unbind for an IOMMU
+ *				backed device.
+ *				otherwise, use vdpa_iommufd_emulated_unbind
+ * @attach_ioas:		use vdpa_iommufd_physical_attach_ioas for an
+ *				IOMMU backed device.
+ *				otherwise, use vdpa_iommufd_emulated_attach_ioas
  * @free:			Free resources that belongs to vDPA (optional)
  *				@vdev: vdpa device
  */
@@ -341,6 +359,12 @@ struct vdpa_config_ops {
 			 u64 iova, u64 size);
 	int (*set_group_asid)(struct vdpa_device *vdev, unsigned int group,
 			      unsigned int asid);
+
+	/* IOMMUFD ops */
+	int	(*bind_iommufd)(struct vdpa_device *vdev,
+				struct iommufd_ctx *ictx, u32 *out_device_id);
+	void	(*unbind_iommufd)(struct vdpa_device *vdev);
+	int	(*attach_ioas)(struct vdpa_device *vdev, u32 *pt_id);
 
 	/* Free device resources */
 	void (*free)(struct vdpa_device *vdev);
@@ -509,5 +533,31 @@ struct vdpa_mgmt_dev {
 
 int vdpa_mgmtdev_register(struct vdpa_mgmt_dev *mdev);
 void vdpa_mgmtdev_unregister(struct vdpa_mgmt_dev *mdev);
+
+#if IS_ENABLED(CONFIG_IOMMUFD)
+int vdpa_iommufd_physical_bind(struct vdpa_device *vdpa,
+			       struct iommufd_ctx *ictx, u32 *out_device_id);
+void vdpa_iommufd_physical_unbind(struct vdpa_device *vdpa);
+int vdpa_iommufd_physical_attach_ioas(struct vdpa_device *vdpa, u32 *pt_id);
+int vdpa_iommufd_emulated_bind(struct vdpa_device *vdpa,
+			       struct iommufd_ctx *ictx, u32 *out_device_id);
+void vdpa_iommufd_emulated_unbind(struct vdpa_device *vdpa);
+int vdpa_iommufd_emulated_attach_ioas(struct vdpa_device *vdpa, u32 *pt_id);
+#else
+#define vdpa_iommufd_physical_bind                                      \
+	((int (*)(struct vdpa_device *vdev, struct iommufd_ctx *ictx,   \
+		  u32 *out_device_id)) NULL)
+#define vdpa_iommufd_physical_unbind \
+	((void (*)(struct vdpa_device *vdev)) NULL)
+#define vdpa_iommufd_physical_attach_ioas \
+	((int (*)(struct vdpa_device *vdev, u32 *pt_id)) NULL)
+#define vdpa_iommufd_emulated_bind                                      \
+	((int (*)(struct vdpa_device *vdev, struct iommufd_ctx *ictx,   \
+		  u32 *out_device_id)) NULL)
+#define vdpa_iommufd_emulated_unbind \
+	((void (*)(struct vdpa_device *vdev)) NULL)
+#define vdpa_iommufd_emulated_attach_ioas \
+	((int (*)(struct vdpa_device *vdev, u32 *pt_id)) NULL)
+#endif
 
 #endif /* _LINUX_VDPA_H */

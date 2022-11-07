@@ -715,6 +715,9 @@ static const struct vdpa_config_ops ifc_vdpa_ops = {
 	.set_config	= ifcvf_vdpa_set_config,
 	.set_config_cb  = ifcvf_vdpa_set_config_cb,
 	.get_vq_notification = ifcvf_get_vq_notification,
+	.bind_iommufd	= vdpa_iommufd_physical_bind,
+	.unbind_iommufd	= vdpa_iommufd_physical_unbind,
+	.attach_ioas	= vdpa_iommufd_physical_attach_ioas,
 };
 
 static struct virtio_device_id id_table_net[] = {

@@ -726,6 +726,9 @@ static const struct vdpa_config_ops vdpasim_config_ops = {
 	.dma_map                = vdpasim_dma_map,
 	.dma_unmap              = vdpasim_dma_unmap,
 	.free                   = vdpasim_free,
+	.bind_iommufd		= vdpa_iommufd_emulated_bind,
+	.unbind_iommufd		= vdpa_iommufd_emulated_unbind,
+	.attach_ioas		= vdpa_iommufd_emulated_attach_ioas,
 };
 
 static const struct vdpa_config_ops vdpasim_batch_config_ops = {
@@ -758,6 +761,9 @@ static const struct vdpa_config_ops vdpasim_batch_config_ops = {
 	.set_group_asid         = vdpasim_set_group_asid,
 	.set_map                = vdpasim_set_map,
 	.free                   = vdpasim_free,
+	.bind_iommufd		= vdpa_iommufd_emulated_bind,
+	.unbind_iommufd		= vdpa_iommufd_emulated_unbind,
+	.attach_ioas		= vdpa_iommufd_emulated_attach_ioas,
 };
 
 MODULE_VERSION(DRV_VERSION);

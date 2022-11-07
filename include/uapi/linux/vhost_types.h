@@ -147,6 +147,23 @@ struct vhost_vdpa_iova_range {
 	__u64 last;
 };
 
+/* vhost vdpa set iommufd
+ * Input parameters:
+ * @iommufd: file descriptor from /dev/iommu; pass -1 to unset
+ * @group_id: identifier of the group that a virtqueue belongs to
+ * @pt_id: IOAS identifier returned from ioctl(IOMMU_IOAS_ALLOC)
+ * Output parameters:
+ * @out_dev_id: device identifier
+ * @out_hwpt_id: hardware IO pagetable identifier
+ */
+struct vhost_vdpa_set_iommufd {
+	__s32 iommufd;
+	__u32 group_id;
+	__u32 ioas_id;
+	__u32 out_dev_id;
+	__u32 out_hwpt_id;
+};
+
 /* Feature bits */
 /* Log all write descriptors. Can be changed while device is active. */
 #define VHOST_F_LOG_ALL 26

@@ -18,12 +18,15 @@
 #include <linux/mm.h>
 #include <linux/slab.h>
 #include <linux/iommu.h>
+#include <linux/iommufd.h>
 #include <linux/uuid.h>
 #include <linux/vdpa.h>
 #include <linux/nospec.h>
 #include <linux/vhost.h>
 
 #include "vhost.h"
+
+MODULE_IMPORT_NS(IOMMUFD);
 
 enum {
 	VHOST_VDPA_BACKEND_FEATURES =
@@ -64,6 +67,15 @@ struct vhost_vdpa {
 static DEFINE_IDA(vhost_vdpa_ida);
 
 static dev_t vhost_vdpa_major;
+
+void vhost_vdpa_lockdep_assert_held(struct vdpa_device *vdpa)
+{
+	struct vhost_vdpa *v = vdpa_get_drvdata(vdpa);
+
+	if (WARN_ON(!v))
+		return;
+	lockdep_assert_held(&v->vdev.mutex);
+}
 
 static inline u32 iotlb_to_asid(struct vhost_iotlb *iotlb)
 {
@@ -588,6 +600,102 @@ static long vhost_vdpa_vring_ioctl(struct vhost_vdpa *v, unsigned int cmd,
 	return r;
 }
 
+static long vhost_vdpa_set_iommufd(struct vhost_vdpa *v, void __user *argp)
+{
+	struct device *dma_dev = vdpa_get_dma_dev(v->vdpa);
+	struct vhost_vdpa_set_iommufd set_iommufd;
+	struct vdpa_device *vdpa = v->vdpa;
+	struct iommufd_ctx *ictx;
+	unsigned long minsz;
+	u32 pt_id, dev_id;
+	struct fd f;
+	long r = 0;
+	int idx;
+
+	minsz = offsetofend(struct vhost_vdpa_set_iommufd, ioas_id);
+	if (copy_from_user(&set_iommufd, argp, minsz))
+		return -EFAULT;
+
+	if (set_iommufd.group_id >= v->nvqs)
+		return -ENOBUFS;
+
+	idx = array_index_nospec(set_iommufd.group_id, v->nvqs);
+
+	/* Unset IOMMUFD */
+	if (set_iommufd.iommufd < 0) {
+		if (!test_bit(idx, vdpa->vq_bitmap))
+			return -EINVAL;
+
+		if (!vdpa->iommufd_ictx || !vdpa->iommufd_device)
+			return -EINVAL;
+		if (atomic_read(&vdpa->iommufd_users)) {
+			atomic_dec(&vdpa->iommufd_users);
+			return 0;
+		}
+		vdpa_iommufd_unbind(v->vdpa);
+		vdpa->iommufd_device = NULL;
+		vdpa->iommufd_ictx = NULL;
+		clear_bit(idx, vdpa->vq_bitmap);
+		return iommu_attach_device(v->domain, dma_dev);
+	}
+
+	if (test_bit(idx, vdpa->vq_bitmap))
+		return -EBUSY;
+
+	/* For same device but different groups, ++refcount only */
+	if (vdpa->iommufd_device)
+		goto out_inc;
+
+	/* First opened virtqueue of this vdpa device */
+	vdpa->vq_bitmap = bitmap_alloc(v->nvqs, GFP_KERNEL);
+	if (!vdpa->vq_bitmap)
+		return -ENOMEM;
+
+	r = -EBADF;
+	f = fdget(set_iommufd.iommufd);
+	if (!f.file)
+		goto out_bitmap_free;
+
+	r = -EINVAL;
+	ictx = iommufd_ctx_from_file(f.file);
+	if (IS_ERR(ictx))
+		goto out_fdput;
+
+	if (v->domain)
+		iommu_detach_device(v->domain, dma_dev);
+
+	pt_id = set_iommufd.ioas_id;
+	r = vdpa_iommufd_bind(vdpa, ictx, &pt_id, &dev_id);
+	if (r)
+		goto out_reattach;
+
+	set_iommufd.out_dev_id = dev_id;
+	set_iommufd.out_hwpt_id = pt_id;
+	r = copy_to_user(argp + minsz, &set_iommufd.out_dev_id,
+			 sizeof(set_iommufd.out_dev_id) +
+			 sizeof(set_iommufd.out_hwpt_id)) ? -EFAULT : 0;
+	if (r)
+		goto out_device_unbind;
+
+	vdpa->iommufd_ictx = ictx;
+
+out_inc:
+	atomic_inc(&vdpa->iommufd_users);
+	set_bit(idx, vdpa->vq_bitmap);
+	goto out_fdput;
+
+out_device_unbind:
+	vdpa_iommufd_unbind(vdpa);
+out_reattach:
+	iommu_attach_device(v->domain, dma_dev);
+	iommufd_ctx_put(ictx);
+out_fdput:
+	fdput(f);
+out_bitmap_free:
+	bitmap_free(vdpa->vq_bitmap);
+	return r;
+}
+
 static long vhost_vdpa_unlocked_ioctl(struct file *filep,
 				      unsigned int cmd, unsigned long arg)
 {
@@ -650,6 +758,9 @@ static long vhost_vdpa_unlocked_ioctl(struct file *filep,
 	case VHOST_SET_LOG_BASE:
 	case VHOST_SET_LOG_FD:
 		r = -ENOIOCTLCMD;
+		break;
+	case VHOST_VDPA_SET_IOMMU_FD:
+		r = vhost_vdpa_set_iommufd(v, argp);
 		break;
 	case VHOST_VDPA_SET_CONFIG_CALL:
 		r = vhost_vdpa_set_config_call(v, argp);
@@ -775,7 +886,8 @@ static int vhost_vdpa_map(struct vhost_vdpa *v, struct vhost_iotlb *iotlb,
 	} else if (ops->set_map) {
 		if (!v->in_batch)
 			r = ops->set_map(vdpa, asid, iotlb);
-	} else {
+	} else if (!vdpa->iommufd_ictx) {
+		/* Legacy iommu domain pathway without IOMMUFD */
 		r = iommu_map(v->domain, iova, pa, size,
 			      perm_to_iommu_flags(perm));
 	}
@@ -805,7 +917,8 @@ static void vhost_vdpa_unmap(struct vhost_vdpa *v,
 	} else if (ops->set_map) {
 		if (!v->in_batch)
 			ops->set_map(vdpa, asid, iotlb);
-	} else {
+	} else if (!vdpa->iommufd_ictx) {
+		/* Legacy iommu domain pathway without IOMMUFD */
 		iommu_unmap(v->domain, iova, size);
 	}
 
@@ -1137,6 +1250,9 @@ static void vhost_vdpa_free_domain(struct vhost_vdpa *v)
 		iommu_domain_free(v->domain);
 	}
 
+	if (vdpa->iommufd_ictx)
+		vdpa_iommufd_unbind(vdpa);
+
 	v->domain = NULL;
 }
 
@@ -1359,6 +1475,7 @@ static int vhost_vdpa_probe(struct vdpa_device *vdpa)
 	}
 
 	atomic_set(&v->opened, 0);
+	atomic_set(&vdpa->iommufd_users, 0);
 	v->minor = minor;
 	v->vdpa = vdpa;
 	v->nvqs = vdpa->nvqs;
