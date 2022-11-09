@@ -456,12 +456,11 @@ static void vfio_device_last_close(struct vfio_device *device)
 	module_put(device->dev->driver->owner);
 }
 
-static int vfio_device_open(struct vfio_device_private *private)
+static int __vfio_device_open(struct vfio_device_private *private)
 {
 	struct vfio_device *device = private->device;
 	int ret = 0;
 
-	mutex_lock(&device->dev_set->lock);
 	device->open_count++;
 	if (device->open_count == 1) {
 		ret = vfio_device_first_open(private);
@@ -472,18 +471,34 @@ static int vfio_device_open(struct vfio_device_private *private)
 		device->open_count--;
 		ret = -EBUSY;
 	}
+
+	return ret;
+}
+
+static int vfio_device_open(struct vfio_device_private *private)
+{
+	struct vfio_device *device = private->device;
+	int ret;
+
+	mutex_lock(&device->dev_set->lock);
+	ret = __vfio_device_open(private);
 	mutex_unlock(&device->dev_set->lock);
 
 	return ret;
 }
 
-static void vfio_device_close(struct vfio_device *device)
+static void __vfio_device_close(struct vfio_device *device)
 {
-	mutex_lock(&device->dev_set->lock);
 	vfio_assert_device_open(device);
 	if (device->open_count == 1)
 		vfio_device_last_close(device);
 	device->open_count--;
+}
+
+static void vfio_device_close(struct vfio_device *device)
+{
+	mutex_lock(&device->dev_set->lock);
+	__vfio_device_close(device);
 	mutex_unlock(&device->dev_set->lock);
 }
 
@@ -1086,6 +1101,124 @@ static int vfio_ioctl_device_feature(struct vfio_device *device,
 	}
 }
 
+static long vfio_device_ioctl_bind_iommufd(struct vfio_device_private *private,
+					   unsigned long arg)
+{
+	struct vfio_device *device = private->device;
+	struct vfio_device_bind_iommufd bind;
+	struct iommufd_ctx *iommufd;
+	unsigned long minsz;
+	struct fd f;
+	int ret;
+
+	minsz = offsetofend(struct vfio_device_bind_iommufd, ioas_id);
+
+	if (copy_from_user(&bind, (void __user *)arg, minsz))
+		return -EFAULT;
+
+	if (bind.argsz < minsz || bind.flags ||
+	    bind.iommufd < 0 || bind.ioas_id  == IOMMUFD_INVALID_ID)
+		return -EINVAL;
+
+	if (!device->ops->bind_iommufd || !device->ops->unbind_iommufd ||
+	    !device->ops->attach_ioas)
+		return -ENODEV;
+
+	f = fdget(bind.iommufd);
+	if (!f.file)
+		return -EBADF;
+
+	iommufd = iommufd_ctx_from_file(f.file);
+	if (IS_ERR(iommufd)) {
+		ret = PTR_ERR(iommufd);
+		goto out_put_fd;
+	}
+
+	mutex_lock(&device->dev_set->lock);
+	private->iommufd = iommufd;
+	private->pt_id = bind.ioas_id;
+
+	ret = __vfio_device_open(private);
+	if (ret)
+		goto out_clear_iommufd;
+
+	bind.out_devid = private->devid;
+	bind.out_hwpt_id = private->pt_id;
+	ret = copy_to_user((void __user *)arg + minsz,
+			   &bind.out_devid,
+			   sizeof(bind.out_devid) +
+			   sizeof(bind.out_hwpt_id)) ? -EFAULT : 0;
+	if (ret)
+		goto out_close_device;
+	mutex_unlock(&device->dev_set->lock);
+	fdput(f);
+	return 0;
+
+out_close_device:
+	__vfio_device_close(device);
+out_clear_iommufd:
+	private->iommufd = NULL;
+	private->devid = IOMMUFD_INVALID_ID;
+	private->pt_id = IOMMUFD_INVALID_ID;
+	mutex_unlock(&device->dev_set->lock);
+out_put_fd:
+	fdput(f);
+	return ret;
+}
+
+static int vfio_ioctl_device_attach(struct vfio_device *device,
+				    struct vfio_device_feature __user *arg)
+{
+	struct vfio_device_attach_iommufd attach;
+	struct iommufd_ctx *iommufd;
+	struct fd f;
+	int ret;
+
+	if (copy_from_user(&attach, (void __user *)arg, sizeof(attach)))
+		return -EFAULT;
+
+	if (attach.flags || attach.iommufd < 0 ||
+	    attach.pt_id  == IOMMUFD_INVALID_ID)
+		return -EINVAL;
+
+	if (!device->ops->bind_iommufd || !device->ops->unbind_iommufd ||
+	    !device->ops->attach_ioas)
+		return -ENODEV;
+
+	f = fdget(attach.iommufd);
+	if (!f.file)
+		return -EBADF;
+
+	iommufd = iommufd_ctx_from_file(f.file);
+	if (IS_ERR(iommufd)) {
+		ret = PTR_ERR(iommufd);
+		goto out_put_fd;
+	}
+
+	mutex_lock(&device->dev_set->lock);
+	ret = vfio_iommufd_attach(device, iommufd, &attach.pt_id);
+	if (ret)
+		goto out_unlock;
+
+	ret = copy_to_user((void __user *)arg + offsetofend(
+			   struct vfio_device_attach_iommufd, iommufd),
+			   &attach.pt_id,
+			   sizeof(attach.pt_id)) ? -EFAULT : 0;
+	if (ret)
+		goto out_detach;
+	mutex_unlock(&device->dev_set->lock);
+	fdput(f);
+	return 0;
+
+out_detach:
+	vfio_iommufd_attach(device, iommufd, NULL);
+out_unlock:
+	mutex_unlock(&device->dev_set->lock);
+out_put_fd:
+	fdput(f);
+	return ret;
+}
+
 static long vfio_device_fops_unl_ioctl(struct file *filep,
 				       unsigned int cmd, unsigned long arg)
 {
@@ -1093,8 +1226,15 @@ static long vfio_device_fops_unl_ioctl(struct file *filep,
 	struct vfio_device *device = private->device;
 	int ret;
 
-	if (!atomic_read(&private->access_granted))
-		return -EINVAL;
+	/* Bind is the only allowed operation before a successful bind */
+	if (!atomic_read(&private->access_granted)) {
+		if (cmd != VFIO_DEVICE_BIND_IOMMUFD)
+			return -EINVAL;
+		return vfio_device_ioctl_bind_iommufd(private, arg);
+	} else if (cmd == VFIO_DEVICE_BIND_IOMMUFD) {
+		return -EBUSY;
+	}
+
 
 	ret = vfio_device_pm_runtime_get(device);
 	if (ret)
@@ -1104,7 +1244,9 @@ static long vfio_device_fops_unl_ioctl(struct file *filep,
 	case VFIO_DEVICE_FEATURE:
 		ret = vfio_ioctl_device_feature(device, (void __user *)arg);
 		break;
-
+	case VFIO_DEVICE_ATTACH_IOMMUFD:
+		ret = vfio_ioctl_device_attach(device, (void __user *)arg);
+		break;
 	default:
 		if (unlikely(!device->ops->ioctl))
 			ret = -EINVAL;

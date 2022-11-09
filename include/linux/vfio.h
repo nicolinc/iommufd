@@ -62,6 +62,7 @@ struct vfio_device {
 #if IS_ENABLED(CONFIG_IOMMUFD)
 	struct iommufd_device *iommufd_device;
 	struct iommufd_ctx *iommufd_ictx;
+	u32 pt_id;
 	bool iommufd_attached;
 	bool single_open;
 #endif

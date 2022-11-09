@@ -223,6 +223,8 @@ static inline void vfio_container_cleanup(void)
 int vfio_iommufd_bind(struct vfio_device *vdev, struct iommufd_ctx *ictx,
 		      u32 *pt_id, u32 *devid);
 void vfio_iommufd_unbind(struct vfio_device *device);
+int vfio_iommufd_attach(struct vfio_device *vdev, struct iommufd_ctx *iommufd,
+			u32 *pt_id);
 #else
 static inline int vfio_iommufd_bind(struct vfio_device *vdev,
 				    struct iommufd_ctx *ictx,
@@ -233,6 +235,12 @@ static inline int vfio_iommufd_bind(struct vfio_device *vdev,
 
 static inline void vfio_iommufd_unbind(struct vfio_device *device)
 {
+}
+
+static inline int vfio_iommufd_attach(struct vfio_device *vdev,
+				      struct iommufd_ctx *iommufd, u32 *pt_id)
+{
+	return -EOPNOTSUPP;
 }
 #endif
 
