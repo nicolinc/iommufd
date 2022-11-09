@@ -405,10 +405,12 @@ static int vfio_device_first_open(struct vfio_device_private *private)
 					&private->pt_id, &private->devid);
 		if (ret)
 			goto err_module_put;
+#if 0          /* FIXME: QEMU code is missing ioctl call to set kvm */
 		if (!private->kvm) {
 			ret = -EINVAL;
 			goto err_unuse_iommu;
 		}
+#endif
 		kvm = private->kvm;
 	}
 
