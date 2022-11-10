@@ -55,6 +55,7 @@ struct vfio_device_private {
 	struct iommufd_ctx *iommufd;
 	u32 devid;
 	u32 pt_id;
+	bool bind_only;
 };
 
 bool vfio_allow_unsafe_interrupts;
@@ -402,7 +403,8 @@ static int vfio_device_first_open(struct vfio_device_private *private)
 		}
 	} else {
 		ret = vfio_iommufd_bind(device, private->iommufd,
-					&private->pt_id, &private->devid);
+					&private->pt_id, &private->devid,
+					private->bind_only);
 		if (ret)
 			goto err_module_put;
 #if 0          /* FIXME: QEMU code is missing ioctl call to set kvm */
@@ -1113,17 +1115,15 @@ static long vfio_device_ioctl_bind_iommufd(struct vfio_device_private *private,
 	struct fd f;
 	int ret;
 
-	minsz = offsetofend(struct vfio_device_bind_iommufd, ioas_id);
+	minsz = offsetofend(struct vfio_device_bind_iommufd, iommufd);
 
 	if (copy_from_user(&bind, (void __user *)arg, minsz))
 		return -EFAULT;
 
-	if (bind.argsz < minsz || bind.flags ||
-	    bind.iommufd < 0 || bind.ioas_id  == IOMMUFD_INVALID_ID)
+	if (bind.argsz < minsz || bind.flags || bind.iommufd < 0)
 		return -EINVAL;
 
-	if (!device->ops->bind_iommufd || !device->ops->unbind_iommufd ||
-	    !device->ops->attach_ioas)
+	if (!device->ops->bind_iommufd || !device->ops->unbind_iommufd)
 		return -ENODEV;
 
 	f = fdget(bind.iommufd);
@@ -1138,18 +1138,16 @@ static long vfio_device_ioctl_bind_iommufd(struct vfio_device_private *private,
 
 	mutex_lock(&device->dev_set->lock);
 	private->iommufd = iommufd;
-	private->pt_id = bind.ioas_id;
+	private->bind_only = true;
 
 	ret = __vfio_device_open(private);
 	if (ret)
 		goto out_clear_iommufd;
 
 	bind.out_devid = private->devid;
-	bind.out_hwpt_id = private->pt_id;
 	ret = copy_to_user((void __user *)arg + minsz,
 			   &bind.out_devid,
-			   sizeof(bind.out_devid) +
-			   sizeof(bind.out_hwpt_id)) ? -EFAULT : 0;
+			   sizeof(bind.out_devid)) ? -EFAULT : 0;
 	if (ret)
 		goto out_close_device;
 	mutex_unlock(&device->dev_set->lock);
@@ -1160,8 +1158,8 @@ out_close_device:
 	__vfio_device_close(device);
 out_clear_iommufd:
 	private->iommufd = NULL;
+	private->bind_only = false;
 	private->devid = IOMMUFD_INVALID_ID;
-	private->pt_id = IOMMUFD_INVALID_ID;
 	mutex_unlock(&device->dev_set->lock);
 out_put_fd:
 	fdput(f);

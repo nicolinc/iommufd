@@ -11,7 +11,7 @@ MODULE_IMPORT_NS(IOMMUFD);
 MODULE_IMPORT_NS(IOMMUFD_VFIO);
 
 int vfio_iommufd_bind(struct vfio_device *vdev, struct iommufd_ctx *ictx,
-		      u32 *pt_id, u32 *devid)
+		      u32 *pt_id, u32 *devid, bool bind_only)
 {
 	u32 ioas_id;
 	u32 device_id;
@@ -30,6 +30,9 @@ int vfio_iommufd_bind(struct vfio_device *vdev, struct iommufd_ctx *ictx,
 	if (ret)
 		return ret;
 
+	if (bind_only)
+		goto done;
+
 	if (pt_id) {
 		ioas_id = *pt_id;
 	} else {
@@ -43,6 +46,7 @@ int vfio_iommufd_bind(struct vfio_device *vdev, struct iommufd_ctx *ictx,
 
 	if (pt_id)
 		*pt_id = ioas_id;
+done:
 	if (devid)
 		*devid = device_id;
 

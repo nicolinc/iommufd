@@ -310,14 +310,14 @@ static inline void vfio_container_cleanup(void)
 
 #if IS_ENABLED(CONFIG_IOMMUFD)
 int vfio_iommufd_bind(struct vfio_device *vdev, struct iommufd_ctx *ictx,
-		      u32 *pt_id, u32 *devid);
+		      u32 *pt_id, u32 *devid, bool bind_only);
 void vfio_iommufd_unbind(struct vfio_device *device);
 int vfio_iommufd_attach(struct vfio_device *vdev, struct iommufd_ctx *iommufd,
 			u32 *pt_id);
 #else
 static inline int vfio_iommufd_bind(struct vfio_device *vdev,
 				    struct iommufd_ctx *ictx,
-				    u32 *pt_id, u32 *devid)
+				    u32 *pt_id, u32 *devid, bool bind_only)
 {
 	return -EOPNOTSUPP;
 }
