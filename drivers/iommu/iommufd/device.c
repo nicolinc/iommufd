@@ -296,6 +296,30 @@ static bool iommufd_hw_pagetable_has_group(struct iommufd_hw_pagetable *hwpt,
 	return false;
 }
 
+static int iommufd_device_attach_ioas(struct iommufd_device *idev,
+				      struct iommufd_hw_pagetable *hwpt)
+{
+	phys_addr_t sw_msi_start = PHYS_ADDR_MAX;
+	struct io_pagetable *iopt;
+	int rc;
+
+	iopt = &hwpt->ioas->iopt;
+
+	rc = iopt_table_enforce_group_resv_regions(iopt, idev->dev,
+						   idev->group, &sw_msi_start);
+	if (rc)
+		return rc;
+
+	rc = iommufd_device_setup_msi(idev, hwpt, sw_msi_start);
+	if (rc)
+		goto out_iova;
+
+	return 0;
+out_iova:
+	iopt_remove_reserved_iova(iopt, idev->group);
+	return rc;
+}
+
 /**
  * __iommufd_device_detach - Detach a device from idev->hwpt
  * @idev: device to detach
@@ -331,7 +355,6 @@ static int iommufd_device_do_attach(struct iommufd_device *idev,
 				    struct iommufd_hw_pagetable *hwpt)
 {
 	struct iommufd_hw_pagetable *cur_hwpt = idev->hwpt;
-	phys_addr_t sw_msi_start = PHYS_ADDR_MAX;
 	int rc;
 
 	mutex_lock(&hwpt->devices_lock);
@@ -354,14 +377,9 @@ static int iommufd_device_do_attach(struct iommufd_device *idev,
 		}
 	}
 
-	rc = iopt_table_enforce_group_resv_regions(&hwpt->ioas->iopt, idev->dev,
-						   idev->group, &sw_msi_start);
+	rc = iommufd_device_attach_ioas(idev, hwpt);
 	if (rc)
 		goto out_unlock;
-
-	rc = iommufd_device_setup_msi(idev, hwpt, sw_msi_start);
-	if (rc)
-		goto out_iova;
 
 	/*
 	 * FIXME: Hack around missing a device-centric iommu api, only attach to
