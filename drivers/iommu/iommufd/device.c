@@ -290,11 +290,40 @@ static int iommufd_device_setup_msi(struct iommufd_device *idev,
 	return 0;
 }
 
+static int iommufd_device_attach_ioas(struct iommufd_device *idev,
+				      struct iommufd_hw_pagetable *hwpt)
+{
+	phys_addr_t sw_msi_start = PHYS_ADDR_MAX;
+	struct io_pagetable *iopt;
+	int rc;
+
+	iopt = &hwpt->ioas->iopt;
+
+	rc = iopt_table_enforce_group_resv_regions(iopt, idev->dev,
+						   idev->group, &sw_msi_start);
+	if (rc)
+		return rc;
+
+	rc = iommufd_device_setup_msi(idev, hwpt, sw_msi_start);
+	if (rc)
+		goto out_iova;
+
+	return 0;
+out_iova:
+	iopt_remove_reserved_iova(iopt, idev->group);
+	return rc;
+}
+
+static void iommufd_device_detach_ioas(struct iommufd_device *idev,
+				       struct iommufd_hw_pagetable *hwpt)
+{
+	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->dev);
+}
+
 static int iommufd_device_do_attach(struct iommufd_device *idev,
 				    struct iommufd_hw_pagetable *hwpt)
 {
 	struct iommufd_hw_pagetable *cur_hwpt = idev->hwpt;
-	phys_addr_t sw_msi_start = PHYS_ADDR_MAX;
 	int rc;
 
 	lockdep_assert_held(&hwpt->ioas->mutex);
@@ -316,18 +345,13 @@ static int iommufd_device_do_attach(struct iommufd_device *idev,
 		}
 	}
 
-	rc = iopt_table_enforce_group_resv_regions(&hwpt->ioas->iopt, idev->dev,
-						   idev->group, &sw_msi_start);
+	rc = iommu_device_replace_domain(idev->dev, hwpt->domain);
 	if (rc)
 		return rc;
 
-	rc = iommufd_device_setup_msi(idev, hwpt, sw_msi_start);
+	rc = iommufd_device_attach_ioas(idev, hwpt);
 	if (rc)
-		goto out_iova;
-
-	rc = iommu_device_replace_domain(idev->dev, hwpt->domain);
-	if (rc)
-		goto out_iova;
+		goto out_detach;
 
 	if (cur_hwpt && hwpt) {
 		/* Replace the cur_hwpt */
@@ -340,8 +364,11 @@ static int iommufd_device_do_attach(struct iommufd_device *idev,
 	refcount_inc(&hwpt->device_users);
 	return 0;
 
-out_iova:
-	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->dev);
+out_detach:
+	if (cur_hwpt)
+		iommu_device_replace_domain(idev->dev, cur_hwpt->domain);
+	else
+		iommu_detach_device(hwpt->domain, idev->dev);
 	return rc;
 }
 
@@ -478,8 +505,8 @@ void iommufd_device_detach(struct iommufd_device *idev)
 
 	mutex_lock(&hwpt->ioas->mutex);
 	refcount_dec(&hwpt->device_users);
+	iommufd_device_detach_ioas(idev, hwpt);
 	iommu_detach_device(hwpt->domain, idev->dev);
-	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->dev);
 	mutex_unlock(&hwpt->ioas->mutex);
 
 	if (hwpt->auto_domain)
