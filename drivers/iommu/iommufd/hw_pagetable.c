@@ -6,6 +6,7 @@
 #include <uapi/linux/iommufd.h>
 
 #include "iommufd_private.h"
+#include "iommufd_test.h"
 
 void iommufd_hw_pagetable_destroy(struct iommufd_object *obj)
 {
@@ -169,6 +170,15 @@ static const size_t iommufd_hwpt_info_size[] = {
 	[IOMMU_PGTBL_DATA_NONE] = 0,
 };
 
+/* Return true if type is supported, otherwise false */
+static inline bool
+iomufd_hwpt_type_check(enum iommu_device_data_type driver_type,
+		       enum iommu_pgtbl_data_type type)
+{
+	return ((1 << type) &
+			iommufd_supported_pgtbl_types[driver_type]);
+}
+
 int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 {
 	struct iommufd_hw_pagetable *hwpt, *parent = NULL;
@@ -180,6 +190,7 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	u32 driver_type, klen;
 	void *data = NULL;
 	int rc;
+	bool support;
 
 	if (cmd->__reserved || cmd->flags)
 		return -EOPNOTSUPP;
@@ -197,8 +208,14 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	driver_type = ops->driver_type;
 
 	/* data_type should be a supported type by the hardware */
-	if (!((1 << cmd->data_type) &
-			iommufd_supported_pgtbl_types[driver_type])) {
+	if (cmd->data_type != IOMMU_PGTBL_DATA_SELFTTEST)
+		support = iomufd_hwpt_type_check(driver_type,
+						 cmd->data_type);
+#ifdef CONFIG_IOMMUFD_TEST
+	else
+		support = true; /* selftest pretend to support all types */
+#endif
+	if (!support) {
 		rc = -EINVAL;
 		goto out_put_idev;
 	}
@@ -231,7 +248,12 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 		goto out_put_pt;
 	}
 
-	klen = iommufd_hwpt_info_size[cmd->data_type];
+	if (cmd->data_type != IOMMU_PGTBL_DATA_SELFTTEST)
+		klen = iommufd_hwpt_info_size[cmd->data_type];
+#ifdef CONFIG_IOMMUFD_TEST
+	else
+		klen = sizeof(struct iommu_hwpt_selftest);
+#endif
 	if (klen) {
 		if (!cmd->data_len) {
 			rc = -EINVAL;
