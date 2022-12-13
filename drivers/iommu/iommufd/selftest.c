@@ -84,7 +84,9 @@ void iommufd_test_syz_conv_iova_id(struct iommufd_ucmd *ucmd,
 
 struct mock_iommu_domain {
 	struct iommu_domain domain;
+	struct mock_iommu_domain *parent;
 	struct xarray pfns;
+	u32 iotlb;
 };
 
 enum selftest_obj_type {
@@ -132,6 +134,31 @@ static struct iommu_domain *mock_domain_alloc(unsigned int iommu_domain_type)
 	mock->domain.geometry.aperture_end = MOCK_APERTURE_LAST;
 	mock->domain.pgsize_bitmap = MOCK_IO_PAGE_SIZE;
 	xa_init(&mock->pfns);
+	return &mock->domain;
+}
+
+static struct iommu_domain *mock_domain_alloc_user(struct device *dev,
+						   struct iommu_domain *parent,
+						   void *user_data,
+						   size_t data_len)
+{
+	struct mock_iommu_domain *mock_parent =
+		container_of(parent, struct mock_iommu_domain, domain);
+	struct iommu_hwpt_selftest *alloc = user_data;
+	struct mock_iommu_domain *mock;
+
+	if (user_data && data_len != sizeof(*alloc))
+		return NULL;
+
+	if (!parent || !user_data || !(alloc->flags & IOMMU_TEST_FLAG_NESTED))
+		return mock_domain_alloc(IOMMU_DOMAIN_UNMANAGED);
+
+	mock = kzalloc(sizeof(*mock), GFP_KERNEL);
+	if (!mock)
+		return NULL;
+	mock->parent = mock_parent;
+	mock->iotlb = alloc->test_config;
+	mock->domain.pgsize_bitmap = MOCK_IO_PAGE_SIZE;
 	return &mock->domain;
 }
 
@@ -255,6 +282,7 @@ static const struct iommu_ops mock_ops = {
 	.pgsize_bitmap = MOCK_IO_PAGE_SIZE,
 	.hw_info = mock_domain_hw_info,
 	.domain_alloc = mock_domain_alloc,
+	.domain_alloc_user = mock_domain_alloc_user,
 	.default_domain_ops =
 		&(struct iommu_domain_ops){
 			.free = mock_domain_free,
