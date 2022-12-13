@@ -125,6 +125,10 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	rc = -EINVAL;
 	if (dev_obj->type == IOMMUFD_OBJ_DEVICE)
 		dev = container_of(dev_obj, struct iommufd_device, obj)->dev;
+#ifdef CONFIG_IOMMUFD_TEST
+	else if (dev_obj->type == IOMMUFD_OBJ_SELFTEST)
+		dev = iommufd_selftest_obj_to_dev(dev_obj);
+#endif
 	else
 		goto out_put_dev;
 
