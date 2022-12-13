@@ -84,7 +84,9 @@ void iommufd_test_syz_conv_iova_id(struct iommufd_ucmd *ucmd,
 
 struct mock_iommu_domain {
 	struct iommu_domain domain;
+	struct mock_iommu_domain *parent;
 	struct xarray pfns;
+	u32 iotlb;
 };
 
 enum selftest_obj_type {
@@ -98,6 +100,7 @@ struct selftest_obj {
 	union {
 		struct {
 			struct iommufd_hw_pagetable *hwpt;
+			struct iommufd_ioas *ioas;
 			struct iommufd_ctx *ictx;
 			struct device mock_dev;
 		} idev;
@@ -131,6 +134,31 @@ static struct iommu_domain *mock_domain_alloc(unsigned int iommu_domain_type)
 	mock->domain.geometry.aperture_end = MOCK_APERTURE_LAST;
 	mock->domain.pgsize_bitmap = MOCK_IO_PAGE_SIZE;
 	xa_init(&mock->pfns);
+	return &mock->domain;
+}
+
+static struct iommu_domain *mock_domain_alloc_user(struct device *dev,
+						   struct iommu_domain *parent,
+						   void *user_data,
+						   size_t data_len)
+{
+	struct mock_iommu_domain *mock_parent =
+		container_of(parent, struct mock_iommu_domain, domain);
+	struct iommu_hwpt_selftest *alloc = user_data;
+	struct mock_iommu_domain *mock;
+
+	if (user_data && data_len != sizeof(*alloc))
+		return NULL;
+
+	if (!parent || !user_data || !(alloc->flags & IOMMU_TEST_FLAG_NESTED))
+		return mock_domain_alloc(IOMMU_DOMAIN_UNMANAGED);
+
+	mock = kzalloc(sizeof(*mock), GFP_KERNEL);
+	if (!mock)
+		return NULL;
+	mock->parent = mock_parent;
+	mock->iotlb = alloc->test_config;
+	mock->domain.pgsize_bitmap = MOCK_IO_PAGE_SIZE;
 	return &mock->domain;
 }
 
@@ -254,6 +282,7 @@ static const struct iommu_ops mock_ops = {
 	.pgsize_bitmap = MOCK_IO_PAGE_SIZE,
 	.hw_info = mock_domain_hw_info,
 	.domain_alloc = mock_domain_alloc,
+	.domain_alloc_user = mock_domain_alloc_user,
 	.default_domain_ops =
 		&(struct iommu_domain_ops){
 			.free = mock_domain_free,
@@ -304,10 +333,11 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 	}
 	sobj->idev.ictx = ucmd->ictx;
 	sobj->type = TYPE_IDEV;
+	sobj->idev.ioas = ioas;
 	sobj->idev.mock_dev.bus = &mock_bus;
 
 	hwpt = iommufd_device_selftest_attach(ucmd->ictx, ioas,
-					      &sobj->idev.mock_dev);
+					      &sobj->idev.mock_dev, NULL);
 	if (IS_ERR(hwpt)) {
 		rc = PTR_ERR(hwpt);
 		goto out_sobj;
@@ -325,6 +355,62 @@ out_sobj:
 	iommufd_object_abort(ucmd->ictx, &sobj->obj);
 out_ioas:
 	iommufd_put_object(&ioas->obj);
+	return rc;
+}
+
+/* Replace the mock domain with a manually allocated hw_pagetable */
+static int iommufd_test_mock_domain_replace(struct iommufd_ucmd *ucmd,
+					    struct iommu_test_cmd *cmd)
+{
+	struct iommufd_object *dev_obj, *hwpt_obj;
+	struct iommufd_hw_pagetable *hwpt;
+	struct selftest_obj *sobj;
+	int rc;
+
+	hwpt_obj = iommufd_get_object(ucmd->ictx,
+				      cmd->mock_domain_replace.hwpt_id,
+				      IOMMUFD_OBJ_HW_PAGETABLE);
+	if (IS_ERR(hwpt_obj))
+		return PTR_ERR(hwpt_obj);
+
+	hwpt = container_of(hwpt_obj, struct iommufd_hw_pagetable, obj);
+
+	dev_obj = iommufd_get_object(ucmd->ictx,
+				     cmd->mock_domain_replace.device_id,
+				     IOMMUFD_OBJ_SELFTEST);
+	if (IS_ERR(dev_obj)) {
+		rc = PTR_ERR(dev_obj);
+		goto out_hwpt_obj;
+	}
+
+	sobj = container_of(dev_obj, struct selftest_obj, obj);
+	if (sobj->type != TYPE_IDEV) {
+		rc = -EINVAL;
+		goto out_dev_obj;
+	}
+
+	iommufd_device_selftest_detach(sobj->idev.ictx, sobj->idev.hwpt);
+
+	hwpt = iommufd_device_selftest_attach(ucmd->ictx, sobj->idev.ioas,
+					      &sobj->idev.mock_dev, hwpt);
+	if (IS_ERR(hwpt)) {
+		rc = PTR_ERR(hwpt);
+		goto out_reattach;
+	}
+	sobj->idev.hwpt = hwpt;
+
+	rc = 0;
+	goto out_dev_obj;
+
+out_reattach:
+	hwpt = iommufd_device_selftest_attach(ucmd->ictx, sobj->idev.ioas,
+					      &sobj->idev.mock_dev,
+					      sobj->idev.hwpt);
+	WARN_ON(IS_ERR(hwpt));
+out_dev_obj:
+	iommufd_put_object(dev_obj);
+out_hwpt_obj:
+	iommufd_put_object(hwpt_obj);
 	return rc;
 }
 
@@ -818,6 +904,8 @@ int iommufd_test(struct iommufd_ucmd *ucmd)
 						 cmd->add_reserved.length);
 	case IOMMU_TEST_OP_MOCK_DOMAIN:
 		return iommufd_test_mock_domain(ucmd, cmd);
+	case IOMMU_TEST_OP_MOCK_DOMAIN_REPLACE:
+		return iommufd_test_mock_domain_replace(ucmd, cmd);
 	case IOMMU_TEST_OP_MD_CHECK_MAP:
 		return iommufd_test_md_check_pa(
 			ucmd, cmd->id, cmd->check_map.iova,
