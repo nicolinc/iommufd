@@ -137,7 +137,7 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	switch (pt_obj->type) {
 	case IOMMUFD_OBJ_HW_PAGETABLE:
 		parent = container_of(pt_obj, struct iommufd_hw_pagetable, obj);
-		if (parent->auto_domain) {
+		if (parent->auto_domain || parent->parent) {
 			rc = -EINVAL;
 			goto out_put_pt;
 		}
