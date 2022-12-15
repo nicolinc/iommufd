@@ -120,7 +120,7 @@ int iommufd_device_get_info(struct iommufd_ucmd *ucmd)
 {
 	struct iommu_device_info *cmd = ucmd->cmd;
 	struct iommufd_object *obj;
-	struct iommufd_device *idev;
+	struct device *dev;
 	void *data;
 	int rc;
 
@@ -128,17 +128,24 @@ int iommufd_device_get_info(struct iommufd_ucmd *ucmd)
 	    cmd->data_len > PAGE_SIZE)
 		return -EOPNOTSUPP;
 
-	obj = iommufd_get_object(ucmd->ictx, cmd->dev_id, IOMMUFD_OBJ_DEVICE);
+	obj = iommufd_get_object(ucmd->ictx, cmd->dev_id, IOMMUFD_OBJ_ANY);
 	if (IS_ERR(obj))
 		return PTR_ERR(obj);
 
-	idev = container_of(obj, struct iommufd_device, obj);
+	if (obj->type == IOMMUFD_OBJ_DEVICE)
+		dev = container_of(obj, struct iommufd_device, obj)->dev;
+#ifdef CONFIG_IOMMUFD_TEST
+	else if (obj->type == IOMMUFD_OBJ_SELFTEST)
+		dev = iommufd_selftest_obj_to_dev(obj);
+#endif
+	else
+		goto out_put;
 
 	data = kzalloc(cmd->data_len, GFP_KERNEL);
 	if (!data)
 		goto out_put;
 
-	rc = iommu_get_hw_info(idev->dev, cmd->out_device_type,
+	rc = iommu_get_hw_info(dev, cmd->out_device_type,
 			       data, cmd->data_len);
 	if (rc < 0)
 		goto out_free_data;
