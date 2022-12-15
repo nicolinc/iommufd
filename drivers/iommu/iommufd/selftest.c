@@ -104,6 +104,19 @@ struct selftest_obj {
 	};
 };
 
+static int mock_domain_hw_info(struct device *dev, struct iommu_hw_info *info)
+{
+	struct iommu_device_info_selftest *data = info->data;
+
+	if (!data || info->data_len != sizeof(*data))
+		return -EINVAL;
+
+	info->device_type = IOMMU_DEVICE_DATA_SELFTEST;
+	data->test_reg = IOMMU_DEVICE_INFO_SELFTEST_REGVAL;
+
+	return 0;
+}
+
 static struct iommu_domain *mock_domain_alloc(unsigned int iommu_domain_type)
 {
 	struct mock_iommu_domain *mock;
@@ -239,6 +252,7 @@ static phys_addr_t mock_domain_iova_to_phys(struct iommu_domain *domain,
 static const struct iommu_ops mock_ops = {
 	.owner = THIS_MODULE,
 	.pgsize_bitmap = MOCK_IO_PAGE_SIZE,
+	.hw_info = mock_domain_hw_info,
 	.domain_alloc = mock_domain_alloc,
 	.default_domain_ops =
 		&(struct iommu_domain_ops){
