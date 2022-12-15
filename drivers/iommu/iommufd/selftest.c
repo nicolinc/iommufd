@@ -128,6 +128,20 @@ static struct iommu_domain mock_blocking_domain = {
 	.ops = &mock_blocking_ops,
 };
 
+static void *mock_domain_hw_info(struct device *dev, u32 *length)
+{
+	struct iommu_device_info_selftest *info;
+
+	info = kzalloc(sizeof(*info), GFP_KERNEL);
+	if (!info)
+		return ERR_PTR(-ENOMEM);
+
+	info->test_reg = IOMMU_DEVICE_INFO_SELFTEST_REGVAL;
+	*length = sizeof(*info);
+
+	return info;
+}
+
 static struct iommu_domain *mock_domain_alloc(unsigned int iommu_domain_type)
 {
 	struct mock_iommu_domain *mock;
@@ -279,6 +293,8 @@ static bool mock_domain_capable(struct device *dev, enum iommu_cap cap)
 static const struct iommu_ops mock_ops = {
 	.owner = THIS_MODULE,
 	.pgsize_bitmap = MOCK_IO_PAGE_SIZE,
+	.driver_type = IOMMU_DEVICE_DATA_SELFTEST,
+	.hw_info = mock_domain_hw_info,
 	.domain_alloc = mock_domain_alloc,
 	.set_platform_dma_ops = mock_domain_nop_set_platform_dma_ops,
 	.capable = mock_domain_capable,
