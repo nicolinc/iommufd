@@ -3439,7 +3439,14 @@ struct iommu_domain *iommu_sva_domain_alloc(struct device *dev,
 int iommu_get_hw_info(struct device *dev, enum iommu_device_data_type type,
 		      void *data, size_t length)
 {
-	const struct iommu_ops *ops = dev_iommu_ops(dev);
+	const struct iommu_ops *ops;
+
+	if (dev->iommu && dev->iommu->iommu_dev)
+		ops = dev_iommu_ops(dev);
+	else if (dev->bus && dev->bus->iommu_ops)
+		ops = dev->bus->iommu_ops;
+	else
+		return -ENODEV;
 
 	if (!ops->hw_info || type != ops->driver_type || !data)
 		return -EINVAL;
@@ -3466,7 +3473,14 @@ struct iommu_domain *iommu_domain_alloc_user(struct device *dev,
 					     struct iommu_domain *parent,
 					     const void *user_data, size_t data_len)
 {
-	const struct iommu_ops *ops = dev_iommu_ops(dev);
+	const struct iommu_ops *ops;
+
+	if (dev->iommu && dev->iommu->iommu_dev)
+		ops = dev_iommu_ops(dev);
+	else if (dev->bus && dev->bus->iommu_ops)
+		ops = dev->bus->iommu_ops;
+	else
+		return ERR_PTR(-ENODEV);
 
 	if (!ops->domain_alloc_user)
 		return ERR_PTR(-EOPNOTSUPP);
