@@ -152,13 +152,38 @@ static int _test_cmd_hwpt_alloc(int fd, __u32 device_id, __u32 pt_id,
 			.size = sizeof(test_cmd),                              \
 			.op = IOMMU_TEST_OP_MD_CHECK_IOTLB,                    \
 			.id = hwpt_id,                                         \
-			.check_iotlb = { .iotlb = expected },                  \
+			.check_iotlb = {                                       \
+				.iotlb[0] = expected,                          \
+				.iotlb[1] = expected,                          \
+				.iotlb[2] = expected,                          \
+				.iotlb[3] = expected,                          \
+			},                                                     \
 		};                                                             \
 		ASSERT_EQ(0,                                                   \
 			  ioctl(self->fd,                                      \
 				_IOMMU_TEST_CMD(IOMMU_TEST_OP_MD_CHECK_IOTLB), \
 				&test_cmd));                                   \
 	})
+
+static int _test_cmd_hwpt_invalidate(int fd, __u32 hwpt_id)
+{
+	struct iommu_hwpt_invalidate_selftest data = {
+		.flags = IOMMU_TEST_INVALIDATE_ALL,
+	};
+	struct iommu_hwpt_invalidate cmd = {
+		.size = sizeof(cmd),
+		.hwpt_id = hwpt_id,
+		.data_len = sizeof(data),
+		.data_uptr = (uint64_t)&data,
+	};
+
+	return ioctl(fd, IOMMU_HWPT_INVALIDATE, &cmd);
+}
+
+#define test_cmd_hwpt_invalidate(hwpt_id) \
+	ASSERT_EQ(0, _test_cmd_hwpt_invalidate(self->fd, hwpt_id))
+#define test_err_cmd_hwpt_invalidate(_errno, hwpt_id) \
+	EXPECT_ERRNO(_errno, _test_cmd_hwpt_invalidate(self->fd, hwpt_id))
 
 static int _test_cmd_access_replace_ioas(int fd, __u32 access_id,
 					 unsigned int ioas_id)
