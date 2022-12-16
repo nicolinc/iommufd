@@ -214,6 +214,11 @@ int iommufd_hwpt_invalidate(struct iommufd_ucmd *ucmd)
 		return PTR_ERR(obj);
 
 	hwpt = container_of(obj, struct iommufd_hw_pagetable, obj);
+	/* Do not allow any kernel-managed hw_pagetable */
+	if (!hwpt->parent) {
+		rc = -EINVAL;
+		goto out_put_hwpt;
+	}
 
 	data = kzalloc(cmd->data_len, GFP_KERNEL);
 	if (!data) {
