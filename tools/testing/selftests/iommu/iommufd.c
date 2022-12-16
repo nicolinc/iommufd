@@ -301,6 +301,10 @@ TEST_F(iommufd_ioas, ioas_nested_hwpt)
 					   &nested_hwpt_id[0]);
 		test_cmd_hwpt_alloc_nested(self->idev_id, parent_hwpt_id,
 					   &nested_hwpt_id[1]);
+		test_cmd_hwpt_check_iotlb(nested_hwpt_id[0],
+					  IOMMU_TEST_IOTLB_DEFAULT);
+		test_cmd_hwpt_check_iotlb(nested_hwpt_id[1],
+					  IOMMU_TEST_IOTLB_DEFAULT);
 
 		/* Negative test: a nested hwpt on top of a nested hwpt */
 		test_err_cmd_hwpt_alloc_nested(EINVAL, self->idev_id,
