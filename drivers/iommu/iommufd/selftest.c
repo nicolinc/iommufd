@@ -405,6 +405,21 @@ bool iommufd_selftest_is_mock_dev(struct device *dev)
 	return dev->release == mock_dev_release;
 }
 
+struct iommufd_device *iommufd_selftest_get_device(struct iommufd_object *obj)
+{
+	struct selftest_obj *sobj = container_of(obj, struct selftest_obj, obj);
+	struct iommufd_device *idev = sobj->idev.idev;
+
+	iommufd_lock_obj(&idev->obj);
+	return sobj->idev.idev;
+}
+
+void iommufd_selftest_put_device(struct iommufd_device *idev)
+{
+	if (idev->sobj)
+		iommufd_put_object(&idev->sobj->obj);
+}
+
 /* Create an hw_pagetable with the mock domain so we can test the domain ops */
 static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 				    struct iommu_test_cmd *cmd)
@@ -434,6 +449,7 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 		rc = PTR_ERR(idev);
 		goto out_mdev;
 	}
+	idev->sobj = sobj;
 	sobj->idev.idev = idev;
 
 	rc = iommufd_device_attach(idev, &pt_id);
@@ -452,6 +468,34 @@ out_mdev:
 	mock_dev_destroy(sobj->idev.mock_dev);
 out_sobj:
 	iommufd_object_abort(ucmd->ictx, &sobj->obj);
+	return rc;
+}
+
+/* Replace the mock domain with a manually allocated hw_pagetable */
+static int iommufd_test_mock_domain_replace(struct iommufd_ucmd *ucmd,
+					    unsigned int device_id, u32 pt_id,
+					    struct iommu_test_cmd *cmd)
+{
+	struct iommufd_device *idev;
+	int rc;
+
+	/*
+	 * Prefer to use the OBJ_SELFTEST because the destroy_rwsem will ensure
+	 * it doesn't race with detach, which is not allowed.
+	 */
+	idev = iommufd_get_device(ucmd, device_id);
+	if (IS_ERR(idev))
+		return PTR_ERR(idev);
+
+	rc = iommufd_device_replace(idev, &pt_id);
+	if (rc)
+		goto out_put_idev;
+
+	cmd->mock_domain_replace.pt_id = pt_id;
+	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+
+out_put_idev:
+	iommufd_put_device(idev);
 	return rc;
 }
 
@@ -939,6 +983,9 @@ int iommufd_test(struct iommufd_ucmd *ucmd)
 						 cmd->add_reserved.length);
 	case IOMMU_TEST_OP_MOCK_DOMAIN:
 		return iommufd_test_mock_domain(ucmd, cmd);
+	case IOMMU_TEST_OP_MOCK_DOMAIN_REPLACE:
+		return iommufd_test_mock_domain_replace(
+			ucmd, cmd->id, cmd->mock_domain_replace.pt_id, cmd);
 	case IOMMU_TEST_OP_MD_CHECK_MAP:
 		return iommufd_test_md_check_pa(
 			ucmd, cmd->id, cmd->check_map.iova,
