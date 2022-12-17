@@ -999,6 +999,7 @@ FIXTURE(iommufd_mock_domain)
 	uint32_t ioas_id;
 	uint32_t domain_id;
 	uint32_t domain_ids[2];
+	uint32_t device_id[2];
 	int mmap_flags;
 	size_t mmap_buf_size;
 };
@@ -1020,7 +1021,7 @@ FIXTURE_SETUP(iommufd_mock_domain)
 	ASSERT_GE(ARRAY_SIZE(self->domain_ids), variant->mock_domains);
 
 	for (i = 0; i != variant->mock_domains; i++)
-		test_cmd_mock_domain(self->ioas_id, NULL, &self->domain_ids[i]);
+		test_cmd_mock_domain(self->ioas_id, &self->device_id[i], &self->domain_ids[i]);
 	self->domain_id = self->domain_ids[0];
 
 	self->mmap_flags = MAP_SHARED | MAP_ANONYMOUS;
@@ -1269,6 +1270,36 @@ TEST_F(iommufd_mock_domain, user_copy)
 		access_cmd.id, access_cmd.access_pages.out_access_pages_id);
 	test_cmd_destroy_access(access_cmd.id);
 
+	test_ioctl_destroy(ioas_id);
+}
+
+TEST_F(iommufd_mock_domain, replace)
+{
+	uint32_t ioas_id;
+
+	test_ioctl_ioas_alloc(&ioas_id);
+
+	test_cmd_mock_domain_replace(self->device_id[0], ioas_id);
+
+	/*
+	 * Replacing the IOAS causes the prior HWPT to be deallocated, thus we
+	 * should get enoent when we try to use it.
+	 */
+	if (variant->mock_domains == 1)
+		test_err_mock_domain_replace(ENOENT, self->device_id[0],
+					     self->domain_ids[0]);
+
+	test_cmd_mock_domain_replace(self->device_id[0], ioas_id);
+	if (variant->mock_domains >= 2) {
+		test_cmd_mock_domain_replace(self->device_id[0],
+					     self->domain_ids[1]);
+		test_cmd_mock_domain_replace(self->device_id[0],
+					     self->domain_ids[1]);
+		test_cmd_mock_domain_replace(self->device_id[0],
+					     self->domain_ids[0]);
+	}
+
+	test_cmd_mock_domain_replace(self->device_id[0], self->ioas_id);
 	test_ioctl_destroy(ioas_id);
 }
 
