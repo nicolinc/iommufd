@@ -1967,8 +1967,6 @@ struct iommu_domain *iommu_domain_alloc_user(struct device *dev,
 	if (!domain->ops)
 		domain->ops = ops->default_domain_ops;
 
-	domain->parent = parent;
-
 	return domain;
 }
 EXPORT_SYMBOL_GPL(iommu_domain_alloc_user);
@@ -2157,8 +2155,7 @@ static int __iommu_attach_group(struct iommu_domain *domain,
 	int ret;
 
 	if (group->domain && group->domain != group->default_domain &&
-	    group->domain != group->blocking_domain &&
-	    group->domain != domain->parent)
+	    group->domain != group->blocking_domain)
 		return -EBUSY;
 
 	ret = __iommu_group_for_each_dev(group, domain,
