@@ -1248,7 +1248,8 @@ static int vfio_ioctl_device_attach(struct vfio_device *device,
 	mutex_lock(&device->dev_set->lock);
 	pt_id = attach.pt_id;
 	ret = vfio_iommufd_attach(device,
-				  pt_id != IOMMUFD_INVALID_ID ? &pt_id : NULL);
+				  pt_id != IOMMUFD_INVALID_ID ? &pt_id : NULL,
+				  attach.flags);
 	if (ret)
 		goto out_unlock;
 
@@ -1264,7 +1265,7 @@ static int vfio_ioctl_device_attach(struct vfio_device *device,
 	return 0;
 
 out_detach:
-	vfio_iommufd_attach(device, NULL);
+	vfio_iommufd_attach(device, NULL, 0);
 out_unlock:
 	mutex_unlock(&device->dev_set->lock);
 	return ret;

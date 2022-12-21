@@ -394,7 +394,7 @@ out_abort:
  * The caller should return the resulting pt_id back to userspace.
  * This function is undone by calling iommufd_device_detach().
  */
-int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id)
+int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id, u32 flags)
 {
 	struct iommufd_object *pt_obj;
 	int rc;

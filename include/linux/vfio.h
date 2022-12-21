@@ -102,7 +102,7 @@ struct vfio_device_ops {
 	int	(*bind_iommufd)(struct vfio_device *vdev,
 				struct iommufd_ctx *ictx, u32 *out_device_id);
 	void	(*unbind_iommufd)(struct vfio_device *vdev);
-	int	(*attach_ioas)(struct vfio_device *vdev, u32 *pt_id);
+	int	(*attach_ioas)(struct vfio_device *vdev, u32 *pt_id, u32 flags);
 	int	(*open_device)(struct vfio_device *vdev);
 	void	(*close_device)(struct vfio_device *vdev);
 	ssize_t	(*read)(struct vfio_device *vdev, char __user *buf,
@@ -123,11 +123,13 @@ struct vfio_device_ops {
 int vfio_iommufd_physical_bind(struct vfio_device *vdev,
 			       struct iommufd_ctx *ictx, u32 *out_device_id);
 void vfio_iommufd_physical_unbind(struct vfio_device *vdev);
-int vfio_iommufd_physical_attach_ioas(struct vfio_device *vdev, u32 *pt_id);
+int vfio_iommufd_physical_attach_ioas(struct vfio_device *vdev, u32 *pt_id,
+				      u32 flags);
 int vfio_iommufd_emulated_bind(struct vfio_device *vdev,
 			       struct iommufd_ctx *ictx, u32 *out_device_id);
 void vfio_iommufd_emulated_unbind(struct vfio_device *vdev);
-int vfio_iommufd_emulated_attach_ioas(struct vfio_device *vdev, u32 *pt_id);
+int vfio_iommufd_emulated_attach_ioas(struct vfio_device *vdev, u32 *pt_id,
+				      u32 flags);
 #else
 #define vfio_iommufd_physical_bind                                      \
 	((int (*)(struct vfio_device *vdev, struct iommufd_ctx *ictx,   \
@@ -135,14 +137,14 @@ int vfio_iommufd_emulated_attach_ioas(struct vfio_device *vdev, u32 *pt_id);
 #define vfio_iommufd_physical_unbind \
 	((void (*)(struct vfio_device *vdev)) NULL)
 #define vfio_iommufd_physical_attach_ioas \
-	((int (*)(struct vfio_device *vdev, u32 *pt_id)) NULL)
+	((int (*)(struct vfio_device *vdev, u32 *pt_id, u32 flags)) NULL)
 #define vfio_iommufd_emulated_bind                                      \
 	((int (*)(struct vfio_device *vdev, struct iommufd_ctx *ictx,   \
 		  u32 *out_device_id)) NULL)
 #define vfio_iommufd_emulated_unbind \
 	((void (*)(struct vfio_device *vdev)) NULL)
 #define vfio_iommufd_emulated_attach_ioas \
-	((int (*)(struct vfio_device *vdev, u32 *pt_id)) NULL)
+	((int (*)(struct vfio_device *vdev, u32 *pt_id, u32 flags)) NULL)
 #endif
 
 /**
