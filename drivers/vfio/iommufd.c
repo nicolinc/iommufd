@@ -111,9 +111,6 @@ int vfio_iommufd_physical_attach_ioas(struct vfio_device *vdev, u32 *pt_id)
 		return 0;
 	}
 
-	if (vdev->iommufd_attached)
-		return -EBUSY;
-
 	rc = iommufd_device_attach(vdev->iommufd_device, pt_id);
 	if (rc)
 		return rc;
@@ -184,8 +181,11 @@ int vfio_iommufd_emulated_attach_ioas(struct vfio_device *vdev, u32 *pt_id)
 		return 0;
 	}
 
-	if (vdev->iommufd_access)
-		return -EBUSY;
+	if (vdev->iommufd_access) {
+		if (!vdev->ops->dma_unmap)
+			return -EBUSY;
+		return iommufd_access_replace_ioas(vdev->iommufd_access, *pt_id);
+	}
 
 	user = iommufd_access_create(vdev->iommufd_ictx, *pt_id, &vfio_user_ops,
 				     vdev);
