@@ -2149,6 +2149,64 @@ int iommu_attach_group(struct iommu_domain *domain, struct iommu_group *group)
 }
 EXPORT_SYMBOL_GPL(iommu_attach_group);
 
+static int iommu_group_check_set_platform_dma(struct device *dev, void *data)
+{
+	const struct iommu_ops *ops = dev_iommu_ops(dev);
+
+	/* Drivers should support default_domain to work with replace() */
+	if (ops->set_platform_dma_ops)
+		return -EOPNOTSUPP;
+
+	return 0;
+}
+
+/**
+ * iommu_domain_replace - replace the domain that a group is attached to
+ * @new_domain: new IOMMU domain to replace
+ * @group: IOMMU group that will be attached to the new domain
+ *
+ * This API allows switching domains without stagging the iommu_group at a core
+ * domain (blocking_domain or default_domain). This, however, requires a caller
+ * to be sure that both the old and new domains have the same IOVA mappings, so
+ * as to have no impact on DMA to the IOVAs that it is accessing.
+ *
+ * If the attached domain is a core domain (e.g. a default_domain), it will act
+ * just like the iommu_attach_group(). So, drivers that don't default domains
+ * are not supported, since they will fail.
+ */
+int iommu_replace_group(struct iommu_domain *new_domain,
+			struct iommu_group *group)
+{
+	int ret;
+
+	if (!new_domain)
+		return -EINVAL;
+
+	mutex_lock(&group->mutex);
+
+	if (group->domain == new_domain)
+		goto out_unlock;
+
+	/*
+	 * An older driver that has a set_platform_dma_ops() should call it
+	 * before an attach.
+	 */
+	ret = __iommu_group_for_each_dev(group, NULL,
+					 iommu_group_check_set_platform_dma);
+	if (ret)
+		goto out_unlock;
+
+	ret = __iommu_group_for_each_dev(group, new_domain,
+					 iommu_group_do_attach_device);
+	if (ret == 0)
+		group->domain = new_domain;
+
+out_unlock:
+	mutex_unlock(&group->mutex);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(iommu_replace_group);
+
 static int iommu_group_do_set_platform_dma(struct device *dev, void *data)
 {
 	const struct iommu_ops *ops = dev_iommu_ops(dev);
