@@ -347,6 +347,7 @@ static void iommufd_device_detach_ioas(struct iommufd_device *idev,
 static int iommufd_device_do_attach(struct iommufd_device *idev,
 				    struct iommufd_hw_pagetable *hwpt)
 {
+	struct iommufd_hw_pagetable *cur_hwpt = idev->hwpt;
 	int rc;
 
 	lockdep_assert_held(&hwpt->ioas->mutex);
@@ -369,22 +370,34 @@ static int iommufd_device_do_attach(struct iommufd_device *idev,
 	}
 
 	if (hwpt->domain != iommu_get_domain_for_dev(idev->dev)) {
-		rc = iommu_attach_group(hwpt->domain, idev->group);
+		rc = iommu_group_replace_domain(idev->group, hwpt->domain);
 		if (rc)
 			return rc;
 	}
 
-	rc = iommufd_device_attach_ioas(idev, hwpt);
-	if (rc)
-		goto out_detach;
+	/* Do not attach ioas again if hwpts are related */
+	if (!iommufd_hwpts_are_related(cur_hwpt, hwpt)) {
+		rc = iommufd_device_attach_ioas(idev, hwpt);
+		if (rc)
+			goto out_detach;
+	}
 
+	if (cur_hwpt && hwpt) {
+		/* Replace the cur_hwpt */
+		refcount_dec(&cur_hwpt->obj.users);
+		refcount_dec(cur_hwpt->devices_users);
+		refcount_dec(&idev->obj.users);
+	}
 	idev->hwpt = hwpt;
 	refcount_inc(&hwpt->obj.users);
 	refcount_inc(hwpt->devices_users);
 	return 0;
 
 out_detach:
-	iommu_detach_group(hwpt->domain, idev->group);
+	if (cur_hwpt)
+		iommu_group_replace_domain(idev->group, cur_hwpt->domain);
+	else
+		iommu_detach_group(hwpt->domain, idev->group);
 	return rc;
 }
 
