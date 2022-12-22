@@ -245,9 +245,6 @@ static int iommufd_device_attach_ioas(struct iommufd_device *idev,
 	struct io_pagetable *iopt;
 	int rc;
 
-	/* Always use the parent hwpt for IOAS */
-	if (hwpt->parent)
-		hwpt = hwpt->parent;
 	iopt = &hwpt->ioas->iopt;
 
 	rc = iopt_table_enforce_group_resv_regions(iopt, idev->dev,
@@ -260,7 +257,7 @@ static int iommufd_device_attach_ioas(struct iommufd_device *idev,
 		goto out_iova;
 
 	if (!iommufd_hw_pagetable_has_group(hwpt, idev->group)) {
-		if (refcount_read(hwpt->devices_users) == 1) {
+		if (list_empty(&hwpt->devices)) {
 			rc = iopt_table_add_domain(iopt, hwpt->domain);
 			if (rc)
 				goto out_iova;
@@ -276,11 +273,8 @@ out_iova:
 static void iommufd_device_detach_ioas(struct iommufd_device *idev,
 				       struct iommufd_hw_pagetable *hwpt)
 {
-	if (hwpt->parent)
-		hwpt = hwpt->parent;
-
 	if (!iommufd_hw_pagetable_has_group(hwpt, idev->group)) {
-		if (refcount_read(hwpt->devices_users) == 1) {
+		if (list_empty(&hwpt->devices)) {
 			iopt_table_remove_domain(&hwpt->ioas->iopt,
 						 hwpt->domain);
 			list_del(&hwpt->hwpt_item);
@@ -296,7 +290,7 @@ static int iommufd_device_do_attach(struct iommufd_device *idev,
 
 	lockdep_assert_held(&hwpt->ioas->mutex);
 
-	mutex_lock(hwpt->devices_lock);
+	mutex_lock(&hwpt->devices_lock);
 
 	/*
 	 * Try to upgrade the domain we have, it is an iommu driver bug to
@@ -332,15 +326,14 @@ static int iommufd_device_do_attach(struct iommufd_device *idev,
 
 	idev->hwpt = hwpt;
 	refcount_inc(&hwpt->obj.users);
-	refcount_inc(hwpt->devices_users);
 	list_add(&idev->devices_item, &hwpt->devices);
-	mutex_unlock(hwpt->devices_lock);
+	mutex_unlock(&hwpt->devices_lock);
 	return 0;
 
 out_detach:
 	iommu_detach_group(hwpt->domain, idev->group);
 out_unlock:
-	mutex_unlock(hwpt->devices_lock);
+	mutex_unlock(&hwpt->devices_lock);
 	return rc;
 }
 
@@ -464,13 +457,12 @@ void iommufd_device_detach(struct iommufd_device *idev)
 	struct iommufd_hw_pagetable *hwpt = idev->hwpt;
 
 	mutex_lock(&hwpt->ioas->mutex);
-	mutex_lock(hwpt->devices_lock);
-	refcount_dec(hwpt->devices_users);
+	mutex_lock(&hwpt->devices_lock);
 	list_del(&idev->devices_item);
 	iommufd_device_detach_ioas(idev, hwpt);
 	if (!iommufd_hw_pagetable_has_group(hwpt, idev->group))
 		iommu_detach_group(hwpt->domain, idev->group);
-	mutex_unlock(hwpt->devices_lock);
+	mutex_unlock(&hwpt->devices_lock);
 	mutex_unlock(&hwpt->ioas->mutex);
 
 	if (hwpt->auto_domain)

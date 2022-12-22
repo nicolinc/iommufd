@@ -266,13 +266,8 @@ struct iommufd_hw_pagetable {
 	bool msi_cookie : 1;
 	/* Head at iommufd_ioas::hwpt_list */
 	struct list_head hwpt_item;
+	struct mutex devices_lock;
 	struct list_head devices;
-	/*
-	 * If hwpt->parent is valid, always reuse parent's devices_lock and
-	 * devices_users. Otherwise, the current hwpt should allocate them.
-	 */
-	struct mutex *devices_lock;
-	refcount_t *devices_users;
 	void *user_data;
 };
 
