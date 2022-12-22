@@ -510,6 +510,8 @@ extern int iommu_get_group_resv_regions(struct iommu_group *group,
 
 extern int iommu_attach_group(struct iommu_domain *domain,
 			      struct iommu_group *group);
+extern int iommu_replace_group(struct iommu_domain *new_domain,
+			       struct iommu_group *group);
 extern void iommu_detach_group(struct iommu_domain *domain,
 			       struct iommu_group *group);
 extern struct iommu_group *iommu_group_alloc(void);
@@ -875,6 +877,12 @@ static inline bool iommu_default_passthrough(void)
 
 static inline int iommu_attach_group(struct iommu_domain *domain,
 				     struct iommu_group *group)
+{
+	return -ENODEV;
+}
+
+static inline int iommu_replace_group(struct iommu_domain *new_domain,
+				      struct iommu_group *group)
 {
 	return -ENODEV;
 }
