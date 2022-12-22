@@ -9,6 +9,8 @@
 #include "io_pagetable.h"
 #include "iommufd_private.h"
 
+MODULE_IMPORT_NS(IOMMUFD_INTERNAL);
+
 static bool allow_unsafe_interrupts;
 module_param(allow_unsafe_interrupts, bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(
@@ -196,10 +198,41 @@ static bool iommufd_hw_pagetable_has_group(struct iommufd_hw_pagetable *hwpt,
 	return false;
 }
 
+/**
+ * __iommufd_device_detach - Detach a device from idev->hwpt
+ * @idev: device to detach
+ * @detach_group: flag to call iommu_detach_group
+ *
+ * This is a cleanup helper shared by the replace and detach routines. Comparing
+ * to a detach routine, a replace call does not need the iommu_detach_group().
+ */
+static void __iommufd_device_detach(struct iommufd_device *idev,
+				     bool detach_group)
+{
+	struct iommufd_hw_pagetable *hwpt = idev->hwpt;
+
+	mutex_lock(&hwpt->devices_lock);
+	list_del(&idev->devices_item);
+	if (detach_group && !iommufd_hw_pagetable_has_group(hwpt, idev->group))
+		iommu_detach_group(hwpt->domain, idev->group);
+	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->dev);
+	mutex_unlock(&hwpt->devices_lock);
+
+	if (hwpt->auto_domain)
+		iommufd_object_destroy_user(idev->ictx, &hwpt->obj);
+	else
+		refcount_dec(&hwpt->obj.users);
+
+	idev->hwpt = NULL;
+
+	refcount_dec(&idev->obj.users);
+}
+
 /* On success this consumes a hwpt reference from the caller */
 static int iommufd_device_do_attach(struct iommufd_device *idev,
 				    struct iommufd_hw_pagetable *hwpt)
 {
+	struct iommufd_hw_pagetable *cur_hwpt = idev->hwpt;
 	phys_addr_t sw_msi_start = PHYS_ADDR_MAX;
 	int rc;
 
@@ -237,7 +270,7 @@ static int iommufd_device_do_attach(struct iommufd_device *idev,
 	 * the group once for the first device that is in the group.
 	 */
 	if (!iommufd_hw_pagetable_has_group(hwpt, idev->group)) {
-		rc = iommu_attach_group(hwpt->domain, idev->group);
+		rc = iommu_group_replace_domain(idev->group, hwpt->domain);
 		if (rc)
 			goto out_iova;
 
@@ -249,6 +282,10 @@ static int iommufd_device_do_attach(struct iommufd_device *idev,
 		}
 	}
 
+	/* Detach from the cur_hwpt without iommu_detach_group() */
+	if (cur_hwpt)
+		__iommufd_device_detach(idev, false);
+
 	idev->hwpt = hwpt;
 	/* The HWPT reference from the caller is moved to this list */
 	list_add(&idev->devices_item, &hwpt->devices);
@@ -256,7 +293,10 @@ static int iommufd_device_do_attach(struct iommufd_device *idev,
 	return 0;
 
 out_detach:
-	iommu_detach_group(hwpt->domain, idev->group);
+	if (cur_hwpt)
+		iommu_group_replace_domain(idev->group, cur_hwpt->domain);
+	else
+		iommu_detach_group(hwpt->domain, idev->group);
 out_iova:
 	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->dev);
 out_unlock:
@@ -356,6 +396,9 @@ int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id)
 		struct iommufd_hw_pagetable *hwpt =
 			container_of(pt_obj, struct iommufd_hw_pagetable, obj);
 
+		if (idev->hwpt == hwpt)
+			goto out_put_pt_obj;
+
 		rc = iommufd_device_do_attach(idev, hwpt);
 		if (rc)
 			goto out_put_pt_obj;
@@ -396,23 +439,7 @@ EXPORT_SYMBOL_NS_GPL(iommufd_device_attach, IOMMUFD);
  */
 void iommufd_device_detach(struct iommufd_device *idev)
 {
-	struct iommufd_hw_pagetable *hwpt = idev->hwpt;
-
-	mutex_lock(&hwpt->devices_lock);
-	list_del(&idev->devices_item);
-	if (!iommufd_hw_pagetable_has_group(hwpt, idev->group))
-		iommu_detach_group(hwpt->domain, idev->group);
-	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->dev);
-	mutex_unlock(&hwpt->devices_lock);
-
-	if (hwpt->auto_domain)
-		iommufd_object_destroy_user(idev->ictx, &hwpt->obj);
-	else
-		refcount_dec(&hwpt->obj.users);
-
-	idev->hwpt = NULL;
-
-	refcount_dec(&idev->obj.users);
+	__iommufd_device_detach(idev, true);
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_device_detach, IOMMUFD);
 
