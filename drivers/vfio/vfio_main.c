@@ -1151,9 +1151,6 @@ static int vfio_ioctl_device_attach(struct vfio_device *device,
 	if (copy_from_user(&attach, (void __user *)arg, sizeof(attach)))
 		return -EFAULT;
 
-	if (attach.flags)
-		return -EINVAL;
-
 	if (!device->ops->bind_iommufd)
 		return -ENODEV;
 

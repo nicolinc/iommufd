@@ -238,7 +238,8 @@ struct vfio_device_bind_iommufd {
  * Undo by passing pt_id == IOMMUFD_INVALID_ID
  *
  * @argsz:	user filled size of this data.
- * @flags:	must be 0.
+ * @flags:	only supports VFIO_DEVICE_ATTACH_FLAGS_REPLACE_PT for an
+ *		atomic hwpt replacement.
  * @pt_id:	Input the target id, can be an ioas or a hwpt allocated
  *		via iommufd subsystem, and output the attached pt_id. It
  *		be the ioas, hwpt itself or an hwpt created by kernel
@@ -248,6 +249,7 @@ struct vfio_device_bind_iommufd {
  */
 struct vfio_device_attach_iommufd_pt {
 	__u32	argsz;
+#define VFIO_DEVICE_ATTACH_FLAGS_REPLACE_PT	(1 << 0)
 	__u32	flags;
 	__u32	pt_id;
 };
