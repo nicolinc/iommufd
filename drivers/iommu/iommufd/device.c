@@ -387,6 +387,9 @@ out_abort:
  * @idev: device to attach
  * @pt_id: Input a IOMMUFD_OBJ_IOAS, or IOMMUFD_OBJ_HW_PAGETABLE
  *         Output the IOMMUFD_OBJ_HW_PAGETABLE ID
+ * @flags: supported flags are the followings
+ *         IOMMUFD_ATTACH_FLAGS_REPLACE_PT: atomic replacement from the attached
+ *                                          hwpt to another hwpt (a given pt_id)
  *
  * This connects the device to an iommu_domain, either automatically or manually
  * selected. Once this completes the device could do DMA.
@@ -396,8 +399,13 @@ out_abort:
  */
 int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id, u32 flags)
 {
+	bool replace = flags & IOMMUFD_ATTACH_FLAGS_REPLACE_PT;
 	struct iommufd_object *pt_obj;
 	int rc;
+
+	/* Do not go for replace if the device is not attached to anything */
+	if (!idev->hwpt && replace)
+		replace = false;
 
 	pt_obj = iommufd_get_object(idev->ictx, *pt_id, IOMMUFD_OBJ_ANY);
 	if (IS_ERR(pt_obj))

@@ -112,7 +112,8 @@ int vfio_iommufd_physical_attach_ioas(struct vfio_device *vdev, u32 *pt_id,
 		return 0;
 	}
 
-	if (vdev->iommufd_attached)
+	if (vdev->iommufd_attached &&
+	    !(flags & IOMMUFD_ATTACH_FLAGS_REPLACE_PT))
 		return -EBUSY;
 
 	rc = iommufd_device_attach(vdev->iommufd_device, pt_id, flags);
@@ -173,7 +174,9 @@ EXPORT_SYMBOL_GPL(vfio_iommufd_emulated_unbind);
 int vfio_iommufd_emulated_attach_ioas(struct vfio_device *vdev, u32 *pt_id,
 				      u32 flags)
 {
+	bool replace = flags & IOMMUFD_ATTACH_FLAGS_REPLACE_PT;
 	struct iommufd_access *user;
+	int rc;
 
 	lockdep_assert_held(&vdev->dev_set->lock);
 
@@ -186,13 +189,23 @@ int vfio_iommufd_emulated_attach_ioas(struct vfio_device *vdev, u32 *pt_id,
 		return 0;
 	}
 
-	if (vdev->iommufd_access)
+	if (vdev->iommufd_access && !replace)
 		return -EBUSY;
 
 	user = iommufd_access_create(vdev->iommufd_ictx, *pt_id, &vfio_user_ops,
 				     vdev);
 	if (IS_ERR(user))
 		return PTR_ERR(user);
+	if (replace) {
+		/*  Copy all IOVA mappings from the old access to the new one */
+		rc = iommufd_access_copy_ioas(vdev->iommufd_access, user,
+					      0, ULONG_MAX);
+		if (rc) {
+			iommufd_access_destroy(user);
+			return rc;
+		}
+		__vfio_iommufd_access_destroy(vdev);
+	}
 	vdev->iommufd_access = user;
 	return 0;
 }
