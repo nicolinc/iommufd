@@ -271,6 +271,15 @@ iommufd_get_hwpt(struct iommufd_ucmd *ucmd, u32 id)
 			    struct iommufd_hw_pagetable, obj);
 }
 
+static inline bool iommufd_hwpts_are_related(struct iommufd_hw_pagetable *hwpt1,
+					     struct iommufd_hw_pagetable *hwpt2)
+{
+	if (!hwpt1 || !hwpt2)
+		return false;
+	return (hwpt1->parent == hwpt2->parent) ||
+	       (hwpt1->parent == hwpt2) || (hwpt1 == hwpt2->parent);
+}
+
 int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd);
 int iommufd_hwpt_invalidate(struct iommufd_ucmd *ucmd);
 
