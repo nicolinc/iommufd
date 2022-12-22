@@ -9,6 +9,7 @@
 #include <linux/types.h>
 #include <linux/errno.h>
 #include <linux/err.h>
+#include <uapi/linux/vfio.h>
 
 struct device;
 struct iommufd_device;
@@ -20,6 +21,8 @@ struct file;
 struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 					   struct device *dev, u32 *id);
 void iommufd_device_unbind(struct iommufd_device *idev);
+
+#define IOMMUFD_ATTACH_FLAGS_REPLACE_PT  VFIO_DEVICE_ATTACH_FLAGS_REPLACE_PT
 
 int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id, u32 flags);
 void iommufd_device_detach(struct iommufd_device *idev);
