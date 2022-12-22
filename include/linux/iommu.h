@@ -231,6 +231,9 @@ struct iommu_iotlb_gather {
  * @hw_info: IOMMU hardware capabilities
  * @domain_alloc: allocate iommu domain
  * @domain_alloc_user: allocate user iommu domain
+ * @domain_replace: replace an attached iommu domain with another one. Callers
+ *                  of this op expect an atomic operation so that a DMA should
+ *                  not be discarded during the transition.
  * @probe_device: Add device to iommu driver handling
  * @release_device: Remove device from iommu driver handling
  * @probe_finalize: Do final setup work after the device is added to an IOMMU
@@ -264,6 +267,7 @@ struct iommu_ops {
 						  struct iommu_domain *parent,
 						  const void *user_data,
 						  size_t data_len);
+	int (*domain_replace)(struct device *dev, struct iommu_domain *domain);
 
 	struct iommu_device *(*probe_device)(struct device *dev);
 	void (*release_device)(struct device *dev);
@@ -480,6 +484,7 @@ struct iommu_domain *iommu_domain_alloc_user(struct device *dev,
 					     struct iommu_domain *parent,
 					     const void *user_data,
 					     size_t data_len);
+int iommu_domain_replace(struct device *dev, struct iommu_domain *domain);
 void iommu_iotlb_sync_user(struct iommu_domain *domain, void *user_data,
 			   size_t data_len);
 extern struct iommu_group *iommu_group_get_by_id(int id);

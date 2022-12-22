@@ -95,7 +95,8 @@ static int __iommu_attach_device(struct iommu_domain *domain,
 static int __iommu_attach_group(struct iommu_domain *domain,
 				struct iommu_group *group);
 static int __iommu_group_set_domain(struct iommu_group *group,
-				    struct iommu_domain *new_domain);
+				    struct iommu_domain *new_domain,
+				    bool atomic);
 static int iommu_create_device_direct_mappings(struct iommu_group *group,
 					       struct device *dev);
 static struct iommu_group *iommu_group_get_for_dev(struct device *dev);
@@ -1974,7 +1975,7 @@ static void __iommu_group_set_core_domain(struct iommu_group *group)
 	else
 		new_domain = group->default_domain;
 
-	ret = __iommu_group_set_domain(group, new_domain);
+	ret = __iommu_group_set_domain(group, new_domain, false);
 	WARN(ret, "iommu driver failed to attach the default/blocking domain");
 }
 
@@ -2163,8 +2164,27 @@ static int iommu_group_do_detach_device(struct device *dev, void *data)
 	return 0;
 }
 
+static int iommu_group_do_domain_replace(struct device *dev, void *data)
+{
+	struct iommu_domain *domain = data;
+	const struct iommu_ops *ops;
+
+	if (dev->iommu && dev->iommu->iommu_dev)
+		ops = dev_iommu_ops(dev);
+	else if (dev->bus && dev->bus->iommu_ops)
+		ops = dev->bus->iommu_ops;
+	else
+		return -ENODEV;
+
+	if (!ops->domain_replace)
+		return -EOPNOTSUPP;
+
+	return ops->domain_replace(dev, domain);
+}
+
 static int __iommu_group_set_domain(struct iommu_group *group,
-				    struct iommu_domain *new_domain)
+				    struct iommu_domain *new_domain,
+				    bool atomic)
 {
 	int ret;
 
@@ -2186,16 +2206,25 @@ static int __iommu_group_set_domain(struct iommu_group *group,
 	}
 
 	/*
-	 * Changing the domain is done by calling attach_dev() on the new
-	 * domain. This switch does not have to be atomic and DMA can be
-	 * discarded during the transition. DMA must only be able to access
-	 * either new_domain or group->domain, never something else.
+	 * If changing the domain needs to be atomic, meaning that there would
+	 * be no breakage in DMA transition, call domain_replace() in iommu_ops.
 	 *
-	 * Note that this is called in error unwind paths, attaching to a
+	 * Otherwise, it is done by calling attach_dev() on the new domain. This
+	 * switch does not have to be atomic and DMA can be discarded during the
+	 * transition.
+	 *
+	 * In any case, DMA must only be able to access either the new_domain or
+	 * group->domain, never something else.
+	 *
+	 * Note that this is called in error unwind paths, changing to a
 	 * domain that has already been attached cannot fail.
 	 */
-	ret = __iommu_group_for_each_dev(group, new_domain,
-					 iommu_group_do_attach_device);
+	if (atomic)
+		ret = __iommu_group_for_each_dev(group, new_domain,
+						 iommu_group_do_domain_replace);
+	else
+		ret = __iommu_group_for_each_dev(group, new_domain,
+						 iommu_group_do_attach_device);
 	if (ret)
 		return ret;
 	group->domain = new_domain;
@@ -3135,7 +3164,7 @@ static int __iommu_take_dma_ownership(struct iommu_group *group, void *owner)
 	ret = __iommu_group_alloc_blocking_domain(group);
 	if (ret)
 		return ret;
-	ret = __iommu_group_set_domain(group, group->blocking_domain);
+	ret = __iommu_group_set_domain(group, group->blocking_domain, false);
 	if (ret)
 		return ret;
 
@@ -3222,7 +3251,7 @@ static void __iommu_release_dma_ownership(struct iommu_group *group)
 
 	group->owner_cnt = 0;
 	group->owner = NULL;
-	ret = __iommu_group_set_domain(group, group->default_domain);
+	ret = __iommu_group_set_domain(group, group->default_domain, false);
 	WARN(ret, "iommu driver failed to attach the default domain");
 }
 
@@ -3495,6 +3524,32 @@ struct iommu_domain *iommu_domain_alloc_user(struct device *dev,
 	return ops->domain_alloc_user(dev, parent, user_data, data_len);
 }
 EXPORT_SYMBOL_NS_GPL(iommu_domain_alloc_user, IOMMUFD_INTERNAL);
+
+/**
+ * iommu_domain_replace - replace an attached domain with another one
+ * @dev - the device that is attached to an iommu domain
+ * @domain - the new iommu domain
+ *
+ * This is expected to be an atomic domain detaching and attaching operation.
+ * The purpose of this op is to make sure DMA transition should not be broken
+ * when changing the iommu domain of a device's. A driver that doesn't support
+ * blocking_domain should implement domain_replace iommu op.
+ */
+int iommu_domain_replace(struct device *dev, struct iommu_domain *domain)
+{
+	struct iommu_group *group;
+	int ret;
+
+	group = iommu_group_get(dev);
+	if (!group)
+		return -ENODEV;
+
+	ret = __iommu_group_set_domain(group, domain, true);
+
+	iommu_group_put(group);
+	return ret;
+}
+EXPORT_SYMBOL_NS_GPL(iommu_domain_replace, IOMMUFD_INTERNAL);
 
 /**
  * iommu_iotlb_sync_user - flush hardware caches for a user domain
