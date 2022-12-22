@@ -2190,6 +2190,22 @@ int iommu_attach_group(struct iommu_domain *domain, struct iommu_group *group)
 }
 EXPORT_SYMBOL_GPL(iommu_attach_group);
 
+int iommu_replace_group(struct iommu_domain *domain, struct iommu_group *group)
+{
+	int ret;
+
+	mutex_lock(&group->mutex);
+	/* FIXME we probably need a new op in struct iommu_ops */
+	ret = __iommu_group_for_each_dev(group, domain,
+					 iommu_group_do_attach_device);
+	if (ret == 0)
+		group->domain = domain;
+	mutex_unlock(&group->mutex);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(iommu_replace_group);
+
 static int iommu_group_do_detach_device(struct device *dev, void *data)
 {
 	struct iommu_domain *domain = data;
