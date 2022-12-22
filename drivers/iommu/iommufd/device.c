@@ -238,12 +238,24 @@ static bool iommufd_hw_pagetable_has_group(struct iommufd_hw_pagetable *hwpt,
 	return false;
 }
 
+/* Add all kernel-managed reserved mappings onto IOAS */
 static int iommufd_device_attach_ioas(struct iommufd_device *idev,
 				      struct iommufd_hw_pagetable *hwpt)
 {
 	phys_addr_t sw_msi_start = 0;
 	struct io_pagetable *iopt;
 	int rc;
+
+	/*
+	 * If hwpt->parent exists, all the kernel-managed mappings should be
+	 * already added to the IOAS when the parent hwpt got attached. And it
+	 * is a bug if a device attaches to a child hwpt without attaching its
+	 * parent hwpt ever. Unfortunately, we can't simply check idev->hwpt to
+	 * raise a WARN_ON, since there can be a use case where the idev->hwpt
+	 * is another child hwpt.
+	 */
+	if (hwpt->parent)
+		return 0;
 
 	iopt = &hwpt->ioas->iopt;
 
@@ -270,9 +282,17 @@ out_iova:
 	return rc;
 }
 
+/* Remove all kernel-managed reserved mappings onto IOAS */
 static void iommufd_device_detach_ioas(struct iommufd_device *idev,
 				       struct iommufd_hw_pagetable *hwpt)
 {
+	/*
+	 * We do not remove all the kernel-managed mappings from IOAS when
+	 * detaching from a child hwpt.
+	 */
+	if (hwpt->parent)
+		return;
+
 	if (!iommufd_hw_pagetable_has_group(hwpt, idev->group)) {
 		if (list_empty(&hwpt->devices)) {
 			iopt_table_remove_domain(&hwpt->ioas->iopt,
