@@ -9,6 +9,8 @@
 #include "io_pagetable.h"
 #include "iommufd_private.h"
 
+MODULE_IMPORT_NS(IOMMUFD_INTERNAL);
+
 static bool allow_unsafe_interrupts;
 module_param(allow_unsafe_interrupts, bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(
@@ -187,6 +189,7 @@ static int iommufd_device_setup_msi(struct iommufd_device *idev,
 static int iommufd_device_do_attach(struct iommufd_device *idev,
 				    struct iommufd_hw_pagetable *hwpt)
 {
+	struct iommufd_hw_pagetable *cur_hwpt = idev->hwpt;
 	phys_addr_t sw_msi_start = PHYS_ADDR_MAX;
 	int rc;
 
@@ -218,7 +221,7 @@ static int iommufd_device_do_attach(struct iommufd_device *idev,
 	if (rc)
 		goto out_iova;
 
-	rc = iommu_attach_device(hwpt->domain, idev->dev);
+	rc = iommu_device_replace_domain(idev->dev, hwpt->domain);
 	if (rc)
 		goto out_iova;
 
@@ -229,13 +232,22 @@ static int iommufd_device_do_attach(struct iommufd_device *idev,
 		list_add_tail(&hwpt->hwpt_item, &hwpt->ioas->hwpt_list);
 	}
 
+	if (cur_hwpt && hwpt) {
+		/* Replace the cur_hwpt */
+		refcount_dec(&cur_hwpt->obj.users);
+		refcount_dec(&cur_hwpt->device_users);
+		refcount_dec(&idev->obj.users);
+	}
 	idev->hwpt = hwpt;
 	refcount_inc(&hwpt->obj.users);
 	refcount_inc(&hwpt->device_users);
 	return 0;
 
 out_detach:
-	iommu_detach_group(hwpt->domain, idev->group);
+	if (cur_hwpt)
+		iommu_device_replace_domain(idev->dev, cur_hwpt->domain);
+	else
+		iommu_detach_group(hwpt->domain, idev->group);
 out_iova:
 	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->dev);
 	return rc;
