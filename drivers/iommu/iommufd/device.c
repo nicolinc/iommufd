@@ -361,10 +361,14 @@ static void iommufd_device_detach_ioas(struct iommufd_device *idev,
 static int iommufd_device_do_attach(struct iommufd_device *idev,
 				    struct iommufd_hw_pagetable *hwpt)
 {
+	struct iommufd_hw_pagetable *cur_hwpt = idev->hwpt;
 	int rc;
 
 	lockdep_assert_held(&hwpt->ioas->mutex);
 
+	/* Related hwpts share the same devices_lock, so grab once */
+	if (cur_hwpt && !iommufd_hwpts_are_related(cur_hwpt, hwpt))
+		mutex_lock(cur_hwpt->devices_lock);
 	mutex_lock(hwpt->devices_lock);
 
 	/*
@@ -390,26 +394,40 @@ static int iommufd_device_do_attach(struct iommufd_device *idev,
 	 * the group once for the first device that is in the group.
 	 */
 	if (!iommufd_hw_pagetable_has_group(hwpt, idev->group)) {
-		rc = iommu_attach_group(hwpt->domain, idev->group);
+		rc = iommu_group_replace_domain(idev->group, hwpt->domain);
 		if (rc)
 			goto out_unlock;
 	}
 
-	rc = iommufd_device_attach_ioas(idev, hwpt);
-	if (rc)
-		goto out_detach;
+	/* Do not attach ioas again if hwpts are related */
+	if (!iommufd_hwpts_are_related(cur_hwpt, hwpt)) {
+		rc = iommufd_device_attach_ioas(idev, hwpt);
+		if (rc)
+			goto out_detach;
+	}
 
+	if (cur_hwpt && hwpt) {
+		/* Replace the cur_hwpt */
+		list_del(&idev->devices_item);
+		refcount_dec(&cur_hwpt->obj.users);
+		refcount_dec(cur_hwpt->devices_users);
+		refcount_dec(&idev->obj.users);
+	}
 	idev->hwpt = hwpt;
 	refcount_inc(&hwpt->obj.users);
 	refcount_inc(hwpt->devices_users);
 	list_add(&idev->devices_item, &hwpt->devices);
-	mutex_unlock(hwpt->devices_lock);
-	return 0;
+	goto out_unlock;
 
 out_detach:
-	iommu_detach_group(hwpt->domain, idev->group);
+	if (cur_hwpt)
+		iommu_group_replace_domain(idev->group, cur_hwpt->domain);
+	else
+		iommu_detach_group(hwpt->domain, idev->group);
 out_unlock:
 	mutex_unlock(hwpt->devices_lock);
+	if (cur_hwpt && !iommufd_hwpts_are_related(cur_hwpt, hwpt))
+		mutex_unlock(cur_hwpt->devices_lock);
 	return rc;
 }
 
