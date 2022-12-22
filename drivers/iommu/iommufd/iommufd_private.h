@@ -300,9 +300,6 @@ void iopt_remove_access(struct io_pagetable *iopt,
 			struct iommufd_access *access);
 void iommufd_access_destroy_object(struct iommufd_object *obj);
 
-struct iommufd_device *
-iommufd_device_get_by_id(struct iommufd_ctx *ictx, u32 dev_id);
-
 #ifdef CONFIG_IOMMUFD_TEST
 struct iommufd_hw_pagetable *
 iommufd_device_selftest_attach(struct iommufd_ctx *ictx,

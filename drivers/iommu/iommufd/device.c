@@ -17,18 +17,6 @@ MODULE_PARM_DESC(
 	"Allow IOMMUFD to bind to devices even if the platform cannot isolate "
 	"the MSI interrupt window. Enabling this is a security weakness.");
 
-struct iommufd_device *
-iommufd_device_get_by_id(struct iommufd_ctx *ictx, u32 dev_id)
-{
-	struct iommufd_object *dev_obj;
-
-	dev_obj = iommufd_get_object(ictx, dev_id, IOMMUFD_OBJ_DEVICE);
-	if (IS_ERR(dev_obj))
-		return ERR_PTR(-EINVAL);
-
-	return container_of(dev_obj, struct iommufd_device, obj);
-}
-
 void iommufd_device_destroy(struct iommufd_object *obj)
 {
 	struct iommufd_device *idev =
