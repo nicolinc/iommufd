@@ -509,6 +509,8 @@ extern int iommu_attach_group(struct iommu_domain *domain,
 			      struct iommu_group *group);
 extern void iommu_detach_group(struct iommu_domain *domain,
 			       struct iommu_group *group);
+extern int iommu_group_replace_domain(struct iommu_group *group,
+				      struct iommu_domain *new_domain);
 extern struct iommu_group *iommu_group_alloc(void);
 extern void *iommu_group_get_iommudata(struct iommu_group *group);
 extern void iommu_group_set_iommudata(struct iommu_group *group,
@@ -877,6 +879,12 @@ static inline bool iommu_default_passthrough(void)
 
 static inline int iommu_attach_group(struct iommu_domain *domain,
 				     struct iommu_group *group)
+{
+	return -ENODEV;
+}
+
+static inline int iommu_group_replace_domain(struct iommu_group *group,
+					     struct iommu_domain *new_domain)
 {
 	return -ENODEV;
 }
