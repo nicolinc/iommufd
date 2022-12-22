@@ -111,9 +111,6 @@ int vfio_iommufd_physical_attach_ioas(struct vfio_device *vdev, u32 *pt_id)
 		return 0;
 	}
 
-	if (vdev->iommufd_attached)
-		return -EBUSY;
-
 	rc = iommufd_device_attach(vdev->iommufd_device, pt_id);
 	if (rc)
 		return rc;
