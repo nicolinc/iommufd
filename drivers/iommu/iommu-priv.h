@@ -19,4 +19,10 @@ static inline const struct iommu_ops *dev_iommu_ops(struct device *dev)
 	 */
 	return dev->iommu->iommu_dev->ops;
 }
+
+extern int iommu_device_replace_domain(struct device *dev,
+				       struct iommu_domain *new_domain);
+extern int iommu_group_replace_domain(struct iommu_group *group,
+				      struct iommu_domain *new_domain);
+
 #endif /* __LINUX_IOMMU_PRIV_H */
