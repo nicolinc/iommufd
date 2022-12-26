@@ -3452,3 +3452,42 @@ int iommu_get_hw_info(struct device *dev, enum iommu_device_data_type type,
 	return ops->hw_info(dev, data, length);
 }
 EXPORT_SYMBOL_NS_GPL(iommu_get_hw_info, IOMMUFD_INTERNAL);
+
+/**
+ * iommu_domain_alloc_user - allocate a user domain for a device
+ * @dev - the device for which the domain is allocated
+ * @type - the type of IOMMU hardware page table
+ * @parent - an existing domain which the new domain is nested on,
+ *           NULL if not
+ * @user_data - user specified domain configurations
+ * @data_len - the length of @user_data, the IOMMU driver should check
+ *             the sanity of the user data and length
+ *
+ * Return the domain on success, otherwise ERR_PTR. The driver callback
+ * should set the domain type and ops according to the @user_data.
+ */
+struct iommu_domain *iommu_domain_alloc_user(struct device *dev,
+					     enum iommu_device_data_type type,
+					     struct iommu_domain *parent,
+					     const void *user_data, size_t data_len)
+{
+	const struct iommu_ops *ops;
+
+	if (!dev->iommu || !dev->iommu->iommu_dev)
+		return NULL;
+
+	ops = dev_iommu_ops(dev);
+
+	if (!ops->domain_alloc_user)
+		return NULL;
+
+	/* IOMMU_DEVICE_DATA_NONE and user_data are exclusive. */
+	if (!((type == IOMMU_DEVICE_DATA_NONE) ^ (user_data != NULL)))
+		return NULL;
+
+	if (type != IOMMU_DEVICE_DATA_NONE && type != ops->driver_type)
+		return NULL;
+
+	return ops->domain_alloc_user(dev, parent, user_data, data_len);
+}
+EXPORT_SYMBOL_NS_GPL(iommu_domain_alloc_user, IOMMUFD_INTERNAL);
