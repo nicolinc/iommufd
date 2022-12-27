@@ -416,4 +416,66 @@ struct iommu_hwpt_intel_vtd {
 	__u32 addr_width;
 	__u32 __reserved;
 };
+
+/* Intel VT-d specific granularity of queued invalidation */
+enum iommu_vtd_qi_granularity {
+	IOMMU_VTD_QI_GRAN_DOMAIN,	/* domain-selective invalidation */
+	IOMMU_VTD_QI_GRAN_PASID,	/* PASID-selective invalidation */
+	IOMMU_VTD_QI_GRAN_ADDR,		/* page-selective invalidation */
+	IOMMU_VTD_QI_GRAN_NR,		/* number of invalidation granularities */
+};
+
+/**
+ * struct iommu_hwpt_invalidate_intel_vtd - Intel VT-d cache invalidation info
+ * @version: queued invalidation info version
+ * @cache: bitfield that allows to select which caches to invalidate
+ * @granularity: defines the lowest granularity used for the invalidation:
+ *               domain > PASID > addr
+ * @flags: indicates the granularity of invalidation
+ *         - If the PASID bit is set, the @pasid field is populated and the
+ *           invalidation relates to cache entries tagged with this PASID and
+ *           matching the address range. If unset, global invalidation applies.
+ *         - The LEAF flag indicates whether only the leaf PTE caching needs to
+ *           be invalidated and other paging structure caches can be preserved.
+ * @pasid: process address space ID
+ * @addr: first stage/level input address
+ * @granule_size: page/block size of the mapping in bytes
+ * @nb_granules: number of contiguous granules to be invalidated
+ *
+ * Notes:
+ *  - Valid combinations of cache/granularity are
+ *    +--------------+---------------+---------------+---------------+
+ *    | type /       |   DEV_IOTLB   |     IOTLB     |     PASID     |
+ *    | granularity  |               |               |     cache     |
+ *    +==============+===============+===============+===============+
+ *    | DOMAIN       |      N/A      |       Y       |       Y       |
+ *    +--------------+---------------+---------------+---------------+
+ *    | PASID        |       Y       |       Y       |       Y       |
+ *    +--------------+---------------+---------------+---------------+
+ *    | ADDR         |       Y       |       Y       |      N/A      |
+ *    +--------------+---------------+---------------+---------------+
+ *  - Multiple caches can be selected, if they all support the used @granularity
+ *  - IOMMU_VTD_QI_GRAN_DOMAIN only uses @version, @cache and @granularity
+ *  - IOMMU_VTD_QI_GRAN_PASID uses @flags and @pasid additionally
+ *  - IOMMU_VTD_QI_GRAN_ADDR uses all the info
+ */
+struct iommu_hwpt_invalidate_intel_vtd {
+#define IOMMU_VTD_QI_INFO_VERSION_1 1
+	__u32 version;
+/* IOMMU paging structure cache type */
+#define IOMMU_VTD_QI_TYPE_IOTLB		(1 << 0) /* IOMMU IOTLB */
+#define IOMMU_VTD_QI_TYPE_DEV_IOTLB	(1 << 1) /* Device IOTLB */
+#define IOMMU_VTD_QI_TYPE_PASID		(1 << 2) /* PASID cache */
+#define IOMMU_VTD_QI_TYPE_NR		(3)
+	__u8 cache;
+	__u8 granularity;
+	__u8 padding[6];
+#define IOMMU_VTD_QI_FLAGS_PASID	(1 << 0)
+#define IOMMU_VTD_QI_FLAGS_LEAF		(1 << 1)
+	__u32 flags;
+	__u64 pasid;
+	__u64 addr;
+	__u64 granule_size;
+	__u64 nb_granules;
+};
 #endif
