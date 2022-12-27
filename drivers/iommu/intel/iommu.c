@@ -4077,7 +4077,7 @@ intel_iommu_domain_alloc_user(struct device *dev, u32 flags,
 			      struct iommu_domain *parent,
 			      const struct iommu_user_data *user_data)
 {
-	struct iommu_domain *domain;
+	bool request_nest_parent = flags & IOMMU_HWPT_ALLOC_NEST_PARENT;
 	struct intel_iommu *iommu;
 	bool dirty_tracking;
 
@@ -4089,31 +4089,45 @@ intel_iommu_domain_alloc_user(struct device *dev, u32 flags,
 	if (!iommu)
 		return ERR_PTR(-ENODEV);
 
-	if ((flags & IOMMU_HWPT_ALLOC_NEST_PARENT) && !ecap_nest(iommu->ecap))
-		return ERR_PTR(-EOPNOTSUPP);
+	if (!user_data) { /* Must be PAGING domain */
+		struct iommu_domain *domain;
 
-	dirty_tracking = (flags & IOMMU_HWPT_ALLOC_DIRTY_TRACKING);
-	if (dirty_tracking && !slads_supported(iommu))
-		return ERR_PTR(-EOPNOTSUPP);
-
-	/*
-	 * domain_alloc_user op needs to fully initialize a domain
-	 * before return, so uses iommu_domain_alloc() here for
-	 * simple.
-	 */
-	domain = iommu_domain_alloc(dev->bus);
-	if (!domain)
-		domain = ERR_PTR(-ENOMEM);
-
-	if (!IS_ERR(domain) && dirty_tracking) {
-		if (to_dmar_domain(domain)->use_first_level) {
-			iommu_domain_free(domain);
+		if (request_nest_parent && !ecap_nest(iommu->ecap))
 			return ERR_PTR(-EOPNOTSUPP);
+		if (parent)
+			return ERR_PTR(-EINVAL);
+		dirty_tracking = (flags & IOMMU_HWPT_ALLOC_DIRTY_TRACKING);
+		if (dirty_tracking && !slads_supported(iommu))
+			return ERR_PTR(-EOPNOTSUPP);
+		/*
+		 * domain_alloc_user op needs to fully initialize a domain
+		 * before return, so uses iommu_domain_alloc() here for
+		 * simple.
+		 */
+		domain = iommu_domain_alloc(dev->bus);
+		if (!domain)
+			domain = ERR_PTR(-ENOMEM);
+		if (!IS_ERR(domain) && dirty_tracking) {
+			if (to_dmar_domain(domain)->use_first_level) {
+				iommu_domain_free(domain);
+				return ERR_PTR(-EOPNOTSUPP);
+			}
+			domain->dirty_ops = &intel_dirty_ops;
 		}
-		domain->dirty_ops = &intel_dirty_ops;
+		return domain;
 	}
 
-	return domain;
+	/* Must be nested domain */
+	if (!ecap_nest(iommu->ecap))
+		return ERR_PTR(-EOPNOTSUPP);
+	if (user_data->type != IOMMU_HWPT_DATA_VTD_S1)
+		return ERR_PTR(-EOPNOTSUPP);
+	if (!parent || parent->ops != intel_iommu_ops.default_domain_ops)
+		return ERR_PTR(-EINVAL);
+	if (request_nest_parent)
+		return ERR_PTR(-EINVAL);
+
+	return intel_nested_domain_alloc(parent, user_data);
 }
 
 static void intel_iommu_domain_free(struct iommu_domain *domain)
