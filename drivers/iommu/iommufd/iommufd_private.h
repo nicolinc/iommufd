@@ -230,6 +230,24 @@ int iommufd_option_rlimit_mode(struct iommu_option *cmd,
 			       struct iommufd_ctx *ictx);
 
 int iommufd_vfio_ioas(struct iommufd_ucmd *ucmd);
+
+/*
+ * A iommufd_device object represents the binding relationship between a
+ * consuming driver and the iommufd. These objects are created/destroyed by
+ * external drivers, not by userspace.
+ */
+struct iommufd_device {
+	struct iommufd_object obj;
+	struct iommufd_ctx *ictx;
+	struct iommufd_hw_pagetable *hwpt;
+	/* Head at iommufd_hw_pagetable::devices */
+	struct list_head devices_item;
+	/* always the physical device */
+	struct device *dev;
+	struct iommu_group *group;
+	bool enforce_cache_coherency;
+};
+
 int iommufd_device_get_info(struct iommufd_ucmd *ucmd);
 
 /*
@@ -262,6 +280,9 @@ iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 			   struct device *dev);
 void iommufd_hw_pagetable_destroy(struct iommufd_object *obj);
 
+int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd);
+int iommufd_hwpt_invalidate(struct iommufd_ucmd *ucmd);
+
 void iommufd_device_destroy(struct iommufd_object *obj);
 
 struct iommufd_access {
@@ -278,6 +299,9 @@ int iopt_add_access(struct io_pagetable *iopt, struct iommufd_access *access);
 void iopt_remove_access(struct io_pagetable *iopt,
 			struct iommufd_access *access);
 void iommufd_access_destroy_object(struct iommufd_object *obj);
+
+struct iommufd_device *
+iommufd_device_get_by_id(struct iommufd_ctx *ictx, u32 dev_id);
 
 #ifdef CONFIG_IOMMUFD_TEST
 struct iommufd_hw_pagetable *

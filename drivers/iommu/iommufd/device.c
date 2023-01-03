@@ -17,22 +17,17 @@ MODULE_PARM_DESC(
 	"Allow IOMMUFD to bind to devices even if the platform cannot isolate "
 	"the MSI interrupt window. Enabling this is a security weakness.");
 
-/*
- * A iommufd_device object represents the binding relationship between a
- * consuming driver and the iommufd. These objects are created/destroyed by
- * external drivers, not by userspace.
- */
-struct iommufd_device {
-	struct iommufd_object obj;
-	struct iommufd_ctx *ictx;
-	struct iommufd_hw_pagetable *hwpt;
-	/* Head at iommufd_hw_pagetable::devices */
-	struct list_head devices_item;
-	/* always the physical device */
-	struct device *dev;
-	struct iommu_group *group;
-	bool enforce_cache_coherency;
-};
+struct iommufd_device *
+iommufd_device_get_by_id(struct iommufd_ctx *ictx, u32 dev_id)
+{
+	struct iommufd_object *dev_obj;
+
+	dev_obj = iommufd_get_object(ictx, dev_id, IOMMUFD_OBJ_DEVICE);
+	if (IS_ERR(dev_obj))
+		return ERR_PTR(-EINVAL);
+
+	return container_of(dev_obj, struct iommufd_device, obj);
+}
 
 void iommufd_device_destroy(struct iommufd_object *obj)
 {
