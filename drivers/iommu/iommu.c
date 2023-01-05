@@ -3480,17 +3480,17 @@ struct iommu_domain *iommu_domain_alloc_user(struct device *dev,
 	else if (dev->bus && dev->bus->iommu_ops)
 		ops = dev->bus->iommu_ops;
 	else
-		return ERR_PTR(-ENODEV);
+		return NULL;
 
 	if (!ops->domain_alloc_user)
-		return ERR_PTR(-EOPNOTSUPP);
+		return NULL;
 
 	/* IOMMU_DEVICE_DATA_NONE and user_data are exclusive. */
 	if (!((type == IOMMU_DEVICE_DATA_NONE) ^ (user_data != NULL)))
-		return ERR_PTR(-EINVAL);
+		return NULL;
 
 	if (type != IOMMU_DEVICE_DATA_NONE && type != ops->driver_type)
-		return ERR_PTR(-ENODEV);
+		return NULL;
 
 	return ops->domain_alloc_user(dev, parent, user_data, data_len);
 }
