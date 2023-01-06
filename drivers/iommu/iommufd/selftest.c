@@ -140,6 +140,8 @@ static struct iommu_domain *mock_domain_alloc(unsigned int iommu_domain_type)
 	return &mock->domain;
 }
 
+static struct iommu_domain_ops domain_nested_ops;
+
 static struct iommu_domain *mock_domain_alloc_user(struct device *dev,
 						   struct iommu_domain *parent,
 						   const void *user_data,
@@ -163,7 +165,7 @@ static struct iommu_domain *mock_domain_alloc_user(struct device *dev,
 	mock->parent = mock_parent;
 	mock->iotlb = alloc->test_config;
 	mock->domain.pgsize_bitmap = MOCK_IO_PAGE_SIZE;
-	mock->domain.ops = mock_ops.default_domain_ops;
+	mock->domain.ops = &domain_nested_ops;
 	mock->domain.type = IOMMU_DOMAIN_NESTED;
 	return &mock->domain;
 }
@@ -310,8 +312,12 @@ static const struct iommu_ops mock_ops = {
 			.map_pages = mock_domain_map_pages,
 			.unmap_pages = mock_domain_unmap_pages,
 			.iova_to_phys = mock_domain_iova_to_phys,
-			.iotlb_sync_user = mock_domain_iotlb_sync_user,
 		},
+};
+
+static struct iommu_domain_ops domain_nested_ops = {
+	.free = mock_domain_free,
+	.iotlb_sync_user = mock_domain_iotlb_sync_user,
 };
 
 static inline struct iommufd_hw_pagetable *
@@ -326,7 +332,10 @@ get_md_pagetable(struct iommufd_ucmd *ucmd, u32 mockpt_id,
 	if (IS_ERR(obj))
 		return ERR_CAST(obj);
 	hwpt = container_of(obj, struct iommufd_hw_pagetable, obj);
-	if (hwpt->domain->ops != mock_ops.default_domain_ops) {
+	if ((hwpt->domain->type == IOMMU_DOMAIN_UNMANAGED &&
+	     hwpt->domain->ops != mock_ops.default_domain_ops) ||
+	    (hwpt->domain->type == IOMMU_DOMAIN_NESTED &&
+	     hwpt->domain->ops != &domain_nested_ops)) {
 		iommufd_put_object(&hwpt->obj);
 		return ERR_PTR(-EINVAL);
 	}
