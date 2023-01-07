@@ -3081,11 +3081,17 @@ static void arm_smmu_remove_dev_pasid(struct device *dev, ioasid_t pasid)
 	arm_smmu_sva_remove_dev_pasid(domain, dev, pasid);
 }
 
+static int arm_smmu_domain_replace(struct device *dev, struct iommu_domain *domain)
+{
+	return arm_smmu_attach_dev(domain, dev);
+}
+
 static struct iommu_ops arm_smmu_ops = {
 	.capable		= arm_smmu_capable,
 	.hw_info		= arm_smmu_hw_info,
 	.domain_alloc		= arm_smmu_domain_alloc,
 	.domain_alloc_user	= arm_smmu_domain_alloc_user,
+	.domain_replace		= arm_smmu_domain_replace,
 	.get_msi_domain		= arm_smmu_get_msi_domain,
 	.probe_device		= arm_smmu_probe_device,
 	.release_device		= arm_smmu_release_device,
