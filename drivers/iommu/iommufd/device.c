@@ -793,6 +793,19 @@ err_out:
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_access_rw, IOMMUFD);
 
+int iommufd_access_copy_ioas(struct iommufd_access *src_access,
+			     struct iommufd_access *dst_access,
+			     unsigned long src_iova, unsigned long length)
+{
+	/* Read/write flags will be acquired internally from the src_access */
+	unsigned int flags = IOMMU_IOAS_MAP_FIXED_IOVA;
+	unsigned long dst_iova;
+
+	return iommufd_ioas_do_copy(src_access->ioas, dst_access->ioas,
+				    src_iova, length, flags, &dst_iova);
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_access_copy_ioas, IOMMUFD);
+
 #ifdef CONFIG_IOMMUFD_TEST
 /*
  * Creating a real iommufd_device is too hard, bypass creating a iommufd_device

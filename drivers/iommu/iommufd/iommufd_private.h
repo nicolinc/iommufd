@@ -230,6 +230,10 @@ int iommufd_option_rlimit_mode(struct iommu_option *cmd,
 			       struct iommufd_ctx *ictx);
 
 int iommufd_vfio_ioas(struct iommufd_ucmd *ucmd);
+int iommufd_ioas_do_copy(struct iommufd_ioas *src_ioas,
+			 struct iommufd_ioas *dst_ioas,
+			 unsigned long src_iova, unsigned long length,
+			 unsigned int flags, unsigned long *dst_iova);
 
 /*
  * A HW pagetable is called an iommu_domain inside the kernel. This user object

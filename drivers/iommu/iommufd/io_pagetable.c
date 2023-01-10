@@ -25,6 +25,7 @@ struct iopt_pages_list {
 	struct list_head next;
 	unsigned long start_byte;
 	unsigned long length;
+	int iommu_prot;
 };
 
 struct iopt_area *iopt_area_contig_init(struct iopt_area_contig_iter *iter,
@@ -268,8 +269,17 @@ static int iopt_alloc_area_pages(struct io_pagetable *iopt,
 	 */
 	iova = *dst_iova;
 	list_for_each_entry(elm, pages_list, next) {
+		int prot = iommu_prot;
+
+		/*
+		 * The pages_list can reflect the mappings in an existing iopt
+		 * including the iommu_prot as elm->iommu_prot, which then can
+		 * be overridden by the input iommu_prot.
+		 */
+		if (!prot)
+			prot = elm->iommu_prot;
 		rc = iopt_insert_area(iopt, elm->area, elm->pages, iova,
-				      elm->start_byte, elm->length, iommu_prot);
+				      elm->start_byte, elm->length, prot);
 		if (rc)
 			goto out_unlock;
 		iova += elm->length;
@@ -438,6 +448,7 @@ int iopt_get_pages(struct io_pagetable *iopt, unsigned long iova,
 		elm->start_byte = iopt_area_start_byte(area, iter.cur_iova);
 		elm->pages = area->pages;
 		elm->length = (last - iter.cur_iova) + 1;
+		elm->iommu_prot = area->iommu_prot;
 		kref_get(&elm->pages->kref);
 		list_add_tail(&elm->next, pages_list);
 	}
