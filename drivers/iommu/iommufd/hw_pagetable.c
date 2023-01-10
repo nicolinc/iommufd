@@ -205,6 +205,7 @@ out_put_dev:
 
 union iommufd_invalidate_buffer {
 	struct iommu_hwpt_intel_vtd vtd;
+	struct iommu_hwpt_arm_smmuv3 smmuv3;
 };
 
 int iommufd_hwpt_invalidate(struct iommufd_ucmd *ucmd)
@@ -218,8 +219,7 @@ int iommufd_hwpt_invalidate(struct iommufd_ucmd *ucmd)
 	 * No invalidation needed for type==IOMMU_DEVICE_DATA_NONE;
 	 * data_len should not exceed the size of iommufd_invalidate_buffer.
 	 */
-	if (cmd->data_type == IOMMU_DEVICE_DATA_NONE ||
-	    cmd->data_len > sizeof(union iommufd_invalidate_buffer))
+	if (cmd->data_type == IOMMU_DEVICE_DATA_NONE)
 		return -EOPNOTSUPP;
 
 	hwpt = iommufd_get_hwpt(ucmd, cmd->hwpt_id);
