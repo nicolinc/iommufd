@@ -480,6 +480,7 @@ void iommufd_access_destroy_object(struct iommufd_object *obj)
 
 	iopt_remove_access(&access->ioas->iopt, access);
 	iommufd_ctx_put(access->ictx);
+	mutex_destroy(&access->ioas_lock);
 	refcount_dec(&access->ioas->obj.users);
 }
 
@@ -533,6 +534,7 @@ iommufd_access_create(struct iommufd_ctx *ictx, u32 ioas_id,
 
 	/* The calling driver is a user until iommufd_access_destroy() */
 	refcount_inc(&access->obj.users);
+	mutex_init(&access->ioas_lock);
 	access->ictx = ictx;
 	iommufd_ctx_get(ictx);
 	iommufd_object_finalize(ictx, &access->obj);
@@ -619,6 +621,7 @@ void iommufd_access_unpin_pages(struct iommufd_access *access,
 	    WARN_ON(check_add_overflow(iova, length - 1, &last_iova)))
 		return;
 
+	mutex_lock(&access->ioas_lock);
 	down_read(&iopt->iova_rwsem);
 	iopt_for_each_contig_area(&iter, area, iopt, iova, last_iova)
 		iopt_area_remove_access(
@@ -627,6 +630,7 @@ void iommufd_access_unpin_pages(struct iommufd_access *access,
 				area,
 				min(last_iova, iopt_area_last_iova(area))));
 	up_read(&iopt->iova_rwsem);
+	mutex_unlock(&access->ioas_lock);
 	WARN_ON(!iopt_area_contig_done(&iter));
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_access_unpin_pages, IOMMUFD);
@@ -689,6 +693,7 @@ int iommufd_access_pin_pages(struct iommufd_access *access, unsigned long iova,
 	if (check_add_overflow(iova, length - 1, &last_iova))
 		return -EOVERFLOW;
 
+	mutex_lock(&access->ioas_lock);
 	down_read(&iopt->iova_rwsem);
 	iopt_for_each_contig_area(&iter, area, iopt, iova, last_iova) {
 		unsigned long last = min(last_iova, iopt_area_last_iova(area));
@@ -719,6 +724,7 @@ int iommufd_access_pin_pages(struct iommufd_access *access, unsigned long iova,
 	}
 
 	up_read(&iopt->iova_rwsem);
+	mutex_unlock(&access->ioas_lock);
 	return 0;
 
 err_remove:
@@ -733,6 +739,7 @@ err_remove:
 						  iopt_area_last_iova(area))));
 	}
 	up_read(&iopt->iova_rwsem);
+	mutex_unlock(&access->ioas_lock);
 	return rc;
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_access_pin_pages, IOMMUFD);
@@ -763,6 +770,7 @@ int iommufd_access_rw(struct iommufd_access *access, unsigned long iova,
 	if (check_add_overflow(iova, length - 1, &last_iova))
 		return -EOVERFLOW;
 
+	mutex_lock(&access->ioas_lock);
 	down_read(&iopt->iova_rwsem);
 	iopt_for_each_contig_area(&iter, area, iopt, iova, last_iova) {
 		unsigned long last = min(last_iova, iopt_area_last_iova(area));
@@ -789,9 +797,40 @@ int iommufd_access_rw(struct iommufd_access *access, unsigned long iova,
 		rc = -ENOENT;
 err_out:
 	up_read(&iopt->iova_rwsem);
+	mutex_unlock(&access->ioas_lock);
 	return rc;
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_access_rw, IOMMUFD);
+
+int iommufd_access_replace_ioas(struct iommufd_access *access, u32 ioas_id)
+{
+	struct iommufd_ioas *old_ioas = access->ioas;
+	struct iommufd_ioas *new_ioas;
+	struct iommufd_object *obj;
+	int rc;
+
+	obj = iommufd_get_object(access->ictx, ioas_id, IOMMUFD_OBJ_IOAS);
+	if (IS_ERR(obj))
+		return PTR_ERR(obj);
+	new_ioas = container_of(obj, struct iommufd_ioas, obj);
+
+	iommufd_ref_to_users(obj);
+
+	rc = iopt_add_access(&new_ioas->iopt, access);
+	if (rc) {
+		refcount_dec(&new_ioas->obj.users);
+		return rc;
+	}
+
+	mutex_lock(&access->ioas_lock);
+	access->ops->unmap(access->data, 0, ULONG_MAX);
+	iopt_remove_access(&old_ioas->iopt, access);
+	access->ioas = new_ioas;
+	mutex_unlock(&access->ioas_lock);
+
+	return 0;
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_access_replace_ioas, IOMMUFD);
 
 #ifdef CONFIG_IOMMUFD_TEST
 /*
