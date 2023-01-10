@@ -289,12 +289,14 @@ struct iommufd_device {
 	bool enforce_cache_coherency;
 };
 
-static inline struct iommufd_device *
-iommufd_get_device(struct iommufd_ctx *ictx, u32 dev_id)
+static inline struct device *
+iommufd_obj_dev(struct iommufd_object *obj)
 {
-	return container_of(iommufd_get_object(ictx, dev_id,
-					       IOMMUFD_OBJ_DEVICE),
-			    struct iommufd_device, obj);
+	struct device *dev = NULL;
+
+	if (obj->type == IOMMUFD_OBJ_DEVICE)
+		dev = container_of(obj, struct iommufd_device, obj)->dev;
+	return dev;
 }
 
 void iommufd_device_destroy(struct iommufd_object *obj);
