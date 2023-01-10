@@ -348,6 +348,8 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 				    struct iommu_test_cmd *cmd)
 {
 	static struct bus_type mock_bus = { .iommu_ops = &mock_ops };
+	static struct iommu_device iommu_dev = { .ops = &mock_ops };
+	static struct dev_iommu iommu = { .iommu_dev = &iommu_dev };
 	struct iommufd_hw_pagetable *hwpt;
 	struct selftest_obj *sobj;
 	struct iommufd_ioas *ioas;
@@ -366,6 +368,7 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 	sobj->type = TYPE_IDEV;
 	sobj->idev.ioas = ioas;
 	sobj->idev.mock_dev.bus = &mock_bus;
+	sobj->idev.mock_dev.iommu = &iommu;
 
 	hwpt = iommufd_device_selftest_attach(ucmd->ictx, ioas,
 					      &sobj->idev.mock_dev, NULL);
