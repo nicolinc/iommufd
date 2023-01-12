@@ -295,6 +295,15 @@ struct iommufd_device {
 };
 
 void iommufd_device_destroy(struct iommufd_object *obj);
+int iommufd_device_get_info(struct iommufd_ucmd *ucmd);
+
+static inline struct iommufd_device *
+iommufd_get_device(struct iommufd_ucmd *ucmd, u32 id)
+{
+	return container_of(iommufd_get_object(ucmd->ictx, id,
+					       IOMMUFD_OBJ_DEVICE),
+			    struct iommufd_device, obj);
+}
 
 struct iommufd_access {
 	struct iommufd_object obj;
