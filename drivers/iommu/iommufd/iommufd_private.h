@@ -303,6 +303,7 @@ struct iommufd_device {
 };
 
 void iommufd_device_destroy(struct iommufd_object *obj);
+int iommufd_device_get_info(struct iommufd_ucmd *ucmd);
 #ifdef CONFIG_IOMMUFD_TEST
 struct iommufd_device *iommufd_selftest_get_device(struct iommufd_object *obj);
 void iommufd_selftest_put_device(struct iommufd_device *idev);
