@@ -250,6 +250,14 @@ static int iommufd_zero_fill_user(u64 ptr, int bytes)
 	return 0;
 }
 
+/*
+ * bitmaps of supported page table data types of hardware iommu,
+ * indexed by the members defined in enum iommu_device_data_type.
+ */
+const u64 iommufd_supported_pgtbl_types[] =  {
+	[IOMMU_DEVICE_DATA_INTEL_VTD] = BIT_ULL(IOMMU_PGTBL_DATA_NONE),
+};
+
 int iommufd_device_get_info(struct iommufd_ucmd *ucmd)
 {
 	struct iommu_device_info *cmd = ucmd->cmd;
