@@ -275,6 +275,14 @@ static inline void iommufd_hw_pagetable_put(struct iommufd_ctx *ictx,
 		refcount_dec(&hwpt->obj.users);
 }
 
+static inline struct iommufd_hw_pagetable *
+iommufd_get_hwpt(struct iommufd_ucmd *ucmd, u32 id)
+{
+	return container_of(iommufd_get_object(ucmd->ictx, id,
+					       IOMMUFD_OBJ_HW_PAGETABLE),
+			    struct iommufd_hw_pagetable, obj);
+}
+
 struct iommufd_group {
 	struct kref ref;
 	struct mutex lock;
@@ -303,6 +311,9 @@ struct iommufd_device {
 };
 
 void iommufd_device_destroy(struct iommufd_object *obj);
+
+extern const u64 iommufd_supported_pgtbl_types[];
+
 int iommufd_device_get_info(struct iommufd_ucmd *ucmd);
 #ifdef CONFIG_IOMMUFD_TEST
 struct iommufd_device *iommufd_selftest_get_device(struct iommufd_object *obj);

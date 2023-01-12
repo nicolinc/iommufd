@@ -129,25 +129,81 @@ out_abort:
 	return ERR_PTR(rc);
 }
 
+/*
+ * size of page table type specific data, indexed by
+ * enum iommu_pgtbl_data_type.
+ */
+static const size_t iommufd_hwpt_info_size[] = {
+	[IOMMU_PGTBL_DATA_NONE] = 0,
+};
+
 int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 {
 	struct iommu_hwpt_alloc *cmd = ucmd->cmd;
+	struct iommufd_object *pt_obj = NULL;
+	struct iommufd_device *idev = NULL;
 	struct iommufd_hw_pagetable *hwpt;
-	struct iommufd_device *idev;
 	struct iommufd_ioas *ioas;
+	const struct iommu_ops *ops;
+	u32 driver_type, klen;
+	void *data = NULL;
 	int rc;
 
-	if (cmd->flags)
+	if (cmd->__reserved || cmd->flags)
 		return -EOPNOTSUPP;
 
 	idev = iommufd_get_device(ucmd, cmd->dev_id);
 	if (IS_ERR(idev))
 		return PTR_ERR(idev);
 
-	ioas = iommufd_get_ioas(ucmd, cmd->pt_id);
-	if (IS_ERR(ioas)) {
-		rc = PTR_ERR(idev);
+	ops = dev_iommu_ops(idev->dev);
+	if (!ops) {
+		rc = -EOPNOTSUPP;
 		goto out_put_idev;
+	}
+
+	driver_type = ops->driver_type;
+
+	/* data_type should be a supported type by the hardware */
+	if (!((1 << cmd->data_type) &
+			iommufd_supported_pgtbl_types[driver_type])) {
+		rc = -EINVAL;
+		goto out_put_idev;
+	}
+
+	pt_obj = iommufd_get_object(ucmd->ictx, cmd->pt_id, IOMMUFD_OBJ_ANY);
+	if (IS_ERR(pt_obj)) {
+		rc = -EINVAL;
+		goto out_put_idev;
+	}
+
+	switch (pt_obj->type) {
+	case IOMMUFD_OBJ_IOAS:
+		ioas = container_of(pt_obj, struct iommufd_ioas, obj);
+		break;
+	default:
+		rc = -EINVAL;
+		goto out_put_pt;
+	}
+
+	klen = iommufd_hwpt_info_size[cmd->data_type];
+	if (klen) {
+		if (!cmd->data_len) {
+			rc = -EINVAL;
+			goto out_put_pt;
+		}
+
+		data = kzalloc(klen, GFP_KERNEL);
+		if (!data) {
+			rc = -ENOMEM;
+			goto out_put_pt;
+		}
+
+		rc = copy_struct_from_user(data, klen,
+					   u64_to_user_ptr(cmd->data_uptr),
+					   cmd->data_len);
+		if (rc)
+			goto out_free_data;
 	}
 
 	mutex_lock(&ioas->mutex);
@@ -155,7 +211,7 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	mutex_unlock(&ioas->mutex);
 	if (IS_ERR(hwpt)) {
 		rc = PTR_ERR(idev);
-		goto out_put_ioas;
+		goto out_free_data;
 	}
 
 	cmd->out_hwpt_id = hwpt->obj.id;
@@ -163,12 +219,14 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	if (rc)
 		goto out_hwpt;
 	iommufd_object_finalize(ucmd->ictx, &hwpt->obj);
-	goto out_put_ioas;
+	goto out_free_data;
 
 out_hwpt:
 	iommufd_object_abort_and_destroy(ucmd->ictx, &hwpt->obj);
-out_put_ioas:
-	iommufd_put_object(&ioas->obj);
+out_free_data:
+	kfree(data);
+out_put_pt:
+	iommufd_put_object(pt_obj);
 out_put_idev:
 	iommufd_put_device(idev);
 	return rc;
