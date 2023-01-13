@@ -14,14 +14,17 @@ void iommufd_hw_pagetable_destroy(struct iommufd_object *obj)
 
 	WARN_ON(!list_empty(&hwpt->devices));
 
-	mutex_lock(&hwpt->ioas->mutex);
-	finalize_done = !list_empty(&hwpt->hwpt_item);
-	list_del(&hwpt->hwpt_item);
-	mutex_unlock(&hwpt->ioas->mutex);
+	if (!hwpt->parent) {
+		mutex_lock(&hwpt->ioas->mutex);
+		finalize_done = !list_empty(&hwpt->hwpt_item);
+		list_del(&hwpt->hwpt_item);
+		mutex_unlock(&hwpt->ioas->mutex);
 
-	if (finalize_done)
-		iopt_table_remove_domain(&hwpt->ioas->iopt, hwpt->domain);
-
+		if (finalize_done)
+			iopt_table_remove_domain(&hwpt->ioas->iopt, hwpt->domain);
+	} else {
+		refcount_dec(&hwpt->parent->obj.users);
+	}
 	iommu_domain_free(hwpt->domain);
 	refcount_dec(&hwpt->ioas->obj.users);
 	mutex_destroy(&hwpt->devices_lock);
@@ -61,9 +64,13 @@ __iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx,
 		goto out_abort;
 	}
 
+	hwpt->parent = parent;
 	INIT_LIST_HEAD(&hwpt->devices);
 	INIT_LIST_HEAD(&hwpt->hwpt_item);
 	mutex_init(&hwpt->devices_lock);
+	if (parent)
+		refcount_inc(&parent->obj.users);
+
 	/* Pairs with iommufd_hw_pagetable_destroy() */
 	refcount_inc(&ioas->obj.users);
 	hwpt->ioas = ioas;
