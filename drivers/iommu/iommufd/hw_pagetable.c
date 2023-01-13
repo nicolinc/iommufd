@@ -19,6 +19,8 @@ void iommufd_hw_pagetable_destroy(struct iommufd_object *obj)
 	iommu_domain_free(hwpt->domain);
 	refcount_dec(&hwpt->ioas->obj.users);
 	WARN_ON(!refcount_dec_if_one(&hwpt->device_users));
+	if (hwpt->parent)
+		refcount_dec(&hwpt->parent->obj.users);
 }
 
 static struct iommufd_hw_pagetable *
@@ -55,8 +57,11 @@ __iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx,
 		goto out_abort;
 	}
 
+	hwpt->parent = parent;
 	INIT_LIST_HEAD(&hwpt->hwpt_item);
 	refcount_set(&hwpt->device_users, 1);
+	if (parent)
+		refcount_inc(&parent->obj.users);
 
 	/* Pairs with iommufd_hw_pagetable_destroy() */
 	refcount_inc(&ioas->obj.users);
@@ -176,11 +181,13 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 		goto out_unlock;
 	}
 
-	rc = iopt_table_add_domain(&hwpt->ioas->iopt, hwpt->domain);
-	if (rc)
-		goto out_destroy_hwpt;
-	list_add_tail(&hwpt->hwpt_item, &hwpt->ioas->hwpt_list);
-	hwpt->iopt_attached = true;
+	if (!hwpt->parent) {
+		rc = iopt_table_add_domain(&hwpt->ioas->iopt, hwpt->domain);
+		if (rc)
+			goto out_destroy_hwpt;
+		list_add_tail(&hwpt->hwpt_item, &hwpt->ioas->hwpt_list);
+		hwpt->iopt_attached = true;
+	}
 	mutex_unlock(&ioas->mutex);
 
 	cmd->out_hwpt_id = hwpt->obj.id;
