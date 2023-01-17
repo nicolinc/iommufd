@@ -267,6 +267,7 @@ static void gart_iommu_sync(struct iommu_domain *domain,
 }
 
 static const struct iommu_ops gart_iommu_ops = {
+	.no_iommufd	= true,
 	.domain_alloc	= gart_iommu_domain_alloc,
 	.probe_device	= gart_iommu_probe_device,
 	.device_group	= generic_device_group,

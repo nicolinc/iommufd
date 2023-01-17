@@ -297,6 +297,7 @@ struct iommu_ops {
 	const struct iommu_domain_ops *default_domain_ops;
 	enum iommu_device_data_type driver_type;
 	unsigned long pgsize_bitmap;
+	bool no_iommufd;
 	struct module *owner;
 };
 
