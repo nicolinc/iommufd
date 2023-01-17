@@ -1901,6 +1901,30 @@ bool device_iommu_capable(struct device *dev, enum iommu_cap cap)
 EXPORT_SYMBOL_GPL(device_iommu_capable);
 
 /**
+ * device_iommu_unmanaged_supported() - full support of IOMMU_DOMAIN_UNMANAGED
+ * @dev: device that is behind the iommu
+ *
+ * In general, all IOMMU drivers can allocate IOMMU_DOMAIN_UNMANAGED domains.
+ * However, some of them set the broken_unmanaged_domain, indicating something
+ * is wrong about its support of IOMMU_DOMAIN_UNMANAGED/__IOMMU_DOMAIN_PAGING.
+ * This can happen, when a driver lies about the support to get around with the
+ * IOMMU API, merely for other drivers to use, or when a driver has never been
+ * tested with vfio/iommufd that need a full support of IOMMU_DOMAIN_UNMANAGED.
+ *
+ * Return: true if an IOMMU is present and broken_unmanaged_domain is not set,
+ *         otherwise, false.
+ */
+bool device_iommu_unmanaged_supported(struct device *dev)
+{
+	if (dev->iommu && dev->iommu->iommu_dev &&
+	    !dev_iommu_ops(dev)->broken_unmanaged_domain)
+		return true;
+
+	return false;
+}
+EXPORT_SYMBOL_GPL(device_iommu_unmanaged_supported);
+
+/**
  * iommu_set_fault_handler() - set a fault handler for an iommu domain
  * @domain: iommu domain
  * @handler: fault handler
