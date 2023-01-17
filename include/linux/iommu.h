@@ -259,6 +259,8 @@ struct iommu_iotlb_gather {
  *                    pasid, so that any DMA transactions with this pasid
  *                    will be blocked by the hardware.
  * @pgsize_bitmap: bitmap of all possible supported page sizes
+ * @broken_unmanaged_domain: a flag, if being set, indicating that UNMANAGED
+ *                           domains are not fully functional
  * @owner: Driver module providing these ops
  */
 struct iommu_ops {
@@ -297,6 +299,7 @@ struct iommu_ops {
 	const struct iommu_domain_ops *default_domain_ops;
 	enum iommu_device_data_type driver_type;
 	unsigned long pgsize_bitmap;
+	bool broken_unmanaged_domain;
 	struct module *owner;
 };
 
