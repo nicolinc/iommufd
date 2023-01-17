@@ -245,6 +245,10 @@ struct iommu_iotlb_gather {
  *                    pasid, so that any DMA transactions with this pasid
  *                    will be blocked by the hardware.
  * @pgsize_bitmap: bitmap of all possible supported page sizes
+ * @broken_unmanaged_domain: IOMMU_DOMAIN_UNMANAGED is not fully functional; the
+ *                           driver does not really support iommu_map/unmap, but
+ *                           uses UNMANAGED domains for the IOMMU API, called by
+ *                           other SOC drivers.
  * @owner: Driver module providing these ops
  */
 struct iommu_ops {
@@ -277,6 +281,7 @@ struct iommu_ops {
 
 	const struct iommu_domain_ops *default_domain_ops;
 	unsigned long pgsize_bitmap;
+	bool broken_unmanaged_domain;
 	struct module *owner;
 };
 
@@ -455,6 +460,7 @@ static inline const struct iommu_ops *dev_iommu_ops(struct device *dev)
 extern int bus_iommu_probe(struct bus_type *bus);
 extern bool iommu_present(struct bus_type *bus);
 extern bool device_iommu_capable(struct device *dev, enum iommu_cap cap);
+extern bool device_iommu_unmanaged_supported(struct device *dev);
 extern struct iommu_domain *iommu_domain_alloc(struct bus_type *bus);
 extern struct iommu_group *iommu_group_get_by_id(int id);
 extern void iommu_domain_free(struct iommu_domain *domain);
@@ -738,6 +744,11 @@ static inline bool iommu_present(struct bus_type *bus)
 }
 
 static inline bool device_iommu_capable(struct device *dev, enum iommu_cap cap)
+{
+	return false;
+}
+
+static inline bool device_iommu_unmanaged_supported(struct device *dev)
 {
 	return false;
 }
