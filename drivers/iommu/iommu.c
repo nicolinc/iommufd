@@ -1900,6 +1900,17 @@ bool device_iommu_capable(struct device *dev, enum iommu_cap cap)
 }
 EXPORT_SYMBOL_GPL(device_iommu_capable);
 
+bool device_iommu_broken_unmanaged_domain(struct device *dev)
+{
+	/* Caller beware: device does not even have an iommu? */
+	if (WARN_ON(!dev->iommu || !dev->iommu->iommu_dev))
+		return true;
+
+	/* Check or verify the iommu driver for iommu_map/unmap support */
+	return WARN_ON(dev_iommu_ops(dev)->broken_unmanaged_domain);
+}
+EXPORT_SYMBOL_GPL(device_iommu_broken_unmanaged_domain);
+
 /**
  * iommu_set_fault_handler() - set a fault handler for an iommu domain
  * @domain: iommu domain

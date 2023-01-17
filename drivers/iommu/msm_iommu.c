@@ -675,6 +675,7 @@ fail:
 }
 
 static struct iommu_ops msm_iommu_ops = {
+	.broken_unmanaged_domain = true,
 	.domain_alloc = msm_iommu_domain_alloc,
 	.probe_device = msm_iommu_probe_device,
 	.device_group = generic_device_group,
