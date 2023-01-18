@@ -619,12 +619,23 @@ int iommufd_access_set_ioas(struct iommufd_access *access, u32 ioas_id)
 		iommufd_ref_to_users(obj);
 	}
 
+	/*
+	 * Set ioas to NULL to block any further iommufd_access_pin_pages() and
+	 * iommufd_access_unpin_pages() can continue using access->ioas_unpin.
+	 */
+	mutex_lock(&access->ioas_lock);
+	access->ioas = NULL;
+	mutex_unlock(&access->ioas_lock);
+
 	if (old_ioas) {
+		if (new_ioas)
+			access->ops->unmap(access->data, 0, ULONG_MAX);
 		iopt_remove_access(&old_ioas->iopt, access);
 		refcount_dec(&old_ioas->obj.users);
 	}
 
 	mutex_lock(&access->ioas_lock);
+	access->ioas_unpin = new_ioas;
 	access->ioas = new_ioas;
 	mutex_unlock(&access->ioas_lock);
 
@@ -636,6 +647,18 @@ out_put_ioas:
 	return rc;
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_access_set_ioas, IOMMUFD);
+
+bool iommufd_access_ioas_is_attached(struct iommufd_access *access)
+{
+	bool attached;
+
+	mutex_lock(&access->ioas_lock);
+	attached = !!access->ioas;
+	mutex_unlock(&access->ioas_lock);
+
+	return attached;
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_access_ioas_is_attached, IOMMUFD);
 
 /**
  * iommufd_access_notify_unmap - Notify users of an iopt to stop using it
@@ -697,11 +720,11 @@ void iommufd_access_unpin_pages(struct iommufd_access *access,
 		return;
 
 	mutex_lock(&access->ioas_lock);
-	if (!access->ioas) {
+	if (!access->ioas_unpin) {
 		mutex_unlock(&access->ioas_lock);
 		return;
 	}
-	iopt = &access->ioas->iopt;
+	iopt = &access->ioas_unpin->iopt;
 	mutex_unlock(&access->ioas_lock);
 
 	down_read(&iopt->iova_rwsem);

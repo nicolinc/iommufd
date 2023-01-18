@@ -187,6 +187,10 @@ int vfio_iommufd_emulated_attach_ioas(struct vfio_device *vdev, u32 *pt_id)
 	if (!vdev->iommufd_access)
 		return -ENOENT;
 
+	if (!vdev->ops->dma_unmap && pt_id &&
+	    iommufd_access_ioas_is_attached(vdev->iommufd_access))
+		return -EBUSY;
+
 	iommufd_access_set_ioas(vdev->iommufd_access, *pt_id);
 	return 0;
 }
