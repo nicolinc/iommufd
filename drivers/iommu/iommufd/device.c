@@ -647,12 +647,24 @@ int iommufd_access_set_ioas(struct iommufd_access *access, u32 ioas_id)
 		iommufd_ref_to_users(obj);
 	}
 
+	/*
+	 * Set ioas to NULL to block further incoming iommufd_access_pin_pages()
+	 * and iommufd_access_unpin_pages() callback touching old_ioas->iopt.
+	 */
+	mutex_lock(&access->ioas_lock);
+	access->ioas_blocked = access->ioas;
+	access->ioas = NULL;
+	mutex_unlock(&access->ioas_lock);
+
 	if (old_ioas) {
+		if (new_ioas)
+			access->ops->unmap(access->data, 0, ULONG_MAX);
 		iopt_remove_access(&old_ioas->iopt, access);
 		refcount_dec(&old_ioas->obj.users);
 	}
 
 	mutex_lock(&access->ioas_lock);
+	access->ioas_blocked = NULL;
 	access->ioas = new_ioas;
 	mutex_unlock(&access->ioas_lock);
 
@@ -664,6 +676,18 @@ out_put_ioas:
 	return rc;
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_access_set_ioas, IOMMUFD);
+
+bool iommufd_access_ioas_is_attached(struct iommufd_access *access)
+{
+	bool attached;
+
+	mutex_lock(&access->ioas_lock);
+	attached = !!access->ioas;
+	mutex_unlock(&access->ioas_lock);
+
+	return attached;
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_access_ioas_is_attached, IOMMUFD);
 
 /**
  * iommufd_access_notify_unmap - Notify users of an iopt to stop using it
@@ -703,6 +727,30 @@ void iommufd_access_notify_unmap(struct io_pagetable *iopt, unsigned long iova,
 	xa_unlock(&ioas->iopt.access_list);
 }
 
+static void __iommufd_access_unpin_pages(struct iommufd_access *access,
+					 struct io_pagetable *iopt,
+					 unsigned long iova,
+					 unsigned long length)
+{
+	struct iopt_area_contig_iter iter;
+	unsigned long last_iova;
+	struct iopt_area *area;
+
+	if (WARN_ON(!length) ||
+	    WARN_ON(check_add_overflow(iova, length - 1, &last_iova)))
+		return;
+
+	down_read(&iopt->iova_rwsem);
+	iopt_for_each_contig_area(&iter, area, iopt, iova, last_iova)
+		iopt_area_remove_access(
+			area, iopt_area_iova_to_index(area, iter.cur_iova),
+			iopt_area_iova_to_index(
+				area,
+				min(last_iova, iopt_area_last_iova(area))));
+	up_read(&iopt->iova_rwsem);
+	WARN_ON(!iopt_area_contig_done(&iter));
+}
+
 /**
  * iommufd_access_unpin_pages() - Undo iommufd_access_pin_pages
  * @access: IOAS access to act on
@@ -715,32 +763,20 @@ void iommufd_access_notify_unmap(struct io_pagetable *iopt, unsigned long iova,
 void iommufd_access_unpin_pages(struct iommufd_access *access,
 				unsigned long iova, unsigned long length)
 {
-	struct iopt_area_contig_iter iter;
 	struct io_pagetable *iopt;
-	unsigned long last_iova;
-	struct iopt_area *area;
-
-	if (WARN_ON(!length) ||
-	    WARN_ON(check_add_overflow(iova, length - 1, &last_iova)))
-		return;
 
 	mutex_lock(&access->ioas_lock);
-	if (!access->ioas) {
+	if (WARN_ON(!access->ioas && !access->ioas_blocked)) {
 		mutex_unlock(&access->ioas_lock);
 		return;
 	}
-	iopt = &access->ioas->iopt;
+	if (access->ioas_blocked)
+		iopt = &access->ioas_blocked->iopt;
+	else
+		iopt = &access->ioas->iopt;
 	mutex_unlock(&access->ioas_lock);
 
-	down_read(&iopt->iova_rwsem);
-	iopt_for_each_contig_area(&iter, area, iopt, iova, last_iova)
-		iopt_area_remove_access(
-			area, iopt_area_iova_to_index(area, iter.cur_iova),
-			iopt_area_iova_to_index(
-				area,
-				min(last_iova, iopt_area_last_iova(area))));
-	up_read(&iopt->iova_rwsem);
-	WARN_ON(!iopt_area_contig_done(&iter));
+	__iommufd_access_unpin_pages(access, iopt, iova, length);
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_access_unpin_pages, IOMMUFD);
 
