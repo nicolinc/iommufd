@@ -44,6 +44,7 @@ iommufd_access_create(struct iommufd_ctx *ictx,
 		      const struct iommufd_access_ops *ops, void *data);
 void iommufd_access_destroy(struct iommufd_access *access);
 int iommufd_access_set_ioas(struct iommufd_access *access, u32 ioas_id);
+bool iommufd_access_ioas_is_attached(struct iommufd_access *access);
 
 void iommufd_ctx_get(struct iommufd_ctx *ictx);
 
