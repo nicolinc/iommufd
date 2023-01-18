@@ -623,6 +623,18 @@ void iommufd_access_destroy(struct iommufd_access *access)
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_access_destroy, IOMMUFD);
 
+static void iopt_unpin_pages_all(struct io_pagetable *iopt)
+{
+	struct iopt_area *area;
+
+	down_read(&iopt->iova_rwsem);
+	for (area = iopt_area_iter_first(iopt, 0, ULONG_MAX); area;
+	     area = iopt_area_iter_next(area, 0, ULONG_MAX))
+		iopt_area_remove_access(area, iopt_area_index(area),
+					iopt_area_last_index(area));
+	up_read(&iopt->iova_rwsem);
+}
+
 int iommufd_access_set_ioas(struct iommufd_access *access, u32 ioas_id)
 {
 	struct iommufd_ioas *new_ioas = NULL, *old_ioas = access->ioas;
@@ -647,7 +659,25 @@ int iommufd_access_set_ioas(struct iommufd_access *access, u32 ioas_id)
 			goto out_put_ioas;
 	}
 
+	/*
+	 * Set ioas to NULL to block further incoming iommufd_access_pin_pages()
+	 * and iommufd_access_unpin_pages() callback touching old_ioas->iopt.
+	 */
+	mutex_lock(&access->ioas_lock);
+	access->ioas = NULL;
+	mutex_unlock(&access->ioas_lock);
+
 	if (old_ioas) {
+		/*
+		 * When replacing a valid old_ioas with a valid new_ioas, unmap
+		 * is needed to cleanup the old_ioas->iopt. And the access->ioas
+		 * is set to NULL, so the iommufd_access_unpin_pages() no longer
+		 * covers the iopt_unpin_pages(). Call it manually here.
+		 */
+		if (new_ioas) {
+			access->ops->unmap(access->data, 0, ULONG_MAX);
+			iopt_unpin_pages_all(&old_ioas->iopt);
+		}
 		iopt_remove_access(&old_ioas->iopt, access);
 		refcount_dec(&old_ioas->obj.users);
 	}
@@ -664,6 +694,18 @@ out_put_ioas:
 	return rc;
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_access_set_ioas, IOMMUFD);
+
+bool iommufd_access_ioas_is_attached(struct iommufd_access *access)
+{
+	bool attached;
+
+	mutex_lock(&access->ioas_lock);
+	attached = !!access->ioas;
+	mutex_unlock(&access->ioas_lock);
+
+	return attached;
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_access_ioas_is_attached, IOMMUFD);
 
 /**
  * iommufd_access_notify_unmap - Notify users of an iopt to stop using it
