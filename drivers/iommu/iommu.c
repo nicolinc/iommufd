@@ -94,8 +94,6 @@ static struct iommu_domain *__iommu_domain_alloc(struct bus_type *bus,
 						 unsigned type);
 static int __iommu_attach_device(struct iommu_domain *domain,
 				 struct device *dev);
-static int __iommu_attach_group(struct iommu_domain *domain,
-				struct iommu_group *group);
 static int __iommu_group_set_domain(struct iommu_group *group,
 				    struct iommu_domain *new_domain);
 static int iommu_create_device_direct_mappings(struct iommu_group *group,
@@ -1983,6 +1981,12 @@ static void __iommu_group_set_core_domain(struct iommu_group *group)
 	WARN(ret, "iommu driver failed to attach the default/blocking domain");
 }
 
+static bool __iommu_group_is_core_domain_set(struct iommu_group *group)
+{
+	return !group->domain || group->domain == group->default_domain ||
+	       group->domain == group->blocking_domain;
+}
+
 static int __iommu_attach_device(struct iommu_domain *domain,
 				 struct device *dev)
 {
@@ -2026,10 +2030,11 @@ int iommu_attach_device(struct iommu_domain *domain, struct device *dev)
 	 */
 	mutex_lock(&group->mutex);
 	ret = -EINVAL;
-	if (iommu_group_device_count(group) != 1)
+	if (iommu_group_device_count(group) != 1 ||
+	    WARN_ON(!__iommu_group_is_core_domain_set(group)))
 		goto out_unlock;
 
-	ret = __iommu_attach_group(domain, group);
+	ret = __iommu_group_set_domain(group, domain);
 
 out_unlock:
 	mutex_unlock(&group->mutex);
@@ -2110,23 +2115,6 @@ static int iommu_group_do_attach_device(struct device *dev, void *data)
 	return __iommu_attach_device(domain, dev);
 }
 
-static int __iommu_attach_group(struct iommu_domain *domain,
-				struct iommu_group *group)
-{
-	int ret;
-
-	if (group->domain && group->domain != group->default_domain &&
-	    group->domain != group->blocking_domain)
-		return -EBUSY;
-
-	ret = __iommu_group_for_each_dev(group, domain,
-					 iommu_group_do_attach_device);
-	if (ret == 0)
-		group->domain = domain;
-
-	return ret;
-}
-
 /**
  * iommu_attach_group - Attach an IOMMU domain to an IOMMU group
  * @domain: IOMMU domain to attach
@@ -2144,9 +2132,14 @@ int iommu_attach_group(struct iommu_domain *domain, struct iommu_group *group)
 	int ret;
 
 	mutex_lock(&group->mutex);
-	ret = __iommu_attach_group(domain, group);
-	mutex_unlock(&group->mutex);
+	if (!__iommu_group_is_core_domain_set(group)) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
 
+	ret = __iommu_group_set_domain(group, domain);
+out_unlock:
+	mutex_unlock(&group->mutex);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(iommu_attach_group);
