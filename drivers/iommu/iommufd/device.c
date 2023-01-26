@@ -73,6 +73,9 @@ struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 	if (!device_iommu_capable(dev, IOMMU_CAP_CACHE_COHERENCY))
 		return ERR_PTR(-EINVAL);
 
+	if (device_iommu_broken_unmanaged_domain(dev))
+		return ERR_PTR(-EINVAL);
+
 	group = iommu_group_get(dev);
 	if (!group)
 		return ERR_PTR(-ENODEV);
