@@ -11,11 +11,8 @@ void iommufd_hw_pagetable_destroy(struct iommufd_object *obj)
 	struct iommufd_hw_pagetable *hwpt =
 		container_of(obj, struct iommufd_hw_pagetable, obj);
 
-	WARN_ON(!list_empty(&hwpt->devices));
-
 	iommu_domain_free(hwpt->domain);
 	refcount_dec(&hwpt->ioas->obj.users);
-	mutex_destroy(&hwpt->devices_lock);
 	WARN_ON(!refcount_dec_if_one(hwpt->devices_users));
 	kfree(hwpt->devices_users);
 }
@@ -45,9 +42,7 @@ iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 		goto out_abort;
 	}
 
-	INIT_LIST_HEAD(&hwpt->devices);
 	INIT_LIST_HEAD(&hwpt->hwpt_item);
-	mutex_init(&hwpt->devices_lock);
 	hwpt->devices_users = kzalloc(sizeof(*hwpt->devices_users), GFP_KERNEL);
 	if (!hwpt->devices_users) {
 		rc = -ENOMEM;
