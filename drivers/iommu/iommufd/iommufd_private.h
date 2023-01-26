@@ -250,12 +250,10 @@ struct iommufd_hw_pagetable {
 	/* Head at iommufd_ioas::hwpt_list */
 	struct list_head hwpt_item;
 	/*
-	 * If hwpt->parent is valid, always reuse parent's devices_lock and
-	 * devices_users. Otherwise, the current hwpt should allocate them.
+	 * If hwpt->parent is valid, always reuse parent's devices_users.
+	 * Otherwise, the current hwpt should allocate one.
 	 */
-	struct mutex *devices_lock;
 	refcount_t *devices_users;
-	struct list_head devices;
 };
 
 struct iommufd_hw_pagetable *

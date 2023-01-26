@@ -12,16 +12,13 @@ void iommufd_hw_pagetable_destroy(struct iommufd_object *obj)
 	struct iommufd_hw_pagetable *hwpt =
 		container_of(obj, struct iommufd_hw_pagetable, obj);
 
-	WARN_ON(!list_empty(&hwpt->devices));
-
 	iommu_domain_free(hwpt->domain);
 	refcount_dec(&hwpt->ioas->obj.users);
 	if (hwpt->parent) {
 		refcount_dec(&hwpt->parent->obj.users);
 	} else {
 		WARN_ON(!refcount_dec_if_one(hwpt->devices_users));
-		mutex_destroy(hwpt->devices_lock);
-		kfree(hwpt->devices_lock);
+		kfree(hwpt->devices_users);
 	}
 }
 
@@ -59,25 +56,20 @@ __iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx,
 		goto out_abort;
 	}
 
-	INIT_LIST_HEAD(&hwpt->devices);
 	INIT_LIST_HEAD(&hwpt->hwpt_item);
 	hwpt->parent = parent;
 	if (parent) {
-		/* Always reuse parent's devices_lock and devices_users... */
-		hwpt->devices_lock = parent->devices_lock;
+		/* Always reuse parent's devices_users... */
 		hwpt->devices_users = parent->devices_users;
 		refcount_inc(&parent->obj.users);
 	} else {
-		/* ...otherwise, allocate a new pair */
-		hwpt->devices_lock = kzalloc(sizeof(*hwpt->devices_lock) +
-					     sizeof(*hwpt->devices_users),
-					     GFP_KERNEL);
-		if (!hwpt->devices_lock) {
+		/* ...otherwise, allocate a new one */
+		hwpt->devices_users = kzalloc(sizeof(*hwpt->devices_users),
+					      GFP_KERNEL);
+		if (!hwpt->devices_users) {
 			rc = -ENOMEM;
 			goto out_free_domain;
 		}
-		mutex_init(hwpt->devices_lock);
-		hwpt->devices_users = (refcount_t *)&hwpt->devices_lock[1];
 		refcount_set(hwpt->devices_users, 1);
 	}
 
