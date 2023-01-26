@@ -63,6 +63,7 @@ void iommufd_device_destroy(struct iommufd_object *obj)
 struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 					   struct device *dev, u32 *id)
 {
+	const struct iommu_ops *ops = dev_iommu_ops(dev);
 	struct iommufd_device *idev;
 	struct iommu_group *group;
 	int rc;
@@ -73,6 +74,9 @@ struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 	 */
 	if (!device_iommu_capable(dev, IOMMU_CAP_CACHE_COHERENCY))
 		return ERR_PTR(-EINVAL);
+
+	if (ops->broken_unmanaged_domain)
+		return ERR_PTR(-EOPNOTSUPP);
 
 	group = iommu_group_get(dev);
 	if (!group)
