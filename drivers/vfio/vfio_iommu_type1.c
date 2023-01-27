@@ -2170,7 +2170,10 @@ static int vfio_iommu_domain_alloc(struct device *dev, void *data)
 {
 	struct iommu_domain **domain = data;
 
-	*domain = iommu_domain_alloc(dev->bus);
+	if (device_iommu_broken_unmanaged_domain(dev))
+		*domain = NULL;
+	else
+		*domain = iommu_domain_alloc(dev->bus);
 	return 1; /* Don't iterate */
 }
 
