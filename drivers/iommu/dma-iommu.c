@@ -545,6 +545,9 @@ static int iommu_dma_init_domain(struct iommu_domain *domain, dma_addr_t base,
 	if (!cookie || cookie->type != IOMMU_DMA_IOVA_COOKIE)
 		return -EINVAL;
 
+	if (device_iommu_broken_unmanaged_domain(dev))
+		return -EINVAL;
+
 	iovad = &cookie->iovad;
 
 	/* Use the smallest supported page size for IOVA granularity */
