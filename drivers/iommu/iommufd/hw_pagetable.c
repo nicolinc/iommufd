@@ -11,6 +11,11 @@ void iommufd_hw_pagetable_destroy(struct iommufd_object *obj)
 	struct iommufd_hw_pagetable *hwpt =
 		container_of(obj, struct iommufd_hw_pagetable, obj);
 
+	if (hwpt->iopt_attached) {
+		lockdep_assert_held(&hwpt->ioas->mutex);
+		iopt_table_remove_domain(&hwpt->ioas->iopt, hwpt->domain);
+		list_del(&hwpt->hwpt_item);
+	}
 	iommu_domain_free(hwpt->domain);
 	refcount_dec(&hwpt->ioas->obj.users);
 	WARN_ON(!refcount_dec_if_one(&hwpt->device_users));
@@ -166,11 +171,17 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 
 	mutex_lock(&ioas->mutex);
 	hwpt = __iommufd_hw_pagetable_alloc(ictx, ioas, dev, NULL, data);
-	mutex_unlock(&ioas->mutex);
 	if (IS_ERR(hwpt)) {
 		rc = PTR_ERR(hwpt);
-		goto out_free_data;
+		goto out_unlock;
 	}
+
+	rc = iopt_table_add_domain(&hwpt->ioas->iopt, hwpt->domain);
+	if (rc)
+		goto out_destroy_hwpt;
+	list_add_tail(&hwpt->hwpt_item, &hwpt->ioas->hwpt_list);
+	hwpt->iopt_attached = true;
+	mutex_unlock(&ioas->mutex);
 
 	cmd->out_hwpt_id = hwpt->obj.id;
 
@@ -185,6 +196,8 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	return 0;
 out_destroy_hwpt:
 	iommufd_object_abort_and_destroy(ucmd->ictx, &hwpt->obj);
+out_unlock:
+	mutex_unlock(&ioas->mutex);
 out_free_data:
 	kfree(data);
 out_put_pt:
