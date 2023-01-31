@@ -57,6 +57,7 @@ struct iommu_group {
 	struct iommu_domain *domain;
 	struct list_head entry;
 	unsigned int owner_cnt;
+	unsigned int attached_cnt;
 	void *owner;
 };
 
@@ -64,6 +65,7 @@ struct group_device {
 	struct list_head list;
 	struct device *dev;
 	char *name;
+	bool attached;
 };
 
 struct iommu_group_attribute {
@@ -2035,6 +2037,7 @@ static int __iommu_attach_device(struct iommu_domain *domain,
  */
 int iommu_attach_device(struct iommu_domain *domain, struct device *dev)
 {
+	struct group_device *grp_dev;
 	struct iommu_group *group;
 	int ret;
 
@@ -2042,16 +2045,22 @@ int iommu_attach_device(struct iommu_domain *domain, struct device *dev)
 	if (!group)
 		return -ENODEV;
 
-	/*
-	 * Lock the group to make sure the device-count doesn't
-	 * change while we are attaching
-	 */
 	mutex_lock(&group->mutex);
-	ret = -EINVAL;
-	if (iommu_group_device_count(group) != 1)
+	/* group is from iommu_group_get(dev), so the search will not fail */
+	list_for_each_entry(grp_dev, &group->devices, list)
+		if (grp_dev->dev == dev)
+			break;
+	if (grp_dev->attached)
 		goto out_unlock;
 
-	ret = __iommu_attach_group(domain, group);
+	/* Attach the group when attaching the first device in the group */
+	if (group->attached_cnt == 0) {
+		ret = __iommu_attach_group(domain, group);
+		if (ret)
+			goto out_unlock;
+	}
+	grp_dev->attached = true;
+	group->attached_cnt++;
 
 out_unlock:
 	mutex_unlock(&group->mutex);
@@ -2071,6 +2080,7 @@ int iommu_deferred_attach(struct device *dev, struct iommu_domain *domain)
 
 void iommu_detach_device(struct iommu_domain *domain, struct device *dev)
 {
+	struct group_device *grp_dev;
 	struct iommu_group *group;
 
 	group = iommu_group_get(dev);
@@ -2078,10 +2088,20 @@ void iommu_detach_device(struct iommu_domain *domain, struct device *dev)
 		return;
 
 	mutex_lock(&group->mutex);
-	if (WARN_ON(domain != group->domain) ||
-	    WARN_ON(iommu_group_device_count(group) != 1))
+	if (WARN_ON(domain != group->domain))
 		goto out_unlock;
-	__iommu_group_set_core_domain(group);
+	/* group is from iommu_group_get(dev), so the search will not fail */
+	list_for_each_entry(grp_dev, &group->devices, list)
+		if (grp_dev->dev == dev)
+			break;
+	if (!grp_dev->attached)
+		goto out_unlock;
+
+	grp_dev->attached = false;
+	group->attached_cnt--;
+	/* Detach the group when detaching the last device in the group */
+	if (group->attached_cnt == 0)
+		__iommu_group_set_core_domain(group);
 
 out_unlock:
 	mutex_unlock(&group->mutex);
@@ -2167,6 +2187,13 @@ int iommu_attach_group(struct iommu_domain *domain, struct iommu_group *group)
 
 	mutex_lock(&group->mutex);
 	ret = __iommu_attach_group(domain, group);
+	if (!ret) {
+		struct group_device *grp_dev;
+
+		list_for_each_entry(grp_dev, &group->devices, list)
+			grp_dev->attached = true;
+		group->attached_cnt = iommu_group_device_count(group);
+	}
 	mutex_unlock(&group->mutex);
 
 	return ret;
@@ -2222,8 +2249,13 @@ static int __iommu_group_set_domain(struct iommu_group *group,
 
 void iommu_detach_group(struct iommu_domain *domain, struct iommu_group *group)
 {
+	struct group_device *grp_dev;
+
 	mutex_lock(&group->mutex);
 	__iommu_group_set_core_domain(group);
+	list_for_each_entry(grp_dev, &group->devices, list)
+		grp_dev->attached = false;
+	group->attached_cnt = 0;
 	mutex_unlock(&group->mutex);
 }
 EXPORT_SYMBOL_GPL(iommu_detach_group);
