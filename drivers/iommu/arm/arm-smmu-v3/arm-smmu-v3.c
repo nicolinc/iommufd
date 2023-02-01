@@ -2096,12 +2096,18 @@ struct iommu_domain *arm_smmu_domain_alloc(unsigned type)
 	return &smmu_domain->domain;
 }
 
+static int arm_smmu_domain_finalise(struct iommu_domain *domain,
+				    struct arm_smmu_master *master);
+
 static struct iommu_domain *
 arm_smmu_domain_alloc_user(struct device *dev, struct iommu_domain *parent,
 			   const void *user_data)
 {
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
 	const struct iommu_hwpt_arm_smmuv3 *alloc = user_data;
+	struct arm_smmu_domain *smmu_domain;
 	struct iommu_domain *domain;
+	int ret;
 
 	if (parent)
 		return arm_smmu_nested_domain_alloc(parent, user_data);
@@ -2110,14 +2116,20 @@ arm_smmu_domain_alloc_user(struct device *dev, struct iommu_domain *parent,
 	domain = iommu_domain_alloc(dev->bus);
 	if (!domain)
 		return NULL;
+	smmu_domain = to_smmu_domain(domain);
 
+	mutex_lock(&smmu_domain->init_mutex);
 	/* ...the nested stage-2 flag is set */
-	if (alloc && alloc->flags & IOMMU_SMMUV3_FLAG_S2) {
-		struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
-
-		mutex_lock(&smmu_domain->init_mutex);
+	if (alloc && alloc->flags & IOMMU_SMMUV3_FLAG_S2)
 		smmu_domain->stage = ARM_SMMU_DOMAIN_S2;
-		mutex_unlock(&smmu_domain->init_mutex);
+	else
+		smmu_domain->stage = ARM_SMMU_DOMAIN_S1;
+	smmu_domain->smmu = master->smmu;
+	ret = arm_smmu_domain_finalise(domain, master);
+	mutex_unlock(&smmu_domain->init_mutex);
+	if (ret) {
+		arm_smmu_domain_free(domain);
+		domain = NULL;
 	}
 
 	return domain;
