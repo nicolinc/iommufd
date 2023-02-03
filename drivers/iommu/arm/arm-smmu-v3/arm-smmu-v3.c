@@ -2470,7 +2470,8 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 		goto out_unlock;
 	}
 
-	master->domain = smmu_domain;
+	if (smmu_domain->stage != ARM_SMMU_DOMAIN_ABORT)
+		master->domain = smmu_domain;
 
 	if (smmu_domain->stage != ARM_SMMU_DOMAIN_BYPASS)
 		master->ats_enabled = arm_smmu_ats_supported(master);
