@@ -765,11 +765,11 @@ void arm_smmu_domain_free(struct iommu_domain *domain);
 #ifdef CONFIG_IOMMUFD
 struct iommu_domain *
 arm_smmu_nested_domain_alloc(struct iommu_domain *s2_domain,
-			     const void *user_data);
+			     const struct iommu_hwpt_arm_smmuv3 *user_cfg);
 #else
 static inline struct iommu_domain *
 arm_smmu_nested_domain_alloc(struct iommu_domain *s2_domain,
-			     const void *user_data)
+			     const struct iommu_hwpt_arm_smmuv3 *user_cfg)
 {
 	return NULL;
 }

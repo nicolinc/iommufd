@@ -2057,6 +2057,8 @@ static void *arm_smmu_hw_info(struct device *dev, u32 *length)
 	return info;
 }
 
+static struct iommu_ops arm_smmu_ops;
+
 struct iommu_domain *arm_smmu_domain_alloc(unsigned type)
 {
 	struct arm_smmu_domain *smmu_domain;
@@ -2065,7 +2067,6 @@ struct iommu_domain *arm_smmu_domain_alloc(unsigned type)
 		return arm_smmu_sva_domain_alloc();
 
 	if (type != IOMMU_DOMAIN_UNMANAGED &&
-	    type != IOMMU_DOMAIN_NESTED &&
 	    type != IOMMU_DOMAIN_DMA &&
 	    type != IOMMU_DOMAIN_DMA_FQ &&
 	    type != IOMMU_DOMAIN_IDENTITY)
@@ -2085,31 +2086,41 @@ struct iommu_domain *arm_smmu_domain_alloc(unsigned type)
 	spin_lock_init(&smmu_domain->devices_lock);
 	INIT_LIST_HEAD(&smmu_domain->mmu_notifiers);
 
+	smmu_domain->domain.type = type;
+	smmu_domain->domain.ops = arm_smmu_ops.default_domain_ops;
 	return &smmu_domain->domain;
 }
+
+static int arm_smmu_domain_finalise(struct iommu_domain *domain,
+				    struct arm_smmu_master *master,
+				    const struct iommu_hwpt_arm_smmuv3 *user_cfg);
 
 static struct iommu_domain *
 arm_smmu_domain_alloc_user(struct device *dev, struct iommu_domain *parent,
 			   const void *user_data)
 {
-	const struct iommu_hwpt_arm_smmuv3 *alloc = user_data;
+	const struct iommu_hwpt_arm_smmuv3 *user_cfg = user_data;
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+	struct arm_smmu_domain *smmu_domain;
 	struct iommu_domain *domain;
+	int ret;
 
 	if (parent)
-		return arm_smmu_nested_domain_alloc(parent, user_data);
-
-	/* Allocate a plain unmanaged domain, unless... */
-	domain = iommu_domain_alloc(dev->bus);
+		domain = arm_smmu_nested_domain_alloc(parent, user_cfg);
+	else
+		domain = arm_smmu_domain_alloc(IOMMU_DOMAIN_UNMANAGED);
 	if (!domain)
 		return NULL;
+	smmu_domain = to_smmu_domain(domain);
 
-	/* ...the nested stage-2 flag is set */
-	if (alloc && alloc->flags & IOMMU_SMMUV3_FLAG_S2) {
-		struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+	mutex_lock(&smmu_domain->init_mutex);
+	smmu_domain->smmu = master->smmu;
+	ret = arm_smmu_domain_finalise(domain, master, user_cfg);
+	mutex_unlock(&smmu_domain->init_mutex);
 
-		mutex_lock(&smmu_domain->init_mutex);
-		smmu_domain->stage = ARM_SMMU_DOMAIN_S2;
-		mutex_unlock(&smmu_domain->init_mutex);
+	if (ret) {
+		arm_smmu_domain_free(domain);
+		domain = NULL;
 	}
 
 	return domain;
@@ -2256,7 +2267,8 @@ static int arm_smmu_domain_finalise_s2(struct arm_smmu_domain *smmu_domain,
 }
 
 static int arm_smmu_domain_finalise(struct iommu_domain *domain,
-				    struct arm_smmu_master *master)
+				    struct arm_smmu_master *master,
+				    const struct iommu_hwpt_arm_smmuv3 *user_cfg)
 {
 	int ret;
 	unsigned long ias, oas;
@@ -2271,26 +2283,6 @@ static int arm_smmu_domain_finalise(struct iommu_domain *domain,
 
 	if (domain->type == IOMMU_DOMAIN_IDENTITY) {
 		smmu_domain->stage = ARM_SMMU_DOMAIN_BYPASS;
-		return 0;
-	}
-
-	if (domain->type == IOMMU_DOMAIN_NESTED) {
-		if (!(smmu->features & ARM_SMMU_FEAT_TRANS_S1) ||
-		    !(smmu->features & ARM_SMMU_FEAT_TRANS_S2)) {
-			dev_dbg(smmu_domain->smmu->dev,
-				"does not implement two stages\n");
-			return -EINVAL;
-		}
-		if (!smmu_domain->s2) {
-			dev_dbg(smmu_domain->smmu->dev,
-				"does not have stage-2 domain\n");
-			return -EINVAL;
-		}
-
-		/*
-		 * A nested domain is maintained by a guest OS,
-		 * so no need to finalise anything here.
-		 */
 		return 0;
 	}
 
@@ -2537,7 +2529,7 @@ int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 
 	if (!smmu_domain->smmu) {
 		smmu_domain->smmu = smmu;
-		ret = arm_smmu_domain_finalise(domain, master);
+		ret = arm_smmu_domain_finalise(domain, master, NULL);
 		if (ret) {
 			smmu_domain->smmu = NULL;
 			goto out_unlock;
@@ -2743,8 +2735,6 @@ static void arm_smmu_remove_master(struct arm_smmu_master *master)
 
 	kfree(master->streams);
 }
-
-static struct iommu_ops arm_smmu_ops;
 
 static struct iommu_device *arm_smmu_probe_device(struct device *dev)
 {

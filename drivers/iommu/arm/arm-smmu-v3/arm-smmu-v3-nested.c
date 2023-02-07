@@ -70,7 +70,7 @@ static void arm_smmu_iotlb_sync_user(struct iommu_domain *domain,
 	arm_smmu_atc_inv_domain(smmu_domain, ssid, iova, size);
 }
 
-static const struct iommu_domain_ops arm_smmu_nested_domain_ops = {
+const struct iommu_domain_ops arm_smmu_nested_domain_ops = {
 	.attach_dev		= arm_smmu_attach_dev,
 	.free			= arm_smmu_domain_free,
 	.iotlb_sync_user	= arm_smmu_iotlb_sync_user,
@@ -78,59 +78,46 @@ static const struct iommu_domain_ops arm_smmu_nested_domain_ops = {
 
 struct iommu_domain *
 arm_smmu_nested_domain_alloc(struct iommu_domain *s2_domain,
-			     const void *user_data)
+			     const struct iommu_hwpt_arm_smmuv3 *user_cfg);
 {
-	const struct iommu_hwpt_arm_smmuv3 *alloc = user_data;
-	struct arm_smmu_domain *s2, *smmu_domain;
-	struct iommu_domain *domain;
+	struct arm_smmu_domain *smmu_domain, *s2 = NULL;
 
-	/* Only allows a nested stage-1 domain */
-	if (!alloc || alloc->flags & IOMMU_SMMUV3_FLAG_S2)
+	if (s2_domain->ops != arm_smmu_ops.default_domain_ops) {
+		dev_dbg(smmu_domain->smmu->dev,
+				"does not implement two stages\n");
 		return NULL;
-
+	}
+	if (!(smmu->features & ARM_SMMU_FEAT_TRANS_S1) ||
+	    !(smmu->features & ARM_SMMU_FEAT_TRANS_S2)) {
+		dev_dbg(smmu_domain->smmu->dev,
+				"does not implement two stages\n");
+		return -EINVAL;
+	}
 	s2 = to_smmu_domain(s2_domain);
 
-	mutex_lock(&s2->init_mutex);
-	if (s2->stage != ARM_SMMU_DOMAIN_S2) {
-		mutex_unlock(&s2->init_mutex);
-		return NULL;
-	}
-	mutex_unlock(&s2->init_mutex);
+	if (s2->stage != ARM_SMMU_DOMAIN_S2)
+		return -EINVAL;
 
-	if (alloc->config != IOMMU_SMMUV3_CONFIG_ABORT &&
-	    alloc->config != IOMMU_SMMUV3_CONFIG_BYPASS &&
-	    alloc->config != IOMMU_SMMUV3_CONFIG_TRANSLATE)
+	smmu_domain = kzalloc(sizeof(*smmu_domain), GFP_KERNEL);
+	if (!smmu_domain)
 		return NULL;
 
-	domain = arm_smmu_domain_alloc(IOMMU_DOMAIN_NESTED);
-	if (!domain)
-		return NULL;
-	domain->type = IOMMU_DOMAIN_NESTED;
-	domain->ops = &arm_smmu_nested_domain_ops;
+	mutex_init(&smmu_domain->init_mutex);
+	INIT_LIST_HEAD(&smmu_domain->devices);
+	spin_lock_init(&smmu_domain->devices_lock);
+	INIT_LIST_HEAD(&smmu_domain->mmu_notifiers);
 
-	smmu_domain = to_smmu_domain(domain);
 	mutex_lock(&smmu_domain->init_mutex);
-
 	smmu_domain->s2 = s2;
+	smmu_domain->stage = ARM_SMMU_DOMAIN_S1;
+	smmu_domain->domain.type = IOMMU_DOMAIN_NESTED;
+	smmu_domain->domain.ops = &arm_smmu_nested_domain_ops;
 
-	switch (alloc->config) {
-	case IOMMU_SMMUV3_CONFIG_ABORT:
-		smmu_domain->stage = ARM_SMMU_DOMAIN_ABORT;
-		break;
-	case IOMMU_SMMUV3_CONFIG_BYPASS:
-		smmu_domain->stage = ARM_SMMU_DOMAIN_BYPASS;
-		break;
-	case IOMMU_SMMUV3_CONFIG_TRANSLATE:
-		smmu_domain->s1_cfg.cdcfg.cdtab_dma = alloc->s1ctxptr;
-		smmu_domain->s1_cfg.s1cdmax = alloc->s1cdmax;
-		smmu_domain->s1_cfg.s1fmt = alloc->s1fmt;
-		smmu_domain->stage = ARM_SMMU_DOMAIN_S1;
-		break;
-	default:
-		break;
-	}
-
+	/* Stage-1 PTE info */
+	smmu_domain->s1_cfg.s1fmt = user_cfg->s1fmt;
+	smmu_domain->s1_cfg.s1cdmax = user_cfg->s1cdmax;
+	smmu_domain->s1_cfg.cdcfg.cdtab_dma = user_cfg->s1ctxptr;
 	mutex_unlock(&smmu_domain->init_mutex);
 
-	return domain;
+	return &smmu_domain->domain;
 }
