@@ -3012,7 +3012,30 @@ static int arm_smmu_attach_dev_nested(struct iommu_domain *domain,
 
 static void arm_smmu_domain_nested_free(struct iommu_domain *domain)
 {
-	kfree(container_of(domain, struct arm_smmu_nested_domain, domain));
+	struct arm_smmu_nested_domain *nested_domain =
+		container_of(domain, struct arm_smmu_nested_domain, domain);
+	u32 id_user = nested_domain->sid_user;
+
+	if (!WARN_ON(!id_user)) {
+		struct arm_smmu_device *smmu = nested_domain->s2_parent->smmu;
+		struct arm_smmu_stream *stream;
+
+		xa_lock(&smmu->streams_user);
+		stream = __xa_erase(&smmu->streams_user, id_user);
+		/*
+		 * A mismatched id_user is unlikely to happen, but restore the
+		 * stream back to the xarray for its actual owner to carray on.
+		 */
+		if (unlikely(stream->id_user != id_user)) {
+			WARN_ON(__xa_alloc(&smmu->streams_user, &id_user,
+					   stream, XA_LIMIT(id_user, id_user),
+					   GFP_KERNEL_ACCOUNT));
+		} else
+			stream->id_user = 0;
+		xa_unlock(&smmu->streams_user);
+	}
+
+	kfree(nested_domain);
 }
 
 static struct iommu_domain *
@@ -3024,10 +3047,164 @@ arm_smmu_get_msi_mapping_domain(struct iommu_domain *domain)
 	return &nested_domain->s2_parent->domain;
 }
 
+static int arm_smmu_fix_user_cmd(struct arm_smmu_nested_domain *nested_domain,
+				 u64 *cmd, u32 *cerror_idx)
+{
+	struct arm_smmu_device *smmu = nested_domain->s2_parent->smmu;
+	struct arm_smmu_stream *stream;
+
+	switch (*cmd & CMDQ_0_OP) {
+	case CMDQ_OP_TLBI_NSNH_ALL:
+		*cmd &= ~CMDQ_0_OP;
+		*cmd |= CMDQ_OP_TLBI_NH_ALL;
+		fallthrough;
+	case CMDQ_OP_TLBI_NH_VA:
+	case CMDQ_OP_TLBI_NH_VAA:
+	case CMDQ_OP_TLBI_NH_ALL:
+	case CMDQ_OP_TLBI_NH_ASID:
+		*cmd &= ~CMDQ_TLBI_0_VMID;
+		*cmd |= FIELD_PREP(CMDQ_TLBI_0_VMID,
+				   nested_domain->s2_parent->vmid);
+		break;
+	case CMDQ_OP_ATC_INV:
+	case CMDQ_OP_CFGI_CD:
+	case CMDQ_OP_CFGI_CD_ALL:
+		xa_lock(&smmu->streams_user);
+		stream = xa_load(&smmu->streams_user,
+				 FIELD_GET(CMDQ_CFGI_0_SID, *cmd));
+		xa_unlock(&smmu->streams_user);
+		if (!stream) {
+			*cerror_idx = CMDQ_ERR_CERROR_ATC_INV_IDX;
+			return -ENODEV;
+		}
+		*cmd &= ~CMDQ_CFGI_0_SID;
+		*cmd |= FIELD_PREP(CMDQ_CFGI_0_SID, stream->id);
+		break;
+	default:
+		*cerror_idx = CMDQ_ERR_CERROR_ILL_IDX;
+		return -EINVAL;
+	}
+	pr_debug("Fixed user CMD: %016llx : %016llx\n", cmd[1], cmd[0]);
+
+	return 0;
+}
+
+/*
+ * A helper function to detect if the current cmd hits Arm erratum before being
+ * added to a batch that might already contain a leaf TLBI or a CFGI command.
+ *
+ * If there is a hit, it will update the corresponding boolean flag, by assuming
+ * that the caller must issue the batch without this cmd. So, the two flags then
+ * will reflect the status of the new batch that contains the current cmd only.
+ */
+static bool arm_smmu_cmdq_hit_errata(struct arm_smmu_device *smmu, u64 *cmd,
+				     bool *batch_has_leaf, bool *batch_has_cfgi)
+{
+	bool cmd_has_leaf;
+
+	if (!(smmu->options & ARM_SMMU_OPT_CMDQ_FORCE_SYNC))
+		return false;
+
+	switch (*cmd & CMDQ_0_OP) {
+	case CMDQ_OP_CFGI_CD:
+	case CMDQ_OP_CFGI_CD_ALL:
+		*batch_has_cfgi = true;
+		break;
+	case CMDQ_OP_TLBI_NH_VA:
+	case CMDQ_OP_TLBI_NH_VAA:
+		cmd_has_leaf = FIELD_GET(CMDQ_TLBI_1_LEAF, cmd[1]);
+		/* Erratum 2812531 -- a non-leaf tlbi following a leaf tlbi */
+		if (!cmd_has_leaf && *batch_has_leaf) {
+			*batch_has_leaf = false;
+			return true;
+		}
+		if (cmd_has_leaf)
+			*batch_has_leaf = true;
+		fallthrough;
+	case CMDQ_OP_TLBI_NH_ALL:
+	case CMDQ_OP_TLBI_NH_ASID:
+		/* Erratum 2812531 -- a tlbi following a cfgi */
+		if (*batch_has_cfgi) {
+			*batch_has_cfgi = false;
+			return true;
+		}
+		break;
+	}
+
+	return false;
+}
+
+static int arm_smmu_cache_invalidate_user(struct iommu_domain *domain,
+					  struct iommu_user_data_array *array,
+					  u32 *cerror_idx)
+{
+	struct arm_smmu_nested_domain *nested_domain =
+		container_of(domain, struct arm_smmu_nested_domain, domain);
+	struct arm_smmu_device *smmu = nested_domain->s2_parent->smmu;
+	bool has_leaf = false, has_cfgi = false;
+	int data_idx, n = 0, ret;
+	u64 *cmds;
+
+	if (!smmu)
+		return -EINVAL;
+	if (!array->entry_num)
+		return -EINVAL;
+
+	cmds = kcalloc(array->entry_num, sizeof(*cmds) * 2, GFP_KERNEL);
+	if (!cmds) {
+		*cerror_idx = CMDQ_ERR_CERROR_ABT_IDX;
+		return -ENOMEM;
+	}
+
+	for (data_idx = 0; data_idx < array->entry_num; data_idx++) {
+		struct iommu_hwpt_arm_smmuv3_invalidate *inv =
+			(struct iommu_hwpt_arm_smmuv3_invalidate *)&cmds[n * 2];
+
+		ret = iommu_copy_struct_from_user_array(inv, array,
+							IOMMU_HWPT_DATA_ARM_SMMUV3,
+							data_idx, cmd);
+		if (ret) {
+			*cerror_idx = CMDQ_ERR_CERROR_ABT_IDX;
+			goto out;
+		}
+
+		ret = arm_smmu_fix_user_cmd(nested_domain, inv->cmd, cerror_idx);
+		if (ret)
+			goto out; /* cerror_idx is set */
+
+		if (arm_smmu_cmdq_hit_errata(smmu, inv->cmd, &has_leaf, &has_cfgi)) {
+			/* WAR is to issue the batch prior, with a CMD_SYNC */
+			ret = arm_smmu_cmdq_issue_cmdlist(smmu, cmds, n, true);
+			if (ret) /* FIXME missing cerror_idx */
+				goto out;
+			/* Then move the cmd to the head for a new batch */
+			cmds[1] = cmds[n * 2 + 1];
+			cmds[0] = cmds[n * 2];
+			n = 1;
+			continue;
+		}
+
+		if (++n == CMDQ_BATCH_ENTRIES - 1) {
+			ret = arm_smmu_cmdq_issue_cmdlist(smmu, cmds, n, true);
+			if (ret) /* FIXME missing cerror_idx */
+				goto out;
+			n = 0;
+		}
+	}
+
+	if (n)
+		ret = arm_smmu_cmdq_issue_cmdlist(smmu, cmds, n, true);
+out:
+	array->entry_num = data_idx;
+	kfree(cmds);
+	return ret;
+}
+
 static const struct iommu_domain_ops arm_smmu_nested_ops = {
 	.attach_dev = arm_smmu_attach_dev_nested,
 	.free = arm_smmu_domain_nested_free,
 	.get_msi_mapping_domain	= arm_smmu_get_msi_mapping_domain,
+	.cache_invalidate_user	= arm_smmu_cache_invalidate_user,
 };
 
 static struct iommu_domain *
@@ -3063,9 +3240,19 @@ arm_smmu_domain_alloc_nesting(struct device *dev, u32 flags,
 	if (!nested_domain)
 		return ERR_PTR(-ENOMEM);
 
+	ret = xa_alloc(&smmu_parent->smmu->streams_user, &arg.sid,
+		       &master->streams[0], XA_LIMIT(arg.sid, arg.sid),
+		       GFP_KERNEL_ACCOUNT);
+	if (ret) {
+		kfree(nested_domain);
+		return ERR_PTR(ret);
+	}
+	master->streams[0].id_user = arg.sid;
+
 	nested_domain->domain.type = IOMMU_DOMAIN_NESTED;
 	nested_domain->domain.ops = &arm_smmu_nested_ops;
 	nested_domain->s2_parent = smmu_parent;
+	nested_domain->sid_user = arg.sid;
 	memcpy(nested_domain->ste, arg.ste, sizeof(arg.ste));
 
 	return &nested_domain->domain;
@@ -3720,6 +3907,7 @@ static int arm_smmu_init_structures(struct arm_smmu_device *smmu)
 
 	mutex_init(&smmu->streams_mutex);
 	smmu->streams = RB_ROOT;
+	xa_init_flags(&smmu->streams_user, XA_FLAGS_ALLOC1 | XA_FLAGS_ACCOUNT);
 
 	ret = arm_smmu_init_queues(smmu);
 	if (ret)
