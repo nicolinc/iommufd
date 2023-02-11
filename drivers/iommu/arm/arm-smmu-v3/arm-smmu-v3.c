@@ -2195,6 +2195,19 @@ static int arm_smmu_domain_finalise(struct iommu_domain *domain,
 		return 0;
 	}
 
+	if (domain->type == IOMMU_DOMAIN_NESTED) {
+		if (!feat_has_s1 || !feat_has_s2) {
+			dev_dbg(smmu->dev, "does not implement two stages\n");
+			return -EINVAL;
+		}
+		smmu_domain->stage = ARM_SMMU_DOMAIN_S1;
+		smmu_domain->s1_cfg.s1fmt = user_cfg->s1fmt;
+		smmu_domain->s1_cfg.s1dss = user_cfg->s1dss;
+		smmu_domain->s1_cfg.s1cdmax = user_cfg->s1cdmax;
+		smmu_domain->s1_cfg.cdcfg.cdtab_dma = user_cfg->s1ctxptr;
+		return 0;
+	}
+
 	if (user_cfg_s2 && !feat_has_s2)
 		return -EINVAL;
 	if (user_cfg_s2)
@@ -2885,10 +2898,16 @@ static int arm_smmu_unset_rid_user(struct device *dev)
 	xa_unlock(&smmu->streams_user);
 	return 0;
 }
+static const struct iommu_domain_ops arm_smmu_nested_domain_ops = {
+	.attach_dev		= arm_smmu_attach_dev,
+	.free			= arm_smmu_domain_free,
+};
 
 /**
  * __arm_smmu_domain_alloc - Allocate a customizable iommu_domain
  * @type: Type of the new iommu_domain, in form of IOMMU_DOMAIN_*
+ * @s2: Optional pointer to an stage-2 domain, used by an stage-1 nested domain
+ *      allocation, pairing with a valid user_cfg data to configure the domain.
  * @master: Optional master pointer for the allocation. If given, this will be
  *          used to call arm_smmu_domain_finalise at the end of the allocation.
  *          Otherwise, arm_smmu_domain_finalise will be done when the domain is
@@ -2906,6 +2925,7 @@ static int arm_smmu_unset_rid_user(struct device *dev)
  */
 static struct iommu_domain *
 __arm_smmu_domain_alloc(unsigned type,
+			struct arm_smmu_domain *s2,
 			struct arm_smmu_master *master,
 			const struct iommu_hwpt_arm_smmuv3 *user_cfg)
 {
@@ -2917,9 +2937,13 @@ __arm_smmu_domain_alloc(unsigned type,
 		return arm_smmu_sva_domain_alloc();
 
 	if (type != IOMMU_DOMAIN_UNMANAGED &&
+	    type != IOMMU_DOMAIN_NESTED &&
 	    type != IOMMU_DOMAIN_DMA &&
 	    type != IOMMU_DOMAIN_DMA_FQ &&
 	    type != IOMMU_DOMAIN_IDENTITY)
+		return NULL;
+
+	if (s2 && (s2->stage != ARM_SMMU_DOMAIN_S2 || !user_cfg))
 		return NULL;
 
 	/*
@@ -2929,10 +2953,14 @@ __arm_smmu_domain_alloc(unsigned type,
 	smmu_domain = kzalloc(sizeof(*smmu_domain), GFP_KERNEL);
 	if (!smmu_domain)
 		return NULL;
+	smmu_domain->s2 = s2;
 	domain = &smmu_domain->domain;
 
 	domain->type = type;
-	domain->ops = arm_smmu_ops.default_domain_ops;
+	if (s2)
+		domain->ops = &arm_smmu_nested_domain_ops;
+	else
+		domain->ops = arm_smmu_ops.default_domain_ops;
 
 	mutex_init(&smmu_domain->init_mutex);
 	INIT_LIST_HEAD(&smmu_domain->devices);
@@ -2953,7 +2981,7 @@ __arm_smmu_domain_alloc(unsigned type,
 
 static struct iommu_domain *arm_smmu_domain_alloc(unsigned type)
 {
-	return __arm_smmu_domain_alloc(type, NULL, NULL);
+	return __arm_smmu_domain_alloc(type, NULL, NULL, NULL);
 }
 
 static struct iommu_domain *
@@ -2963,8 +2991,23 @@ arm_smmu_domain_alloc_user(struct device *dev, struct iommu_domain *parent,
 	const struct iommu_hwpt_arm_smmuv3 *user_cfg = user_data;
 	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
 	unsigned type = IOMMU_DOMAIN_UNMANAGED;
+	struct arm_smmu_domain *s2 = NULL;
 
-	return __arm_smmu_domain_alloc(type, master, user_cfg);
+	/*
+	 * The type of the new domain stays at IOMMU_DOMAIN_UNMANAGED, unless a
+	 * valid parent domain is given, turning it to be IOMMU_DOMAIN_NESTED.
+	 * The "stage" of an IOMMU_DOMAIN_UNMANAGED domain, however, is decided
+	 * in the arm_smmu_domain_finalise function that reads user_cfg->flags,
+	 * to set the stage accordingly.
+	 */
+	if (parent) {
+		if (parent->ops != arm_smmu_ops.default_domain_ops)
+			return NULL;
+		type = IOMMU_DOMAIN_NESTED;
+		s2 = to_smmu_domain(parent);
+	}
+
+	return __arm_smmu_domain_alloc(type, s2, master, user_cfg);
 }
 
 static struct iommu_ops arm_smmu_ops = {
