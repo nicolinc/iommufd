@@ -399,11 +399,13 @@ struct iommu_hwpt_vtd_s1 {
  *       Allowed fields: (Refer to "5.2 Stream Table Entry" in SMMUv3 HW Spec)
  *       - word-0: V, S1Fmt, S1ContextPtr, S1CDMax
  *       - word-1: S1DSS, S1CIR, S1COR, S1CSH, S1STALLD
+ * @sid: The user space Stream ID to index the user Stream Table Entry @ste
  *
  * -EIO will be returned if @ste is not legal or contains any non-allowed field.
  */
 struct iommu_hwpt_arm_smmuv3 {
 	__aligned_le64 ste[2];
+	__u32 sid;
 };
 
 /**
@@ -693,6 +695,25 @@ struct iommu_hwpt_vtd_s1_invalidate {
 	__aligned_u64 npages;
 	__u32 flags;
 	__u32 __reserved;
+};
+
+/**
+ * struct iommu_hwpt_arm_smmuv3_invalidate - ARM SMMUv3 cahce invalidation
+ *                                           (IOMMU_HWPT_DATA_ARM_SMMUV3)
+ * @cmd: 128-bit cache invalidation command that runs in SMMU CMDQ
+ *
+ * Supported command list:
+ *     CMDQ_OP_TLBI_NSNH_ALL
+ *     CMDQ_OP_TLBI_NH_VA
+ *     CMDQ_OP_TLBI_NH_VAA
+ *     CMDQ_OP_TLBI_NH_ALL
+ *     CMDQ_OP_TLBI_NH_ASID
+ *     CMDQ_OP_ATC_INV
+ *     CMDQ_OP_CFGI_CD
+ *     CMDQ_OP_CFGI_CD_ALL
+ */
+struct iommu_hwpt_arm_smmuv3_invalidate {
+	__aligned_u64 cmd[2];
 };
 
 /**
