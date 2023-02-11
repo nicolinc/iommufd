@@ -191,6 +191,14 @@ arm_smmu_domain_alloc_nesting(struct device *dev, u32 flags,
 	if (smmu_parent->smmu != master->smmu)
 		return ERR_PTR(-EINVAL);
 
+	/*
+	 * FORCE_SYNC is not set with FEAT_NESTING. Some study of the exact HW
+	 * defect is needed to determine if arm_smmu_viommu_cache_invalidate()
+	 * needs any change to remove this.
+	 */
+	if (WARN_ON(master->smmu->options & ARM_SMMU_OPT_CMDQ_FORCE_SYNC))
+		return ERR_PTR(-EOPNOTSUPP);
+
 	ret = iommu_copy_struct_from_user(&arg, user_data,
 					  IOMMU_HWPT_DATA_ARM_SMMUV3, ste);
 	if (ret)
@@ -212,3 +220,152 @@ arm_smmu_domain_alloc_nesting(struct device *dev, u32 flags,
 
 	return &nested_domain->domain;
 }
+
+static int arm_smmu_convert_viommu_vdev_id(struct iommufd_viommu *viommu,
+					   u32 vdev_id, u32 *sid)
+{
+	struct arm_smmu_master *master;
+	struct device *dev;
+
+	dev = vdev_to_dev(xa_load(&viommu->vdevs, (unsigned long)vdev_id));
+	if (!dev)
+		return -EIO;
+	master = dev_iommu_priv_get(dev);
+
+	if (sid)
+		*sid = master->streams[0].id;
+	return 0;
+}
+
+/*
+ * Convert, in place, the raw invalidation command into an internal format that
+ * can be passed to arm_smmu_cmdq_issue_cmdlist(). Internally commands are
+ * stored in CPU endian.
+ *
+ * Enforce the VMID or the SID on the command.
+ */
+static int
+arm_smmu_convert_user_cmd(struct arm_smmu_domain *s2_parent,
+			  struct iommufd_viommu *viommu,
+			  struct iommu_hwpt_arm_smmuv3_invalidate *cmd)
+{
+	u16 vmid = s2_parent->s2_cfg.vmid;
+
+	cmd->cmd[0] = le64_to_cpu(cmd->cmd[0]);
+	cmd->cmd[1] = le64_to_cpu(cmd->cmd[1]);
+
+	switch (cmd->cmd[0] & CMDQ_0_OP) {
+	case CMDQ_OP_TLBI_NSNH_ALL:
+		/* Convert to NH_ALL */
+		cmd->cmd[0] = CMDQ_OP_TLBI_NH_ALL |
+			      FIELD_PREP(CMDQ_TLBI_0_VMID, vmid);
+		cmd->cmd[1] = 0;
+		break;
+	case CMDQ_OP_TLBI_NH_VA:
+	case CMDQ_OP_TLBI_NH_VAA:
+	case CMDQ_OP_TLBI_NH_ALL:
+	case CMDQ_OP_TLBI_NH_ASID:
+		cmd->cmd[0] &= ~CMDQ_TLBI_0_VMID;
+		cmd->cmd[0] |= FIELD_PREP(CMDQ_TLBI_0_VMID, vmid);
+		break;
+	case CMDQ_OP_ATC_INV:
+	case CMDQ_OP_CFGI_CD:
+	case CMDQ_OP_CFGI_CD_ALL:
+		if (viommu) {
+			u32 sid, vsid = FIELD_GET(CMDQ_CFGI_0_SID, cmd->cmd[0]);
+
+			if (arm_smmu_convert_viommu_vdev_id(viommu, vsid, &sid))
+				return -EIO;
+			cmd->cmd[0] &= ~CMDQ_CFGI_0_SID;
+			cmd->cmd[0] |= FIELD_PREP(CMDQ_CFGI_0_SID, sid);
+			break;
+		}
+		fallthrough;
+	default:
+		return -EIO;
+	}
+	return 0;
+}
+
+static inline bool
+arm_smmu_must_lock_vdev_id(struct iommu_hwpt_arm_smmuv3_invalidate *cmds,
+			   unsigned int num_cmds)
+{
+	int i;
+
+	for (i = 0; i < num_cmds; i++) {
+		switch (cmds[i].cmd[0] & CMDQ_0_OP) {
+		case CMDQ_OP_ATC_INV:
+		case CMDQ_OP_CFGI_CD:
+		case CMDQ_OP_CFGI_CD_ALL:
+			return true;
+		default:
+			continue;
+		}
+	}
+	return false;
+}
+
+
+static int arm_smmu_viommu_cache_invalidate(struct iommufd_viommu *viommu,
+					    struct iommu_user_data_array *array)
+{
+	struct iommu_domain *domain = iommufd_viommu_to_parent_domain(viommu);
+	struct arm_smmu_domain *s2_parent = to_smmu_domain(domain);
+	struct arm_smmu_device *smmu = s2_parent->smmu;
+	struct iommu_hwpt_arm_smmuv3_invalidate *last;
+	struct iommu_hwpt_arm_smmuv3_invalidate *cmds;
+	struct iommu_hwpt_arm_smmuv3_invalidate *cur;
+	struct iommu_hwpt_arm_smmuv3_invalidate *end;
+	bool must_lock = false;
+	int ret;
+
+	cmds = kcalloc(array->entry_num, sizeof(*cmds), GFP_KERNEL);
+	if (!cmds)
+		return -ENOMEM;
+	cur = cmds;
+	end = cmds + array->entry_num;
+
+	static_assert(sizeof(*cmds) == 2 * sizeof(u64));
+	ret = iommu_copy_struct_from_full_user_array(
+		cmds, sizeof(*cmds), array,
+		IOMMU_HWPT_INVALIDATE_DATA_ARM_SMMUV3);
+	if (ret)
+		goto out;
+
+	if (viommu)
+		must_lock = arm_smmu_must_lock_vdev_id(cmds, array->entry_num);
+	if (must_lock)
+		down_read(&viommu->vdevs_rwsem);
+
+	last = cmds;
+	while (cur != end) {
+		ret = arm_smmu_convert_user_cmd(s2_parent, viommu, cur);
+		if (ret)
+			goto out;
+
+		/* FIXME work in blocks of CMDQ_BATCH_ENTRIES and copy each block? */
+		cur++;
+		if (cur != end && (cur - last) != CMDQ_BATCH_ENTRIES - 1)
+			continue;
+
+		/* FIXME always uses the main cmdq rather than trying to group by type */
+		ret = arm_smmu_cmdq_issue_cmdlist(smmu, &smmu->cmdq, last->cmd,
+						  cur - last, true);
+		if (ret) {
+			cur--;
+			goto out;
+		}
+		last = cur;
+	}
+out:
+	if (must_lock)
+		up_read(&viommu->vdevs_rwsem);
+	array->entry_num = cur - cmds;
+	kfree(cmds);
+	return ret;
+}
+
+const struct iommufd_viommu_ops arm_smmu_default_viommu_ops = {
+	.cache_invalidate = arm_smmu_viommu_cache_invalidate,
+};
