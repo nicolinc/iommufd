@@ -2285,7 +2285,7 @@ static int arm_smmu_domain_finalise_s2(struct arm_smmu_domain *smmu_domain,
 	return 0;
 }
 
-static int arm_smmu_domain_finalise(struct iommu_domain *domain)
+static int arm_smmu_domain_finalise(struct iommu_domain *domain, bool flag_s2)
 {
 	int ret;
 	unsigned long ias, oas;
@@ -2301,6 +2301,11 @@ static int arm_smmu_domain_finalise(struct iommu_domain *domain)
 		smmu_domain->stage = ARM_SMMU_DOMAIN_BYPASS;
 		return 0;
 	}
+
+	if (flag_s2 && !(smmu->features & ARM_SMMU_FEAT_TRANS_S2))
+		return -EINVAL;
+	if (flag_s2)
+		smmu_domain->stage = ARM_SMMU_DOMAIN_S2;
 
 	/* Restrict the stage to what we can actually support */
 	if (!(smmu->features & ARM_SMMU_FEAT_TRANS_S1))
@@ -2587,7 +2592,7 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 
 	if (!smmu_domain->smmu) {
 		smmu_domain->smmu = smmu;
-		ret = arm_smmu_domain_finalise(domain);
+		ret = arm_smmu_domain_finalise(domain, false);
 		if (ret)
 			smmu_domain->smmu = NULL;
 	} else if (smmu_domain->smmu != smmu)
