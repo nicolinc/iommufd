@@ -706,6 +706,7 @@ struct arm_smmu_device {
 
 struct arm_smmu_stream {
 	u32				id;
+	u32				id_user;
 	struct arm_smmu_master		*master;
 	struct rb_node			node;
 };
@@ -751,6 +752,9 @@ struct arm_smmu_domain {
 	struct list_head		devices;
 	spinlock_t			devices_lock;
 
+	/* List of struct arm_smmu_stream indexed by user space Stream ID */
+	struct xarray			streams_user;
+
 	struct mmu_notifier		mmu_notifier;
 	bool				btm_invalidation;
 };
@@ -760,6 +764,7 @@ struct arm_smmu_nested_domain {
 	struct arm_smmu_domain *s2_parent;
 
 	__le64 ste[2];
+	u32 sid_user;
 };
 
 struct arm_smmu_master_domain {
