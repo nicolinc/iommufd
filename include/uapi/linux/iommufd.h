@@ -638,21 +638,19 @@ struct iommu_hwpt_invalidate_intel_vtd {
 
 /**
  * struct iommu_hwpt_invalidate_arm_smmuv3 - ARM SMMUv3 cahce invalidation info
- * @flags: boolean attributes of cache invalidation command
- * @opcode: opcode of cache invalidation command
- * @ssid: SubStream ID
- * @granule_size: page/block size of the mapping in bytes
- * @range: IOVA range to invalidate
+ * @cmdq_base: User space base virtual address of user command queue
+ * @cmdq_entry_size: Entry size of user command queue
+ * @cmdq_log2size: User command queue size as log 2 (entries)
+ *                 Refer to LOG2SIZE field of CMD_BASE regisiter
+ * @cmdq_prod: Producer index of user command queue
+ * @cmdq_cons: Consumer index of user command queue
  */
 struct iommu_hwpt_invalidate_arm_smmuv3 {
-#define IOMMU_SMMUV3_CMDQ_TLBI_VA_LEAF	(1 << 0)
-	__u64 flags;
-	__u8 opcode;
-	__u8 padding[3];
-	__u32 asid;
-	__u32 ssid;
-	__u32 granule_size;
-	struct iommu_iova_range range;
+	__u64 cmdq_base;
+	__u32 cmdq_entry_size;
+	__u32 cmdq_log2size;
+	__u32 cmdq_prod;
+	__u32 cmdq_cons;
 };
 
 /**

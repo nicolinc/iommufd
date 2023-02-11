@@ -2878,10 +2878,123 @@ static void arm_smmu_remove_dev_pasid(struct device *dev, ioasid_t pasid)
 	arm_smmu_sva_remove_dev_pasid(domain, dev, pasid);
 }
 
+static int arm_smmu_fix_user_cmd(struct arm_smmu_domain *smmu_domain, u64 *cmd)
+{
+	struct arm_smmu_stream *stream;
+
+	switch (*cmd & CMDQ_0_OP) {
+	case CMDQ_OP_TLBI_NSNH_ALL:
+		*cmd &= ~CMDQ_0_OP;
+		*cmd |= CMDQ_OP_TLBI_NH_ALL;
+		fallthrough;
+	case CMDQ_OP_TLBI_NH_VA:
+	case CMDQ_OP_TLBI_NH_VAA:
+	case CMDQ_OP_TLBI_NH_ALL:
+	case CMDQ_OP_TLBI_NH_ASID:
+		*cmd &= ~CMDQ_TLBI_0_VMID;
+		*cmd |= FIELD_PREP(CMDQ_TLBI_0_VMID,
+				   smmu_domain->s2->s2_cfg.vmid);
+		break;
+	case CMDQ_OP_ATC_INV:
+	case CMDQ_OP_CFGI_CD:
+	case CMDQ_OP_CFGI_CD_ALL:
+		xa_lock(&smmu_domain->smmu->user_streams);
+		stream = xa_load(&smmu_domain->smmu->user_streams,
+				 FIELD_GET(CMDQ_CFGI_0_SID, *cmd));
+		xa_unlock(&smmu_domain->smmu->user_streams);
+		if (!stream)
+			return -ENODEV;
+		*cmd &= ~CMDQ_CFGI_0_SID;
+		*cmd |= FIELD_PREP(CMDQ_CFGI_0_SID, stream->id);
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+	pr_debug("Fixed user CMD: %016llx : %016llx\n", cmd[1], cmd[0]);
+
+	return 0;
+}
+
+static int arm_smmu_cache_invalidate_user(struct iommu_domain *domain,
+					   void *user_data)
+{
+	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+	struct iommu_hwpt_invalidate_arm_smmuv3 *inv = user_data;
+	struct arm_smmu_device *smmu = smmu_domain->smmu;
+	struct arm_smmu_queue q = {
+		.llq = {
+			.prod = inv->cmdq_prod,
+			.cons = inv->cmdq_cons,
+			.max_n_shift = inv->cmdq_log2size,
+		},
+		.ent_dwords = inv->cmdq_entry_size / sizeof(u64),
+	};
+	int ncmds = inv->cmdq_prod - inv->cmdq_cons;
+	unsigned int nents = 1 << q.llq.max_n_shift;
+	size_t qsz = nents * inv->cmdq_entry_size;
+	unsigned long npages = qsz >> PAGE_SHIFT;
+	struct page **pages;
+	long pinned;
+	u64 *cmds;
+	int i = 0;
+	int ret;
+
+	if (!smmu || !smmu_domain->s2 || domain->type != IOMMU_DOMAIN_NESTED)
+		return -EINVAL;
+	if (q.ent_dwords != CMDQ_ENT_DWORDS)
+		return -EINVAL;
+	if (queue_empty(&q.llq))
+		return -EINVAL;
+	WARN_ON(q.llq.max_n_shift > smmu->cmdq.q.llq.max_n_shift);
+
+	pages = kcalloc(npages, sizeof(*pages), GFP_KERNEL);
+	if (!pages)
+		return -ENOMEM;
+
+	if (ncmds <= 0)
+		ncmds += nents;
+	cmds = kcalloc(ncmds, inv->cmdq_entry_size, GFP_KERNEL);
+	if (!cmds) {
+		ret = -ENOMEM;
+		goto out_free_pages;
+	}
+
+	pinned = get_user_pages(inv->cmdq_base, npages, FOLL_GET, pages, NULL);
+	if (pinned != npages) {
+		ret = -EFAULT;
+		if (pinned < 0)
+			pinned = 0;
+		goto out_put_page;
+	}
+	q.base = page_to_virt(pages[0]) + (inv->cmdq_base & (PAGE_SIZE - 1));
+
+	do {
+		u64 *cmd = &cmds[i * CMDQ_ENT_DWORDS];
+
+		queue_read(cmd, Q_ENT(&q, q.llq.cons), q.ent_dwords);
+		ret = arm_smmu_fix_user_cmd(smmu_domain, cmd);
+		if (ret && ret != -EOPNOTSUPP)
+			goto out_put_page;
+		if (!ret)
+			i++;
+		queue_inc_cons(&q.llq);
+	} while (!queue_empty(&q.llq));
+
+	ret = arm_smmu_cmdq_issue_cmdlist(smmu, cmds, i, true);
+out_put_page:
+	for (i = 0; i < pinned; i++)
+		put_page(pages[i]);
+	kfree(cmds);
+out_free_pages:
+	kfree(pages);
+	return ret;
+}
+
 static const struct iommu_domain_ops arm_smmu_nested_domain_ops = {
 	.attach_dev		= arm_smmu_attach_dev,
 	.free			= arm_smmu_domain_free,
 	.get_msi_mapping_domain	= arm_smmu_get_msi_mapping_domain,
+	.cache_invalidate_user	= arm_smmu_cache_invalidate_user,
 };
 
 static struct iommu_domain *
