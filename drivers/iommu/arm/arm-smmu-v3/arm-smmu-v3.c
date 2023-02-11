@@ -81,7 +81,7 @@ static struct arm_smmu_option_prop arm_smmu_options[] = {
 
 static void arm_smmu_rmr_install_bypass_ste(struct arm_smmu_device *smmu);
 static int arm_smmu_domain_finalise(struct arm_smmu_domain *smmu_domain,
-				    struct arm_smmu_device *smmu);
+				    struct arm_smmu_device *smmu, u32 flags);
 static int arm_smmu_alloc_cd_tables(struct arm_smmu_master *master);
 
 static void parse_driver_options(struct arm_smmu_device *smmu)
@@ -2239,7 +2239,7 @@ struct arm_smmu_domain *arm_smmu_domain_alloc(void)
 
 	smmu_domain = kzalloc(sizeof(*smmu_domain), GFP_KERNEL);
 	if (!smmu_domain)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	mutex_init(&smmu_domain->init_mutex);
 	INIT_LIST_HEAD(&smmu_domain->devices);
@@ -2248,13 +2248,24 @@ struct arm_smmu_domain *arm_smmu_domain_alloc(void)
 	return smmu_domain;
 }
 
-static struct iommu_domain *arm_smmu_domain_alloc_paging(struct device *dev)
+static struct iommu_ops arm_smmu_ops;
+
+static struct iommu_domain *
+__arm_smmu_domain_alloc_paging(struct device *dev, u32 flags)
 {
 	struct arm_smmu_domain *smmu_domain;
 
 	smmu_domain = arm_smmu_domain_alloc();
 	if (!smmu_domain)
-		return NULL;
+		return ERR_CAST(smmu_domain);
+	/*
+	 * Set the default type to IOMMU_DOMAIN_UNMANAGED for domain_alloc_user
+	 * op. Note that the type via a domain_alloc_paging op will be reset in
+	 * the iommu core after this new domain is returned here.
+	 */
+	smmu_domain->domain.type = IOMMU_DOMAIN_UNMANAGED;
+	smmu_domain->domain.ops = arm_smmu_ops.default_domain_ops;
+	smmu_domain->domain.pgsize_bitmap = arm_smmu_ops.pgsize_bitmap;
 
 	/*
 	 * Allocate the domain and initialise some of its data structures.
@@ -2264,13 +2275,41 @@ static struct iommu_domain *arm_smmu_domain_alloc_paging(struct device *dev)
 
 	if (dev) {
 		struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+		int ret;
 
-		if (arm_smmu_domain_finalise(smmu_domain, master->smmu)) {
+		ret = arm_smmu_domain_finalise(smmu_domain, master->smmu, flags);
+		if (ret) {
 			kfree(smmu_domain);
-			return NULL;
+			return ERR_PTR(ret);
 		}
 	}
 	return &smmu_domain->domain;
+}
+
+static struct iommu_domain *arm_smmu_domain_alloc_paging(struct device *dev)
+{
+	struct iommu_domain *domain = __arm_smmu_domain_alloc_paging(dev, 0);
+
+	return IS_ERR(domain) ? NULL : domain;
+}
+
+static struct iommu_domain *
+arm_smmu_domain_alloc_user(struct device *dev, u32 flags,
+			   struct iommu_domain *parent,
+			   const struct iommu_user_data *user_data)
+{
+	/* must be a paging domain */
+	if (!parent) {
+		const u32 paging_flags = IOMMU_HWPT_ALLOC_NEST_PARENT;
+
+		if (user_data)
+			return ERR_PTR(-EINVAL);
+		if (flags & ~paging_flags)
+			return ERR_PTR(-EOPNOTSUPP);
+		return __arm_smmu_domain_alloc_paging(dev, flags);
+	}
+
+	return ERR_PTR(-EOPNOTSUPP);
 }
 
 int arm_smmu_domain_alloc_id(struct arm_smmu_device *smmu,
@@ -2336,13 +2375,19 @@ static void arm_smmu_domain_free(struct iommu_domain *domain)
 }
 
 static int arm_smmu_domain_finalise(struct arm_smmu_domain *smmu_domain,
-				    struct arm_smmu_device *smmu)
+				    struct arm_smmu_device *smmu, u32 flags)
 {
 	int ret;
 	unsigned long ias, oas;
 	enum io_pgtable_fmt fmt;
 	struct io_pgtable_cfg pgtbl_cfg;
 	struct io_pgtable_ops *pgtbl_ops;
+
+	if (flags & IOMMU_HWPT_ALLOC_NEST_PARENT) {
+		if (!(smmu->features & ARM_SMMU_FEAT_TRANS_S2))
+			return -EINVAL;
+		smmu_domain->stage = ARM_SMMU_DOMAIN_S2;
+	}
 
 	/* Restrict the stage to what we can actually support */
 	if (!(smmu->features & ARM_SMMU_FEAT_TRANS_S1))
@@ -2664,7 +2709,7 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 	mutex_lock(&smmu_domain->init_mutex);
 
 	if (!smmu_domain->smmu) {
-		ret = arm_smmu_domain_finalise(smmu_domain, smmu);
+		ret = arm_smmu_domain_finalise(smmu_domain, smmu, 0);
 	} else if (smmu_domain->smmu != smmu)
 		ret = -EINVAL;
 
@@ -2740,7 +2785,7 @@ static int arm_smmu_s1_set_dev_pasid(struct iommu_domain *domain,
 
 	mutex_lock(&smmu_domain->init_mutex);
 	if (!smmu_domain->smmu)
-		ret = arm_smmu_domain_finalise(smmu_domain, smmu);
+		ret = arm_smmu_domain_finalise(smmu_domain, smmu, 0);
 	else if (smmu_domain->smmu != smmu)
 		ret = -EINVAL;
 	mutex_unlock(&smmu_domain->init_mutex);
@@ -3145,8 +3190,6 @@ static void arm_smmu_remove_master(struct arm_smmu_master *master)
 	kfree(master->streams);
 }
 
-static struct iommu_ops arm_smmu_ops;
-
 static struct iommu_device *arm_smmu_probe_device(struct device *dev)
 {
 	int ret;
@@ -3342,6 +3385,7 @@ static struct iommu_ops arm_smmu_ops = {
 	.capable		= arm_smmu_capable,
 	.hw_info		= arm_smmu_hw_info,
 	.domain_alloc_paging    = arm_smmu_domain_alloc_paging,
+	.domain_alloc_user	= arm_smmu_domain_alloc_user,
 	.domain_alloc_sva       = arm_smmu_sva_domain_alloc,
 	.probe_device		= arm_smmu_probe_device,
 	.release_device		= arm_smmu_release_device,
