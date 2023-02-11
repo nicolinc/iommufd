@@ -1504,7 +1504,7 @@ static void arm_smmu_clear_strtab_ent(struct arm_smmu_master *master,
 static void arm_smmu_setup_strtab_ent(struct arm_smmu_master *master,
 				      __le64 *ste)
 {
-	if (master->cd_table.cdtab) {
+	if (master->cd_table.cdtab_dma) {
 		arm_smmu_setup_ste_by_cdtab(master, ste);
 		arm_smmu_setup_ste_by_master(master, ste);
 	} else if (master->domain->stage == ARM_SMMU_DOMAIN_S2) {
@@ -2257,6 +2257,55 @@ static int arm_smmu_domain_finalise_s2(struct arm_smmu_domain *smmu_domain,
 	return 0;
 }
 
+static int
+arm_smmu_domain_finalise_nested(struct arm_smmu_master *master,
+				const struct iommu_hwpt_arm_smmuv3 *user_cfg)
+{
+	struct arm_smmu_device *smmu = master->smmu;
+	bool feat_2lvl_cdtab = smmu->features & ARM_SMMU_FEAT_2_LVL_CDTAB;
+	struct device *dev = master->dev;
+	void __user *event_user = NULL;
+	u8 event = EVT_ID_BAD_STE;
+
+	if (user_cfg->out_event_uptr)
+		event_user = u64_to_user_ptr(user_cfg->out_event_uptr);
+
+	if (!(smmu->features & ARM_SMMU_FEAT_NESTING)) {
+		if (event_user && copy_to_user(event_user, &event, sizeof(event)))
+			return -EFAULT;
+		return -EINVAL;
+	}
+
+	if (!feat_2lvl_cdtab && user_cfg->s1fmt != STRTAB_STE_0_S1FMT_LINEAR) {
+		dev_dbg(dev, "unsupported format (0x%x)\n", user_cfg->s1fmt);
+		if (event_user && copy_to_user(event_user, &event, sizeof(event)))
+			return -EFAULT;
+		return -EINVAL;
+	}
+
+	if (user_cfg->s1cdmax > master->ssid_bits) {
+		dev_dbg(dev, "s1cdmax (%d-bit) is out of range (%d-bit)\n",
+			user_cfg->s1cdmax, master->ssid_bits);
+		if (event_user && copy_to_user(event_user, &event, sizeof(event)))
+			return -EFAULT;
+		return -EINVAL;
+	}
+
+	if (user_cfg->s1ctxptr & ~GENMASK_ULL(smmu->ias, 0)) {
+		dev_dbg(dev, "s1ctxptr (0x%llx) is out of range (%lu-bit)\n",
+			user_cfg->s1ctxptr, smmu->ias);
+		if (event_user && copy_to_user(event_user, &event, sizeof(event)))
+			return -EFAULT;
+		return -EINVAL;
+	}
+
+	master->cd_table.s1dss = user_cfg->s1dss;
+	master->cd_table.s1fmt = user_cfg->s1fmt;
+	master->cd_table.s1cdmax = user_cfg->s1cdmax;
+	master->cd_table.cdtab_dma = user_cfg->s1ctxptr;
+	return 0;
+}
+
 static int arm_smmu_domain_finalise(struct iommu_domain *domain, bool flag_s2)
 {
 	int ret;
@@ -2505,6 +2554,8 @@ static void arm_smmu_detach_dev(struct arm_smmu_master *master)
 	 */
 	if (smmu_domain->stage == ARM_SMMU_DOMAIN_S1 && master->cd_table.cdtab)
 		arm_smmu_write_ctx_desc(master, IOMMU_NO_PASID, NULL);
+	if (smmu_domain->stage == ARM_SMMU_DOMAIN_NESTED)
+		master->cd_table.cdtab_dma = 0;
 }
 
 static bool arm_smmu_domain_needs_cdtab(struct arm_smmu_domain *smmu_domain,
@@ -3050,9 +3101,16 @@ static void arm_smmu_remove_dev_pasid(struct device *dev, ioasid_t pasid)
 	arm_smmu_sva_remove_dev_pasid(domain, dev, pasid);
 }
 
+static const struct iommu_domain_ops arm_smmu_nested_domain_ops = {
+	.attach_dev		= arm_smmu_attach_dev,
+	.free			= arm_smmu_domain_free,
+};
+
 /**
  * __arm_smmu_domain_alloc - Allocate a customizable iommu_domain
  * @type: Type of the new iommu_domain, in form of IOMMU_DOMAIN_*
+ * @s2: Optional pointer to an stage-2 domain, used by an stage-1 nested domain
+ *      allocation, pairing with a valid user_cfg data to configure the domain.
  * @master: Optional master pointer for the allocation. If given, this will be
  *          used to call arm_smmu_domain_finalise at the end of the allocation.
  *          Otherwise, arm_smmu_domain_finalise will be done when the domain is
@@ -3071,6 +3129,7 @@ static void arm_smmu_remove_dev_pasid(struct device *dev, ioasid_t pasid)
  */
 static struct iommu_domain *
 __arm_smmu_domain_alloc(unsigned type,
+			struct arm_smmu_domain *s2,
 			struct arm_smmu_master *master, u32 flags,
 			const struct iommu_hwpt_arm_smmuv3 *user_cfg)
 {
@@ -3083,8 +3142,12 @@ __arm_smmu_domain_alloc(unsigned type,
 		return arm_smmu_sva_domain_alloc();
 
 	if (type != IOMMU_DOMAIN_UNMANAGED &&
+	    type != IOMMU_DOMAIN_NESTED &&
 	    type != IOMMU_DOMAIN_DMA &&
 	    type != IOMMU_DOMAIN_IDENTITY)
+		return NULL;
+
+	if (s2 && (s2->stage != ARM_SMMU_DOMAIN_S2 || !user_cfg))
 		return NULL;
 
 	/*
@@ -3094,10 +3157,14 @@ __arm_smmu_domain_alloc(unsigned type,
 	smmu_domain = kzalloc(sizeof(*smmu_domain), GFP_KERNEL);
 	if (!smmu_domain)
 		return NULL;
+	smmu_domain->s2 = s2;
 	domain = &smmu_domain->domain;
 
 	domain->type = type;
-	domain->ops = arm_smmu_ops.default_domain_ops;
+	if (s2)
+		domain->ops = &arm_smmu_nested_domain_ops;
+	else
+		domain->ops = arm_smmu_ops.default_domain_ops;
 
 	mutex_init(&smmu_domain->init_mutex);
 	INIT_LIST_HEAD(&smmu_domain->devices);
@@ -3106,7 +3173,10 @@ __arm_smmu_domain_alloc(unsigned type,
 
 	if (master) {
 		smmu_domain->smmu = master->smmu;
-		ret = arm_smmu_domain_finalise(domain, master, flag_s2, user_cfg);
+		if (s2)
+			ret = arm_smmu_domain_finalise_nested(master, user_cfg);
+		else
+			ret = arm_smmu_domain_finalise(domain, flag_s2);
 		if (ret) {
 			kfree(smmu_domain);
 			return NULL;
@@ -3118,7 +3188,7 @@ __arm_smmu_domain_alloc(unsigned type,
 
 static struct iommu_domain *arm_smmu_domain_alloc(unsigned type)
 {
-	return __arm_smmu_domain_alloc(type, NULL, 0, NULL);
+	return __arm_smmu_domain_alloc(type, NULL, NULL, 0, NULL);
 }
 
 static struct iommu_domain *
@@ -3131,6 +3201,7 @@ arm_smmu_domain_alloc_user(struct device *dev, u32 flags,
 	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
 	struct iommu_hwpt_arm_smmuv3 data, *user_cfg = NULL;
 	unsigned type = IOMMU_DOMAIN_UNMANAGED;
+	struct arm_smmu_domain *s2 = NULL;
 
 	if (hwpt_type != IOMMU_HWPT_TYPE_DEFAULT &&
 	    hwpt_type != IOMMU_HWPT_TYPE_ARM_SMMUV3)
@@ -3146,7 +3217,21 @@ arm_smmu_domain_alloc_user(struct device *dev, u32 flags,
 		user_cfg = &data;
 	}
 
-	return __arm_smmu_domain_alloc(type, master, flags, user_cfg);
+	/*
+	 * The type of the new domain stays at IOMMU_DOMAIN_UNMANAGED, unless a
+	 * valid parent domain is given, turning it to be IOMMU_DOMAIN_NESTED.
+	 * The "stage" of an IOMMU_DOMAIN_UNMANAGED domain, however, is decided
+	 * in the arm_smmu_domain_finalise function that reads user_cfg->flags,
+	 * to set the stage accordingly.
+	 */
+	if (parent) {
+		if (parent->ops != arm_smmu_ops.default_domain_ops)
+			return ERR_PTR(-EINVAL);
+		type = IOMMU_DOMAIN_NESTED;
+		s2 = to_smmu_domain(parent);
+	}
+
+	return __arm_smmu_domain_alloc(type, s2, master, flags, user_cfg);
 }
 
 static struct iommu_ops arm_smmu_ops = {
