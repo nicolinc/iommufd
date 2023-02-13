@@ -253,6 +253,8 @@ struct iommufd_hw_pagetable {
 struct iommufd_hw_pagetable *
 iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 			   struct device *dev);
+void iommufd_hw_pagetable_finalize(struct iommufd_ctx *ictx,
+				   struct iommufd_hw_pagetable *hwpt);
 void iommufd_hw_pagetable_destroy(struct iommufd_object *obj);
 
 void iommufd_device_destroy(struct iommufd_object *obj);
