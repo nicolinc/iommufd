@@ -196,6 +196,7 @@ static bool iommufd_hw_pagetable_has_group(struct iommufd_hw_pagetable *hwpt,
 	return false;
 }
 
+/* On success this consumes a hwpt reference from the caller */
 static int iommufd_device_do_attach(struct iommufd_device *idev,
 				    struct iommufd_hw_pagetable *hwpt)
 {
@@ -249,7 +250,7 @@ static int iommufd_device_do_attach(struct iommufd_device *idev,
 	}
 
 	idev->hwpt = hwpt;
-	refcount_inc(&hwpt->obj.users);
+	/* The HWPT reference from the caller is moved to this list */
 	list_add(&idev->devices_item, &hwpt->devices);
 	mutex_unlock(&hwpt->devices_lock);
 	return 0;
@@ -284,7 +285,15 @@ static int iommufd_device_auto_get_domain(struct iommufd_device *idev,
 		if (!hwpt->auto_domain)
 			continue;
 
+		if (!iommufd_lock_obj(&hwpt->obj))
+			continue;
 		rc = iommufd_device_do_attach(idev, hwpt);
+		if (rc) {
+			iommufd_put_object(&hwpt->obj);
+		} else {
+			/* Our reference was passed into iommufd_device_do_attach() */
+			iommufd_ref_to_users(&hwpt->obj);
+		}
 
 		/*
 		 * -EINVAL means the domain is incompatible with the device.
@@ -303,9 +312,13 @@ static int iommufd_device_auto_get_domain(struct iommufd_device *idev,
 	}
 	hwpt->auto_domain = true;
 
+	refcount_inc(&hwpt->obj.users);
 	rc = iommufd_device_do_attach(idev, hwpt);
-	if (rc)
+	if (rc) {
+		refcount_dec(&hwpt->obj.users);
 		goto out_abort;
+	}
+
 	list_add_tail(&hwpt->hwpt_item, &ioas->hwpt_list);
 
 	mutex_unlock(&ioas->mutex);
@@ -348,7 +361,11 @@ int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id)
 		rc = iommufd_device_do_attach(idev, hwpt);
 		if (rc)
 			goto out_put_pt_obj;
-		break;
+
+		/* Our reference was passed into iommufd_device_do_attach() */
+		iommufd_ref_to_users(pt_obj);
+		refcount_inc(&idev->obj.users);
+		return 0;
 	}
 	case IOMMUFD_OBJ_IOAS: {
 		struct iommufd_ioas *ioas =
@@ -357,16 +374,14 @@ int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id)
 		rc = iommufd_device_auto_get_domain(idev, ioas);
 		if (rc)
 			goto out_put_pt_obj;
-		break;
+		*pt_id = idev->hwpt->obj.id;
+		refcount_inc(&idev->obj.users);
+		goto out_put_pt_obj;
 	}
 	default:
 		rc = -EINVAL;
 		goto out_put_pt_obj;
 	}
-
-	refcount_inc(&idev->obj.users);
-	*pt_id = idev->hwpt->obj.id;
-	rc = 0;
 
 out_put_pt_obj:
 	iommufd_put_object(pt_obj);
