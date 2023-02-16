@@ -8,6 +8,8 @@
 #include "io_pagetable.h"
 #include "iommufd_private.h"
 
+MODULE_IMPORT_NS(IOMMUFD_INTERNAL);
+
 static bool allow_unsafe_interrupts;
 module_param(allow_unsafe_interrupts, bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(
@@ -347,14 +349,94 @@ static int iommufd_device_do_attach(struct iommufd_device *idev,
 	return rc;
 }
 
+static struct iommufd_hw_pagetable *
+iommufd_device_do_replace_locked(struct iommufd_device *idev,
+				 struct iommufd_hw_pagetable *hwpt)
+{
+	struct iommufd_hw_pagetable *old_hwpt;
+	int rc;
+
+	lockdep_assert_held(&idev->igroup->lock);
+
+	/* Try to upgrade the domain we have */
+	if (idev->enforce_cache_coherency) {
+		rc = iommufd_hw_pagetable_enforce_cc(hwpt);
+		if (rc)
+			return ERR_PTR(-EINVAL);
+	}
+
+	rc = iommufd_device_setup_msi(idev, hwpt);
+	if (rc)
+		return ERR_PTR(rc);
+
+	if (hwpt->ioas != idev->igroup->hwpt->ioas) {
+		rc = iopt_table_enforce_group_resv_regions(
+			&hwpt->ioas->iopt, idev->igroup->group, NULL);
+		if (rc)
+			return ERR_PTR(rc);
+	}
+
+	rc = iommu_group_replace_domain(idev->igroup->group, hwpt->domain);
+	if (rc)
+		goto err_unresv;
+
+	old_hwpt = idev->igroup->hwpt;
+	if (hwpt->ioas != idev->igroup->hwpt->ioas)
+		iopt_remove_reserved_iova(&old_hwpt->ioas->iopt,
+					  idev->igroup->group);
+
+	idev->igroup->hwpt = hwpt;
+	refcount_inc(&hwpt->obj.users);
+	return old_hwpt;
+err_unresv:
+	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->igroup->group);
+	return ERR_PTR(rc);
+}
+
+static int iommufd_device_do_replace(struct iommufd_device *idev,
+				     struct iommufd_hw_pagetable *hwpt)
+{
+	struct iommufd_hw_pagetable *old_hwpt = NULL;
+	int rc;
+
+	mutex_lock(&idev->igroup->lock);
+	if (idev->igroup->hwpt == hwpt) {
+		rc = 0;
+		goto out_unlock;
+	}
+
+	if (!idev->igroup->hwpt) {
+		rc = iommufd_hw_pagetable_attach(hwpt, idev);
+		goto out_unlock;
+	}
+
+	old_hwpt = iommufd_device_do_replace_locked(idev, hwpt);
+	if (IS_ERR(old_hwpt)) {
+		rc = PTR_ERR(old_hwpt);
+		goto out_unlock;
+	}
+	mutex_unlock(&idev->igroup->lock);
+	iommufd_hw_pagetable_put(idev->ictx, old_hwpt);
+	return 0;
+
+out_unlock:
+	mutex_unlock(&idev->igroup->lock);
+	return rc;
+}
+
+typedef int (*attach_fn)(struct iommufd_device *idev,
+			 struct iommufd_hw_pagetable *hwpt);
+
 /*
  * When automatically managing the domains we search for a compatible domain in
  * the iopt and if one is found use it, otherwise create a new domain.
  * Automatic domain selection will never pick a manually created domain.
  */
 static int iommufd_device_auto_get_domain(struct iommufd_device *idev,
-					  struct iommufd_ioas *ioas, u32 *pt_id)
+					  struct iommufd_ioas *ioas, u32 *pt_id,
+					  attach_fn do_attach)
 {
+	bool immediate_attach = do_attach == iommufd_device_do_attach;
 	struct iommufd_hw_pagetable *hwpt;
 	int rc;
 
@@ -370,7 +452,7 @@ static int iommufd_device_auto_get_domain(struct iommufd_device *idev,
 
 		if (!iommufd_lock_obj(&hwpt->obj))
 			continue;
-		rc = iommufd_device_do_attach(idev, hwpt);
+		rc = (*do_attach)(idev, hwpt);
 		iommufd_put_object(&hwpt->obj);
 
 		/*
@@ -384,19 +466,73 @@ static int iommufd_device_auto_get_domain(struct iommufd_device *idev,
 		goto out_unlock;
 	}
 
-	hwpt = iommufd_hw_pagetable_alloc(idev->ictx, ioas, idev, true);
+	hwpt = iommufd_hw_pagetable_alloc(idev->ictx, ioas, idev,
+					  immediate_attach);
 	if (IS_ERR(hwpt)) {
 		rc = PTR_ERR(hwpt);
 		goto out_unlock;
 	}
+
+	if (!immediate_attach) {
+		rc = (*do_attach)(idev, hwpt);
+		if (rc)
+			goto out_abort;
+	}
+
 	hwpt->auto_domain = true;
 	*pt_id = hwpt->obj.id;
 
 	mutex_unlock(&ioas->mutex);
 	iommufd_object_finalize(idev->ictx, &hwpt->obj);
 	return 0;
+
+out_abort:
+	iommufd_object_abort_and_destroy(idev->ictx, &hwpt->obj);
 out_unlock:
 	mutex_unlock(&ioas->mutex);
+	return rc;
+}
+
+static int iommufd_device_change_pt(struct iommufd_device *idev, u32 *pt_id,
+				    attach_fn do_attach)
+{
+	struct iommufd_object *pt_obj;
+	int rc;
+
+	pt_obj = iommufd_get_object(idev->ictx, *pt_id, IOMMUFD_OBJ_ANY);
+	if (IS_ERR(pt_obj))
+		return PTR_ERR(pt_obj);
+
+	switch (pt_obj->type) {
+	case IOMMUFD_OBJ_HW_PAGETABLE: {
+		struct iommufd_hw_pagetable *hwpt =
+			container_of(pt_obj, struct iommufd_hw_pagetable, obj);
+
+		rc = (*do_attach)(idev, hwpt);
+		if (rc)
+			goto out_put_pt_obj;
+		break;
+	}
+	case IOMMUFD_OBJ_IOAS: {
+		struct iommufd_ioas *ioas =
+			container_of(pt_obj, struct iommufd_ioas, obj);
+
+		rc = iommufd_device_auto_get_domain(idev, ioas, pt_id,
+						    do_attach);
+		if (rc)
+			goto out_put_pt_obj;
+		break;
+	}
+	default:
+		rc = -EINVAL;
+		goto out_put_pt_obj;
+	}
+
+	refcount_inc(&idev->obj.users);
+	rc = 0;
+
+out_put_pt_obj:
+	iommufd_put_object(pt_obj);
 	return rc;
 }
 
@@ -414,45 +550,29 @@ out_unlock:
  */
 int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id)
 {
-	struct iommufd_object *pt_obj;
-	int rc;
-
-	pt_obj = iommufd_get_object(idev->ictx, *pt_id, IOMMUFD_OBJ_ANY);
-	if (IS_ERR(pt_obj))
-		return PTR_ERR(pt_obj);
-
-	switch (pt_obj->type) {
-	case IOMMUFD_OBJ_HW_PAGETABLE: {
-		struct iommufd_hw_pagetable *hwpt =
-			container_of(pt_obj, struct iommufd_hw_pagetable, obj);
-
-		rc = iommufd_device_do_attach(idev, hwpt);
-		if (rc)
-			goto out_put_pt_obj;
-		break;
-	}
-	case IOMMUFD_OBJ_IOAS: {
-		struct iommufd_ioas *ioas =
-			container_of(pt_obj, struct iommufd_ioas, obj);
-
-		rc = iommufd_device_auto_get_domain(idev, ioas, pt_id);
-		if (rc)
-			goto out_put_pt_obj;
-		break;
-	}
-	default:
-		rc = -EINVAL;
-		goto out_put_pt_obj;
-	}
-
-	refcount_inc(&idev->obj.users);
-	rc = 0;
-
-out_put_pt_obj:
-	iommufd_put_object(pt_obj);
-	return rc;
+	return iommufd_device_change_pt(idev, pt_id, &iommufd_device_do_attach);
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_device_attach, IOMMUFD);
+
+/**
+ * iommufd_device_replace - Replace the currently connected iommu_domain
+ * @idev: device to replace its iommu_domain
+ * @pt_id: Input a IOMMUFD_OBJ_IOAS, or IOMMUFD_OBJ_HW_PAGETABLE
+ *         Output the IOMMUFD_OBJ_HW_PAGETABLE ID
+ *
+ * This replaced the currently connected iommu_domain of a device with another
+ * one, either automatically or manually selected. It allows a device to shift
+ * the attached iommu_domain to another one, without an iommufd_device_detach.
+ *
+ * The caller should return the resulting pt_id back to userspace.
+ * This function is undone by calling iommufd_device_detach().
+ */
+int iommufd_device_replace(struct iommufd_device *idev, u32 *pt_id)
+{
+	return iommufd_device_change_pt(idev, pt_id,
+					&iommufd_device_do_replace);
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_device_replace, IOMMUFD);
 
 /**
  * iommufd_device_detach - Disconnect a device to an iommu_domain
