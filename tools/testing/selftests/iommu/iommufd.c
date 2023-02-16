@@ -259,6 +259,16 @@ TEST_F(iommufd_ioas, ioas_destroy)
 	}
 }
 
+TEST_F(iommufd_ioas, hwpt_attach)
+{
+	/* Create a device attached directly to a hwpt */
+	if (self->domain_id) {
+		test_cmd_mock_domain(self->domain_id, NULL, NULL);
+	} else {
+		test_err_mock_domain(ENOENT, self->domain_id, NULL, NULL);
+	}
+}
+
 TEST_F(iommufd_ioas, ioas_area_destroy)
 {
 	/* Adding an area does not change ability to destroy */
