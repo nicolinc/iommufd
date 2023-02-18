@@ -168,6 +168,7 @@ out_abort:
  */
 static const size_t iommufd_hwpt_info_size[] = {
 	[IOMMU_PGTBL_DATA_NONE] = 0,
+	[IOMMU_PGTBL_DATA_VTD_S1] = sizeof(struct iommu_hwpt_intel_vtd),
 };
 
 /* Return true if type is supported, otherwise false */
@@ -302,6 +303,7 @@ out_put_idev:
 
 static u32 iommufd_hwpt_invalidate_info_size[] = {
 	[IOMMU_PGTBL_DATA_NONE] = 0,
+	[IOMMU_PGTBL_DATA_VTD_S1] = sizeof(struct iommu_hwpt_invalidate_intel_vtd),
 };
 
 int iommufd_hwpt_invalidate(struct iommufd_ucmd *ucmd)
