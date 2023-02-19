@@ -42,6 +42,25 @@ int iommufd_hw_pagetable_enforce_cc(struct iommufd_hw_pagetable *hwpt)
 	return 0;
 }
 
+static int iommufd_hw_pagetable_link_ioas(struct iommufd_hw_pagetable *hwpt)
+{
+	int rc;
+
+	if (hwpt->parent)
+		hwpt = hwpt->parent;
+
+	if (!list_empty(&hwpt->hwpt_item))
+		return 0;
+
+	rc = iopt_table_add_domain(&hwpt->ioas->iopt, hwpt->domain);
+	if (rc)
+		return rc;
+
+	/* ioas->hwpt_list is hwpts after iopt_table_add_domain() */
+	list_add_tail(&hwpt->hwpt_item, &hwpt->ioas->hwpt_list);
+	return 0;
+}
+
 /**
  * iommufd_hw_pagetable_alloc() - Get an iommu_domain for a device
  * @ictx: iommufd context
@@ -125,12 +144,9 @@ iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 			goto out_unlock;
 	}
 
-	rc = iopt_table_add_domain(&hwpt->ioas->iopt, hwpt->domain);
+	rc = iommufd_hw_pagetable_link_ioas(hwpt);
 	if (rc)
 		goto out_detach;
-
-	/* ioas->hwpt_list is hwpts after iopt_table_add_domain() */
-	list_add_tail(&hwpt->hwpt_item, &hwpt->ioas->hwpt_list);
 
 	mutex_unlock(&idev->igroup->lock);
 	return hwpt;
