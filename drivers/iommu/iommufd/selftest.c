@@ -359,7 +359,7 @@ static struct mock_dev *mock_dev_create(void)
 	 * driver (heck currently it can't even support two iommu_drivers
 	 * registering). Hack it together with an open coded dev_iommu_get().
 	 * Notice that the normal notifier triggered iommu release process also
-	 * does not work here becuase this bus is not in iommu_buses.
+	 * does not work here because this bus is not in iommu_buses.
 	 */
 	mdev->dev.iommu = kzalloc(sizeof(*dev_iommu), GFP_KERNEL);
 	if (!mdev->dev.iommu) {

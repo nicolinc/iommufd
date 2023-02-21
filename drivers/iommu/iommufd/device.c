@@ -100,7 +100,7 @@ static struct iommufd_group *iommufd_get_group(struct iommufd_ctx *ictx,
 			return ERR_PTR(xa_err(igroup));
 		}
 
-		/* new_group was succesfully installed */
+		/* new_group was successfully installed */
 		if (cur_igroup == igroup) {
 			xa_unlock(&ictx->groups);
 			return new_igroup;
