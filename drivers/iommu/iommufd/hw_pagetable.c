@@ -158,6 +158,7 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
 	if (rc)
 		goto out_hwpt;
+	iommufd_object_finalize(ucmd->ictx, &hwpt->obj);
 	goto out_put_ioas;
 
 out_hwpt:
