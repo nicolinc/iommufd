@@ -405,6 +405,21 @@ bool iommufd_selftest_is_mock_dev(struct device *dev)
 	return dev->release == mock_dev_release;
 }
 
+struct iommufd_device *iommufd_selftest_get_device(struct iommufd_object *obj)
+{
+	struct selftest_obj *sobj = container_of(obj, struct selftest_obj, obj);
+	struct iommufd_device *idev = sobj->idev.idev;
+
+	iommufd_lock_obj(&idev->obj);
+	return sobj->idev.idev;
+}
+
+void iommufd_selftest_put_device(struct iommufd_device *idev)
+{
+	if (idev->sobj)
+		iommufd_put_object(&idev->sobj->obj);
+}
+
 /* Create an hw_pagetable with the mock domain so we can test the domain ops */
 static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 				    struct iommu_test_cmd *cmd)
@@ -434,6 +449,7 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 		rc = PTR_ERR(idev);
 		goto out_mdev;
 	}
+	idev->sobj = sobj;
 	sobj->idev.idev = idev;
 
 	rc = iommufd_device_attach(idev, &pt_id);
@@ -460,34 +476,26 @@ static int iommufd_test_mock_domain_replace(struct iommufd_ucmd *ucmd,
 					    unsigned int device_id, u32 pt_id,
 					    struct iommu_test_cmd *cmd)
 {
-	struct iommufd_object *dev_obj;
-	struct selftest_obj *sobj;
+	struct iommufd_device *idev;
 	int rc;
 
 	/*
 	 * Prefer to use the OBJ_SELFTEST because the destroy_rwsem will ensure
 	 * it doesn't race with detach, which is not allowed.
 	 */
-	dev_obj =
-		iommufd_get_object(ucmd->ictx, device_id, IOMMUFD_OBJ_SELFTEST);
-	if (IS_ERR(dev_obj))
-		return PTR_ERR(dev_obj);
+	idev = iommufd_get_device(ucmd, device_id);
+	if (IS_ERR(idev))
+		return PTR_ERR(idev);
 
-	sobj = container_of(dev_obj, struct selftest_obj, obj);
-	if (sobj->type != TYPE_IDEV) {
-		rc = -EINVAL;
-		goto out_dev_obj;
-	}
-
-	rc = iommufd_device_replace(sobj->idev.idev, &pt_id);
+	rc = iommufd_device_replace(idev, &pt_id);
 	if (rc)
-		goto out_dev_obj;
+		goto out_put_idev;
 
 	cmd->mock_domain_replace.pt_id = pt_id;
 	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
 
-out_dev_obj:
-	iommufd_put_object(dev_obj);
+out_put_idev:
+	iommufd_put_device(idev);
 	return rc;
 }
 

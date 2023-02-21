@@ -294,20 +294,51 @@ struct iommufd_device {
 	struct iommufd_object obj;
 	struct iommufd_ctx *ictx;
 	struct iommufd_group *igroup;
+#ifdef CONFIG_IOMMUFD_TEST
+	struct selftest_obj *sobj;
+#endif
 	/* always the physical device */
 	struct device *dev;
 	bool enforce_cache_coherency;
 };
 
+void iommufd_device_destroy(struct iommufd_object *obj);
+#ifdef CONFIG_IOMMUFD_TEST
+struct iommufd_device *iommufd_selftest_get_device(struct iommufd_object *obj);
+void iommufd_selftest_put_device(struct iommufd_device *idev);
+#endif
+
 static inline struct iommufd_device *
 iommufd_get_device(struct iommufd_ucmd *ucmd, u32 id)
 {
-	return container_of(iommufd_get_object(ucmd->ictx, id,
-					       IOMMUFD_OBJ_DEVICE),
-			    struct iommufd_device, obj);
+	struct iommufd_device *idev = NULL;
+	struct iommufd_object *dev_obj;
+
+	dev_obj = iommufd_get_object(ucmd->ictx, id, IOMMUFD_OBJ_ANY);
+	if (IS_ERR(dev_obj))
+		return (struct iommufd_device *)dev_obj;
+
+	if (dev_obj->type == IOMMUFD_OBJ_DEVICE)
+		idev = container_of(dev_obj, struct iommufd_device, obj);
+#ifdef CONFIG_IOMMUFD_TEST
+	else if (dev_obj->type == IOMMUFD_OBJ_SELFTEST)
+		idev = iommufd_selftest_get_device(dev_obj);
+#endif
+	if (!idev) {
+		iommufd_put_object(dev_obj);
+		return ERR_PTR(-EINVAL);
+	}
+
+	return idev;
 }
 
-void iommufd_device_destroy(struct iommufd_object *obj);
+static inline void iommufd_put_device(struct iommufd_device *idev)
+{
+	iommufd_put_object(&idev->obj);
+#ifdef CONFIG_IOMMUFD_TEST
+	iommufd_selftest_put_device(idev);
+#endif
+}
 
 struct iommufd_access {
 	struct iommufd_object obj;

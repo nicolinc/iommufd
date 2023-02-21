@@ -166,6 +166,6 @@ out_hwpt:
 out_put_ioas:
 	iommufd_put_object(&ioas->obj);
 out_put_idev:
-	iommufd_put_object(&idev->obj);
+	iommufd_put_device(idev);
 	return rc;
 }
