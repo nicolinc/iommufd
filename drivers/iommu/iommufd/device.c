@@ -4,7 +4,6 @@
 #include <linux/iommufd.h>
 #include <linux/slab.h>
 #include <linux/iommu.h>
-#include "../iommu-priv.h"
 
 #include "io_pagetable.h"
 #include "iommufd_private.h"
