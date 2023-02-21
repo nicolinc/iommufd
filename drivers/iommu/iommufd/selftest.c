@@ -118,19 +118,9 @@ static int mock_domain_nop_attach(struct iommu_domain *domain,
 	return 0;
 }
 
-static void mock_domain_nop_detach(struct iommu_domain *domain,
-				    struct device *dev)
-{
-	/*
-	 * mock doesn't setup default domains because we can't hook into the
-	 * normal probe path
-	 */
-}
-
 static const struct iommu_domain_ops mock_blocking_ops = {
 	.free = mock_domain_blocking_free,
 	.attach_dev = mock_domain_nop_attach,
-	.detach_dev = mock_domain_nop_detach,
 };
 
 static struct iommu_domain mock_blocking_domain = {
@@ -273,6 +263,14 @@ static phys_addr_t mock_domain_iova_to_phys(struct iommu_domain *domain,
 	return (xa_to_value(ent) & MOCK_PFN_MASK) * MOCK_IO_PAGE_SIZE;
 }
 
+static void mock_domain_nop_set_platform_dma_ops(struct device *dev)
+{
+	/*
+	 * mock doesn't setup default domains because we can't hook into the
+	 * normal probe path
+	 */
+}
+
 static bool mock_domain_capable(struct device *dev, enum iommu_cap cap)
 {
 	return cap == IOMMU_CAP_CACHE_COHERENCY;
@@ -282,6 +280,7 @@ static const struct iommu_ops mock_ops = {
 	.owner = THIS_MODULE,
 	.pgsize_bitmap = MOCK_IO_PAGE_SIZE,
 	.domain_alloc = mock_domain_alloc,
+	.set_platform_dma_ops = mock_domain_nop_set_platform_dma_ops,
 	.capable = mock_domain_capable,
 	.default_domain_ops =
 		&(struct iommu_domain_ops){
