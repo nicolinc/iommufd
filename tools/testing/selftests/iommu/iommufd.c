@@ -212,7 +212,7 @@ FIXTURE_SETUP(iommufd_ioas)
 	}
 
 	for (i = 0; i != variant->mock_domains; i++) {
-		test_cmd_mock_domain(self->ioas_id, NULL, &self->domain_id);
+		test_cmd_mock_domain(self->ioas_id, NULL, &self->domain_id, NULL);
 		self->base_iova = MOCK_APERTURE_START;
 	}
 }
@@ -263,7 +263,7 @@ TEST_F(iommufd_ioas, hwpt_attach)
 {
 	/* Create a device attached directly to a hwpt */
 	if (self->domain_id) {
-		test_cmd_mock_domain(self->domain_id, NULL, NULL);
+		test_cmd_mock_domain(self->domain_id, NULL, NULL, NULL);
 	} else {
 		test_err_mock_domain(ENOENT, self->domain_id, NULL, NULL);
 	}
@@ -648,7 +648,7 @@ TEST_F(iommufd_ioas, access_pin)
 				   _IOMMU_TEST_CMD(IOMMU_TEST_OP_ACCESS_PAGES),
 				   &access_cmd));
 		test_cmd_mock_domain(self->ioas_id, &mock_device_id,
-				     &mock_hwpt_id);
+				     &mock_hwpt_id, NULL);
 		check_map_cmd.id = mock_hwpt_id;
 		ASSERT_EQ(0, ioctl(self->fd,
 				   _IOMMU_TEST_CMD(IOMMU_TEST_OP_MD_CHECK_MAP),
@@ -803,7 +803,7 @@ TEST_F(iommufd_ioas, fork_gone)
 		 * If a domain already existed then everything was pinned within
 		 * the fork, so this copies from one domain to another.
 		 */
-		test_cmd_mock_domain(self->ioas_id, NULL, NULL);
+		test_cmd_mock_domain(self->ioas_id, NULL, NULL, NULL);
 		check_access_rw(_metadata, self->fd, access_id,
 				MOCK_APERTURE_START, 0);
 
@@ -852,7 +852,7 @@ TEST_F(iommufd_ioas, fork_present)
 	ASSERT_EQ(8, read(efd, &tmp, sizeof(tmp)));
 
 	/* Read pages from the remote process */
-	test_cmd_mock_domain(self->ioas_id, NULL, NULL);
+	test_cmd_mock_domain(self->ioas_id, NULL, NULL, NULL);
 	check_access_rw(_metadata, self->fd, access_id, MOCK_APERTURE_START, 0);
 
 	ASSERT_EQ(0, close(pipefds[1]));
@@ -1000,6 +1000,7 @@ FIXTURE(iommufd_mock_domain)
 	uint32_t domain_id;
 	uint32_t domain_ids[2];
 	uint32_t device_id[2];
+	uint32_t idev_id[2];
 	int mmap_flags;
 	size_t mmap_buf_size;
 };
@@ -1021,7 +1022,8 @@ FIXTURE_SETUP(iommufd_mock_domain)
 	ASSERT_GE(ARRAY_SIZE(self->domain_ids), variant->mock_domains);
 
 	for (i = 0; i != variant->mock_domains; i++)
-		test_cmd_mock_domain(self->ioas_id, &self->device_id[i], &self->domain_ids[i]);
+		test_cmd_mock_domain(self->ioas_id, &self->device_id[i],
+				     &self->domain_ids[i], &self->idev_id[i]);
 	self->domain_id = self->domain_ids[0];
 
 	self->mmap_flags = MAP_SHARED | MAP_ANONYMOUS;
@@ -1215,7 +1217,7 @@ TEST_F(iommufd_mock_domain, all_aligns_copy)
 			/* Add and destroy a domain while the area exists */
 			old_id = self->domain_ids[1];
 			test_cmd_mock_domain(self->ioas_id, &mock_device_id,
-					     &self->domain_ids[1]);
+					     &self->domain_ids[1], NULL);
 
 			check_mock_iova(buf + start, iova, length);
 			check_refs(buf + start / PAGE_SIZE * PAGE_SIZE,
@@ -1424,7 +1426,7 @@ FIXTURE_SETUP(vfio_compat_mock_domain)
 
 	/* Create what VFIO would consider a group */
 	test_ioctl_ioas_alloc(&self->ioas_id);
-	test_cmd_mock_domain(self->ioas_id, NULL, NULL);
+	test_cmd_mock_domain(self->ioas_id, NULL, NULL, NULL);
 
 	/* Attach it to the vfio compat */
 	vfio_ioas_cmd.ioas_id = self->ioas_id;
