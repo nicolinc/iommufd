@@ -115,12 +115,16 @@ struct iommu_test_hw_info {
 /**
  * struct iommu_hwpt_selftest
  *
- * @flags: page table entry attributes, must be 0
+ * @flags: page table entry attributes
  * @test_type: can be either IOMMU_HW_INFO_TYPE_NONE or IOMMU_HWPT_TYPE_SELFTEST
+ * @test_config: default iotlb setup (value IOMMU_TEST_IOTLB_DEFAULT)
  */
 struct iommu_hwpt_selftest {
+#define IOMMU_TEST_FLAG_NESTED		(1ULL << 0)
 	__u64 flags;
 	__u32 test_type;
+#define IOMMU_TEST_IOTLB_DEFAULT	0xbadbeef
+	__u64 test_config;
 };
 
 #endif

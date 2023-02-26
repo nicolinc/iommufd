@@ -88,8 +88,17 @@ void iommufd_test_syz_conv_iova_id(struct iommufd_ucmd *ucmd,
 struct mock_iommu_domain {
 	struct iommu_domain domain;
 	struct xarray pfns;
+	bool nested : 1;
 	/* mock domain test data */
-	enum iommu_hwpt_type hwpt_type;
+	union {
+		struct { /* nested */
+			struct mock_iommu_domain *parent;
+			u32 iotlb;
+		};
+		struct { /* parent */
+			enum iommu_hwpt_type hwpt_type;
+		};
+	};
 };
 
 enum selftest_obj_type {
@@ -149,9 +158,11 @@ static void *mock_domain_hw_info(struct device *dev, u32 *length, u32 *type)
 }
 
 static const struct iommu_ops mock_ops;
+static struct iommu_domain_ops domain_nested_ops;
 
 static struct iommu_domain *
 __mock_domain_alloc(unsigned int iommu_domain_type,
+		    struct mock_iommu_domain *mock_parent,
 		    const struct iommu_hwpt_selftest *user_cfg)
 {
 	struct mock_iommu_domain *mock;
@@ -159,20 +170,28 @@ __mock_domain_alloc(unsigned int iommu_domain_type,
 	if (iommu_domain_type == IOMMU_DOMAIN_BLOCKED)
 		return &mock_blocking_domain;
 
-	if (iommu_domain_type != IOMMU_DOMAIN_UNMANAGED)
-		return NULL;
+	if (iommu_domain_type != IOMMU_DOMAIN_NESTED &&
+	    iommu_domain_type != IOMMU_DOMAIN_UNMANAGED)
+		return ERR_PTR(-EINVAL);
 
 	mock = kzalloc(sizeof(*mock), GFP_KERNEL);
 	if (!mock)
 		return ERR_PTR(-ENOMEM);
 	mock->domain.type = iommu_domain_type;
-	mock->domain.geometry.aperture_start = MOCK_APERTURE_START;
-	mock->domain.geometry.aperture_end = MOCK_APERTURE_LAST;
-	mock->domain.ops = mock_ops.default_domain_ops;
 	mock->domain.pgsize_bitmap = MOCK_IO_PAGE_SIZE;
-	if (user_cfg)
-		mock->hwpt_type = user_cfg->test_type;
-	xa_init(&mock->pfns);
+	if (mock_parent) {
+		mock->nested = true;
+		mock->parent = mock_parent;
+		mock->iotlb = user_cfg->test_config;
+		mock->domain.ops = &domain_nested_ops;
+	} else {
+		mock->domain.geometry.aperture_start = MOCK_APERTURE_START;
+		mock->domain.geometry.aperture_end = MOCK_APERTURE_LAST;
+		mock->domain.ops = mock_ops.default_domain_ops;
+		if (user_cfg)
+			mock->hwpt_type = user_cfg->test_type;
+		xa_init(&mock->pfns);
+	}
 	return &mock->domain;
 }
 
@@ -183,7 +202,7 @@ static struct iommu_domain *mock_domain_alloc(unsigned int iommu_domain_type)
 	if (iommu_domain_type != IOMMU_DOMAIN_BLOCKED &&
 	    iommu_domain_type != IOMMU_DOMAIN_UNMANAGED)
 		return NULL;
-	domain = __mock_domain_alloc(iommu_domain_type, NULL);
+	domain = __mock_domain_alloc(iommu_domain_type, NULL, NULL);
 	if (IS_ERR(domain))
 		domain = NULL;
 	return domain;
@@ -198,6 +217,7 @@ static struct iommu_domain *mock_domain_alloc_user(struct device *dev,
 		offsetofend(struct iommu_hwpt_selftest, test_type);
 	unsigned int iommu_domain_type = IOMMU_DOMAIN_UNMANAGED;
 	struct iommu_hwpt_selftest data, *user_cfg = NULL;
+	struct mock_iommu_domain *mock_parent = NULL;
 
 	if (hwpt_type != IOMMU_HWPT_TYPE_DEFAULT &&
 	    hwpt_type != IOMMU_HWPT_TYPE_SELFTEST)
@@ -210,11 +230,23 @@ static struct iommu_domain *mock_domain_alloc_user(struct device *dev,
 			return ERR_PTR(rc);
 		/* Expecting test program to pass hwpt_type in test data too */
 		if (data.test_type != hwpt_type)
-			return ERR_PTR(rc);
+			return ERR_PTR(-EINVAL);
 		user_cfg = &data;
 	}
 
-	return __mock_domain_alloc(iommu_domain_type, user_cfg);
+	if (parent) {
+		if (hwpt_type != IOMMU_HWPT_TYPE_SELFTEST)
+			return ERR_PTR(-EINVAL);
+		if (parent->ops != mock_ops.default_domain_ops)
+			return ERR_PTR(-EINVAL);
+		if (!user_cfg || !(user_cfg->flags & IOMMU_TEST_FLAG_NESTED))
+			return ERR_PTR(-EINVAL);
+		iommu_domain_type = IOMMU_DOMAIN_NESTED;
+		mock_parent = container_of(parent,
+					   struct mock_iommu_domain, domain);
+	}
+
+	return __mock_domain_alloc(iommu_domain_type, mock_parent, user_cfg);
 }
 
 static void mock_domain_free(struct iommu_domain *domain)
@@ -373,6 +405,11 @@ static const struct iommu_ops mock_ops = {
 		},
 };
 
+static struct iommu_domain_ops domain_nested_ops = {
+	.free = mock_domain_free,
+	.attach_dev = mock_domain_nop_attach,
+};
+
 static inline struct iommufd_hw_pagetable *
 get_md_pagetable(struct iommufd_ucmd *ucmd, u32 mockpt_id,
 		 struct mock_iommu_domain **mock)
@@ -385,7 +422,10 @@ get_md_pagetable(struct iommufd_ucmd *ucmd, u32 mockpt_id,
 	if (IS_ERR(obj))
 		return ERR_CAST(obj);
 	hwpt = container_of(obj, struct iommufd_hw_pagetable, obj);
-	if (hwpt->domain->ops != mock_ops.default_domain_ops) {
+	if ((hwpt->domain->type == IOMMU_DOMAIN_UNMANAGED &&
+	     hwpt->domain->ops != mock_ops.default_domain_ops) ||
+	    (hwpt->domain->type == IOMMU_DOMAIN_NESTED &&
+	     hwpt->domain->ops != &domain_nested_ops)) {
 		iommufd_put_object(&hwpt->obj);
 		return ERR_PTR(-EINVAL);
 	}
