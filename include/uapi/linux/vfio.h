@@ -679,7 +679,8 @@ struct vfio_pci_hot_reset_info {
  * users or not opened yet.  Only when all the affected devices are
  * either opened by the current user or not opened by any user, should
  * the reset request be allowed.  Otherwise, this request is expected
- * to return error.
+ * to return error. group_fds array can accept either group fds or
+ * device fds.
  *
  * Return: 0 on success, -errno on failure.
  */
