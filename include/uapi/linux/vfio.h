@@ -673,6 +673,14 @@ struct vfio_pci_hot_reset_info {
  * VFIO_DEVICE_PCI_HOT_RESET - _IOW(VFIO_TYPE, VFIO_BASE + 13,
  *				    struct vfio_pci_hot_reset)
  *
+ * Userspace requests hot reset for the devices it uses.  Due to the
+ * underlying topology, multiple devices may be affected in the reset.
+ * The affected devices may have been opened by the user or by other
+ * users or not opened yet.  Only when all the affected devices are
+ * either opened by the current user or not opened by any user, should
+ * the reset request be allowed.  Otherwise, this request is expected
+ * to return error.
+ *
  * Return: 0 on success, -errno on failure.
  */
 struct vfio_pci_hot_reset {
