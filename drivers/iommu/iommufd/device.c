@@ -315,22 +315,27 @@ int iommufd_hw_pagetable_attach(struct iommufd_hw_pagetable *hwpt,
 	if (rc)
 		return rc;
 
+	/*
+	 * The first device in the group to be attached will do all the work
+	 * to setup the hwpt and ioas. Every other device re-uses it through
+	 * the shared group attachment. Users are allowed/expected to attach
+	 * every device in the group to the same hwpt, that just turns into
+	 * a NOP.
+	 */
+	if (!list_empty(&idev->igroup->device_list)) {
+		list_add_tail(&idev->group_item, &idev->igroup->device_list);
+		return 0;
+	}
+
 	rc = iommufd_device_setup_msi(idev, hwpt, sw_msi_start);
 	if (rc)
 		goto err_unresv;
 
-	/*
-	 * Only attach to the group once for the first device that is in the
-	 * group. All the other devices will follow this attachment.
-	 * The user can attach every device individually as well.
-	 */
-	if (list_empty(&idev->igroup->device_list)) {
-		rc = iommu_attach_group(hwpt->domain, idev->igroup->group);
-		if (rc)
-			goto err_unresv;
-		idev->igroup->hwpt = hwpt;
-		refcount_inc(&hwpt->obj.users);
-	}
+	rc = iommu_attach_group(hwpt->domain, idev->igroup->group);
+	if (rc)
+		goto err_unresv;
+	idev->igroup->hwpt = hwpt;
+	refcount_inc(&hwpt->obj.users);
 	list_add_tail(&idev->group_item, &idev->igroup->device_list);
 	return 0;
 err_unresv:
