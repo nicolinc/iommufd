@@ -10,6 +10,8 @@
 #include <linux/errno.h>
 #include <linux/err.h>
 
+#define IOMMUFD_INVALID_ID 0
+
 struct device;
 struct iommufd_device;
 struct page;
@@ -20,6 +22,7 @@ struct file;
 struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 					   struct device *dev, u32 *id);
 void iommufd_device_unbind(struct iommufd_device *idev);
+struct iommufd_ctx *iommufd_device_to_ictx(struct iommufd_device *idev);
 
 int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id);
 int iommufd_device_replace(struct iommufd_device *idev, u32 *pt_id);
@@ -41,9 +44,10 @@ enum {
 };
 
 struct iommufd_access *
-iommufd_access_create(struct iommufd_ctx *ictx, u32 ioas_id,
-		      const struct iommufd_access_ops *ops, void *data);
+iommufd_access_create(struct iommufd_ctx *ictx,
+		      const struct iommufd_access_ops *ops, void *data, u32 *id);
 void iommufd_access_destroy(struct iommufd_access *access);
+int iommufd_access_set_ioas(struct iommufd_access *access, u32 ioas_id);
 
 void iommufd_ctx_get(struct iommufd_ctx *ictx);
 
