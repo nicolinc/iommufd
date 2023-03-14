@@ -652,13 +652,16 @@ iommufd_access_create(struct iommufd_ctx *ictx,
 {
 	struct iommufd_access *access;
 
+	iommufd_ctx_get(ictx);
 	/*
 	 * There is no uAPI for the access object, but to keep things symmetric
 	 * use the object infrastructure anyhow.
 	 */
 	access = iommufd_object_alloc(ictx, access, IOMMUFD_OBJ_ACCESS);
-	if (IS_ERR(access))
+	if (IS_ERR(access)) {
+		iommufd_ctx_put(ictx);
 		return access;
+	}
 
 	access->data = data;
 	access->ops = ops;
@@ -671,7 +674,6 @@ iommufd_access_create(struct iommufd_ctx *ictx,
 	/* The calling driver is a user until iommufd_access_destroy() */
 	refcount_inc(&access->obj.users);
 	access->ictx = ictx;
-	iommufd_ctx_get(ictx);
 	iommufd_object_finalize(ictx, &access->obj);
 	return access;
 }
