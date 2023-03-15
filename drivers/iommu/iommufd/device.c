@@ -734,32 +734,71 @@ out:
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_access_detach, IOMMUFD);
 
-int iommufd_access_attach(struct iommufd_access *access, u32 ioas_id)
+static struct iommufd_ioas *
+iommufd_access_change_pt(struct iommufd_access *access, u32 ioas_id)
 {
-	struct iommufd_ioas *new_ioas;
+	struct iommufd_ioas *new_ioas, *cur_ioas;
 	struct iommufd_object *obj;
 	int rc = 0;
 
 	obj = iommufd_get_object(access->ictx, ioas_id, IOMMUFD_OBJ_IOAS);
 	if (IS_ERR(obj))
-		return PTR_ERR(obj);
+		return (struct iommufd_ioas *)obj;
 	new_ioas = container_of(obj, struct iommufd_ioas, obj);
 
-	mutex_lock(&access->ioas_lock);
+	if (cur_ioas == new_ioas) {
+		iommufd_put_object(obj);
+		return new_ioas;
+	}
+
 	rc = iopt_add_access(&new_ioas->iopt, access);
 	if (rc) {
-		mutex_unlock(&access->ioas_lock);
 		iommufd_put_object(obj);
-		return rc;
+		return ERR_PTR(rc);
 	}
 	iommufd_ref_to_users(obj);
+	return new_ioas;
+}
 
+int iommufd_access_attach(struct iommufd_access *access, u32 ioas_id)
+{
+	struct iommufd_ioas *new_ioas;
+
+	mutex_lock(&access->ioas_lock);
+	new_ioas = iommufd_access_change_pt(access, ioas_id);
+	if (IS_ERR(new_ioas)) {
+		mutex_unlock(&access->ioas_lock);
+		return PTR_ERR(new_ioas);
+	}
 	access->ioas = new_ioas;
 	access->ioas_unpin = new_ioas;
 	mutex_unlock(&access->ioas_lock);
 	return 0;
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_access_attach, IOMMUFD);
+
+int iommufd_access_replace(struct iommufd_access *access, u32 ioas_id)
+{
+	struct iommufd_ioas *new_ioas, *cur_ioas;
+
+	mutex_lock(&access->ioas_lock);
+	cur_ioas = access->ioas;
+	if (!cur_ioas) {
+		mutex_unlock(&access->ioas_lock);
+		return -ENOENT;
+	}
+	new_ioas = iommufd_access_change_pt(access, ioas_id);
+	if (IS_ERR(new_ioas)) {
+		mutex_unlock(&access->ioas_lock);
+		return PTR_ERR(new_ioas);
+	}
+	__iommufd_access_detach(access);
+	access->ioas = new_ioas;
+	access->ioas_unpin = new_ioas;
+	mutex_unlock(&access->ioas_lock);
+	return 0;
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_access_replace, IOMMUFD);
 
 /**
  * iommufd_access_notify_unmap - Notify users of an iopt to stop using it
