@@ -48,6 +48,8 @@ enum {
 	IOMMUFD_CMD_HWPT_ALLOC,
 	IOMMUFD_CMD_DEVICE_GET_HW_INFO,
 	IOMMUFD_CMD_HWPT_INVALIDATE,
+	IOMMUFD_CMD_DEVICE_SET_RID,
+	IOMMUFD_CMD_DEVICE_UNSET_RID,
 };
 
 /**
@@ -682,4 +684,33 @@ struct iommu_hwpt_invalidate {
 	__aligned_u64 data_uptr;
 };
 #define IOMMU_HWPT_INVALIDATE _IO(IOMMUFD_TYPE, IOMMUFD_CMD_HWPT_INVALIDATE)
+
+/**
+ * struct iommufd_device_set_rid - ioctl(IOMMU_DEVICE_SET_RID)
+ * @size: sizeof(struct iommufd_device_set_rid)
+ * @dev_id: The device to set a Request ID
+ * @rid: PCI Request ID
+ *       Bits [15:8] are the Bus number.
+ *       Bits [7:3] are the Device number.
+ *       Bits [2:0] are the Function number.
+ * @rid_base: Base ID to map PCI Request ID
+ */
+struct iommufd_device_set_rid {
+	__u32 size;
+	__u32 dev_id;
+	__u32 rid;
+	__u32 rid_base;
+};
+#define IOMMU_DEVICE_SET_RID _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DEVICE_SET_RID)
+
+/**
+ * struct iommufd_device_unset_rid - ioctl(IOMMU_DEVICE_UNSET_RID)
+ * @size: sizeof(struct iommufd_device_unset_rid)
+ * @dev_id: The device to unset a Request ID
+ */
+struct iommufd_device_unset_rid {
+	__u32 size;
+	__u32 dev_id;
+};
+#define IOMMU_DEVICE_UNSET_RID _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DEVICE_UNSET_RID)
 #endif

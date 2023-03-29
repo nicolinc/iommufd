@@ -679,13 +679,16 @@ struct arm_smmu_device {
 	struct iommu_device		iommu;
 
 	struct rb_root			streams;
+	struct rb_root			streams_user;
 	struct mutex			streams_mutex;
 };
 
 struct arm_smmu_stream {
 	u32				id;
+	u32				id_user;
 	struct arm_smmu_master		*master;
 	struct rb_node			node;
+	struct rb_node			node_user;
 };
 
 /* SMMU private data for each master */

@@ -738,6 +738,47 @@ void iommufd_device_detach(struct iommufd_device *idev)
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_device_detach, IOMMUFD);
 
+int iommufd_device_set_rid(struct iommufd_ucmd *ucmd)
+{
+	struct iommufd_device_set_rid *cmd = ucmd->cmd;
+	struct iommufd_device *idev;
+	const struct iommu_ops *ops;
+	int rc = 0;
+
+	if (!cmd->rid)
+		return -EINVAL;
+
+	idev = iommufd_get_device(ucmd, cmd->dev_id);
+	if (IS_ERR(idev))
+		return PTR_ERR(idev);
+
+	ops = dev_iommu_ops(idev->dev);
+	if (ops && ops->set_rid_user)
+		rc = ops->set_rid_user(idev->dev, cmd->rid, cmd->rid_base);
+out_put:
+	iommufd_put_object(&idev->obj);
+	return rc;
+}
+
+int iommufd_device_unset_rid(struct iommufd_ucmd *ucmd)
+{
+	struct iommufd_device_unset_rid *cmd = ucmd->cmd;
+	struct iommufd_device *idev;
+	const struct iommu_ops *ops;
+	int rc = 0;
+
+	idev = iommufd_get_device(ucmd, cmd->dev_id);
+	if (IS_ERR(idev))
+		return PTR_ERR(idev);
+
+	ops = dev_iommu_ops(idev->dev);
+	if (ops && ops->set_rid_user)
+		rc = ops->set_rid_user(idev->dev, 0, 0);
+out_put:
+	iommufd_put_object(&idev->obj);
+	return rc;
+}
+
 void iommufd_access_destroy_object(struct iommufd_object *obj)
 {
 	struct iommufd_access *access =

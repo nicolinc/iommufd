@@ -323,6 +323,10 @@ static const struct iommufd_ioctl_op iommufd_ioctl_ops[] = {
 		 val64),
 	IOCTL_OP(IOMMU_VFIO_IOAS, iommufd_vfio_ioas, struct iommu_vfio_ioas,
 		 __reserved),
+	IOCTL_OP(IOMMU_DEVICE_SET_RID, iommufd_device_set_rid,
+		 struct iommufd_device_set_rid, rid_base),
+	IOCTL_OP(IOMMU_DEVICE_UNSET_RID, iommufd_device_unset_rid,
+		 struct iommufd_device_unset_rid, dev_id),
 #ifdef CONFIG_IOMMUFD_TEST
 	IOCTL_OP(IOMMU_TEST_CMD, iommufd_test, struct iommu_test_cmd, last),
 #endif

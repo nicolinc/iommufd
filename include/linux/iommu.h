@@ -274,6 +274,7 @@ struct iommu_ops {
 	struct iommu_domain *(*domain_alloc_user)(struct device *dev,
 						  struct iommu_domain *parent,
 						  const void *user_data);
+	int (*set_rid_user)(struct device *dev, u32 rid, u32 rid_base);
 
 	struct iommu_device *(*probe_device)(struct device *dev);
 	void (*release_device)(struct device *dev);

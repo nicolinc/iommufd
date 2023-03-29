@@ -1471,6 +1471,28 @@ arm_smmu_find_master(struct arm_smmu_device *smmu, u32 sid)
 	return NULL;
 }
 
+static struct arm_smmu_master *
+arm_smmu_find_master_user(struct arm_smmu_device *smmu, u32 sid_user)
+{
+	struct rb_node *node;
+	struct arm_smmu_stream *stream;
+
+	lockdep_assert_held(&smmu->streams_mutex);
+
+	node = smmu->streams_user.rb_node;
+	while (node) {
+		stream = rb_entry(node, struct arm_smmu_stream, node_user);
+		if (stream->id_user < sid_user)
+			node = node->rb_right;
+		else if (stream->id_user > sid_user)
+			node = node->rb_left;
+		else
+			return stream->master;
+	}
+
+	return NULL;
+}
+
 /* IRQ and event handlers */
 static int arm_smmu_handle_evt(struct arm_smmu_device *smmu, u64 *evt)
 {
@@ -2683,6 +2705,61 @@ static void arm_smmu_remove_master(struct arm_smmu_master *master)
 	kfree(master->streams);
 }
 
+static int arm_smmu_insert_master_user(struct arm_smmu_master *master,
+				       u32 sid_user)
+{
+	struct arm_smmu_stream *new_stream, *cur_stream;
+	struct rb_node **new_node, *parent_node = NULL;
+	struct arm_smmu_device *smmu = master->smmu;
+	int ret = 0;
+
+	if (!smmu || !master->streams)
+		return -ENOENT;
+
+	mutex_lock(&smmu->streams_mutex);
+	new_stream = &master->streams[0];
+	new_stream->id_user = sid_user;
+
+	/* Insert into SID user tree */
+	new_node = &(smmu->streams_user.rb_node);
+	while (*new_node) {
+		cur_stream = rb_entry(*new_node, struct arm_smmu_stream,
+				      node_user);
+		parent_node = *new_node;
+		if (cur_stream->id_user > new_stream->id_user) {
+			new_node = &((*new_node)->rb_left);
+		} else if (cur_stream->id_user < new_stream->id_user) {
+			new_node = &((*new_node)->rb_right);
+		} else {
+			dev_warn(master->dev,
+				 "stream %u already in tree\n",
+				 cur_stream->id_user);
+			ret = -EINVAL;
+			goto unlock;
+		}
+	}
+
+	rb_link_node(&new_stream->node_user, parent_node, new_node);
+	rb_insert_color(&new_stream->node_user, &smmu->streams_user);
+
+unlock:
+	mutex_unlock(&smmu->streams_mutex);
+
+	return ret;
+}
+
+static void arm_smmu_remove_master_user(struct arm_smmu_master *master)
+{
+	struct arm_smmu_device *smmu = master->smmu;
+
+	if (!smmu || !master->streams)
+		return;
+
+	mutex_lock(&smmu->streams_mutex);
+	rb_erase(&master->streams[0].node_user, &smmu->streams);
+	mutex_unlock(&smmu->streams_mutex);
+}
+
 static struct iommu_ops arm_smmu_ops;
 
 static struct iommu_device *arm_smmu_probe_device(struct device *dev)
@@ -3018,11 +3095,29 @@ arm_smmu_domain_alloc_user(struct device *dev, struct iommu_domain *parent,
 	return __arm_smmu_domain_alloc(type, s2, master, user_cfg);
 }
 
+static int arm_smmu_set_rid_user(struct device *dev, u32 rid, u32 rid_base)
+{
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+	struct arm_smmu_device *smmu = master->smmu;
+	u32 sid_user = rid_base | rid;
+	int ret = 0;
+
+	if (rid)
+		ret = arm_smmu_insert_master_user(master, sid_user);
+	else
+		arm_smmu_remove_master_user(master);
+	if (ret)
+		return ret;
+	WARN_ON(master != arm_smmu_find_master_user(smmu, sid_user));
+	return 0;
+}
+
 static struct iommu_ops arm_smmu_ops = {
 	.capable		= arm_smmu_capable,
 	.hw_info		= arm_smmu_hw_info,
 	.domain_alloc		= arm_smmu_domain_alloc,
 	.domain_alloc_user	= arm_smmu_domain_alloc_user,
+	.set_rid_user		= arm_smmu_set_rid_user,
 	.probe_device		= arm_smmu_probe_device,
 	.release_device		= arm_smmu_release_device,
 	.device_group		= arm_smmu_device_group,
@@ -3259,6 +3354,7 @@ static int arm_smmu_init_structures(struct arm_smmu_device *smmu)
 
 	mutex_init(&smmu->streams_mutex);
 	smmu->streams = RB_ROOT;
+	smmu->streams_user = RB_ROOT;
 
 	ret = arm_smmu_init_queues(smmu);
 	if (ret)
