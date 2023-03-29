@@ -2964,11 +2964,50 @@ arm_smmu_domain_alloc_user(struct device *dev, struct iommu_domain *parent,
 	return __arm_smmu_domain_alloc(type, s2, master, user_cfg);
 }
 
+static int arm_smmu_set_rid_user(struct device *dev, u32 rid, u32 rid_base)
+{
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+	struct arm_smmu_device *smmu = master->smmu;
+	u32 sid_user = rid_base | rid;
+	int ret = 0;
+
+	if (!sid_user)
+		return -EINVAL;
+
+	ret = xa_alloc(&smmu->user_streams, &sid_user, &master->streams[0],
+		       XA_LIMIT(sid_user, sid_user), GFP_KERNEL_ACCOUNT);
+	if (ret)
+		return ret;
+	return 0;
+}
+
+static int arm_smmu_unset_rid_user(struct device *dev, u32 rid, u32 rid_base)
+{
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+	struct arm_smmu_device *smmu = master->smmu;
+	struct arm_smmu_stream *stream;
+	u32 sid_user = rid_base | rid;
+
+	xa_lock(&smmu->user_streams);
+	stream = __xa_erase(&smmu->user_streams, sid_user);
+	if (stream != master->streams) {
+		WARN_ON(__xa_alloc(&smmu->user_streams, &sid_user, stream,
+				   XA_LIMIT(sid_user, sid_user),
+				   GFP_KERNEL_ACCOUNT));
+		xa_unlock(&smmu->user_streams);
+		return -EINVAL;
+	}
+	xa_unlock(&smmu->user_streams);
+	return 0;
+}
+
 static struct iommu_ops arm_smmu_ops = {
 	.capable		= arm_smmu_capable,
 	.hw_info		= arm_smmu_hw_info,
 	.domain_alloc		= arm_smmu_domain_alloc,
 	.domain_alloc_user	= arm_smmu_domain_alloc_user,
+	.set_rid_user		= arm_smmu_set_rid_user,
+	.unset_rid_user		= arm_smmu_unset_rid_user,
 	.probe_device		= arm_smmu_probe_device,
 	.release_device		= arm_smmu_release_device,
 	.device_group		= arm_smmu_device_group,
@@ -3205,6 +3244,7 @@ static int arm_smmu_init_structures(struct arm_smmu_device *smmu)
 
 	mutex_init(&smmu->streams_mutex);
 	smmu->streams = RB_ROOT;
+	xa_init_flags(&smmu->user_streams, XA_FLAGS_ALLOC1 | XA_FLAGS_ACCOUNT);
 
 	ret = arm_smmu_init_queues(smmu);
 	if (ret)

@@ -320,6 +320,8 @@ iommufd_get_device(struct iommufd_ucmd *ucmd, u32 id)
 
 void iommufd_device_destroy(struct iommufd_object *obj);
 int iommufd_device_get_hw_info(struct iommufd_ucmd *ucmd);
+int iommufd_device_set_rid(struct iommufd_ucmd *ucmd);
+int iommufd_device_unset_rid(struct iommufd_ucmd *ucmd);
 
 extern const u64 iommufd_hwpt_type_bitmaps[];
 
