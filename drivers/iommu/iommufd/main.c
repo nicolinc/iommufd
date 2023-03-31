@@ -16,6 +16,7 @@
 #include <linux/mutex.h>
 #include <linux/bug.h>
 #include <uapi/linux/iommufd.h>
+#include <linux/iommu.h>
 #include <linux/iommufd.h>
 
 #include "io_pagetable.h"
@@ -368,11 +369,56 @@ static long iommufd_fops_ioctl(struct file *filp, unsigned int cmd,
 	return ret;
 }
 
+static int iommufd_fops_mmap(struct file *filp, struct vm_area_struct *vma)
+{
+	struct iommufd_ctx *ictx = filp->private_data;
+	size_t size = vma->vm_end - vma->vm_start;
+	struct iommufd_hw_pagetable *hwpt;
+	u32 hwpt_id = (u32)vma->vm_pgoff;
+	void *mmap_page;
+	int rc;
+
+	if (size > PAGE_SIZE)
+		return -EINVAL;
+
+	hwpt = container_of(iommufd_get_object(ictx, hwpt_id,
+					       IOMMUFD_OBJ_HW_PAGETABLE),
+			    struct iommufd_hw_pagetable, obj);
+	if (IS_ERR(hwpt))
+		return PTR_ERR(hwpt);
+
+	/* Do not allow any kernel-managed hw_pagetable */
+	if (!hwpt->parent) {
+		rc = -EINVAL;
+		goto out_put_hwpt;
+	}
+	if (!hwpt->domain->ops->get_mmap_page) {
+		rc = -EOPNOTSUPP;
+		goto out_put_hwpt;
+	}
+
+	mmap_page = hwpt->domain->ops->get_mmap_page(hwpt->domain, size);
+	if (!mmap_page) {
+		rc = -ENOMEM;
+		goto out_put_hwpt;
+	}
+
+	vma->vm_pgoff = 0;
+	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+	vm_flags_set(vma, VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP);
+	rc = remap_pfn_range(vma, vma->vm_start, virt_to_pfn(mmap_page), size,
+			     vma->vm_page_prot);
+out_put_hwpt:
+	iommufd_put_object(&hwpt->obj);
+	return rc;
+}
+
 static const struct file_operations iommufd_fops = {
 	.owner = THIS_MODULE,
 	.open = iommufd_fops_open,
 	.release = iommufd_fops_release,
 	.unlocked_ioctl = iommufd_fops_ioctl,
+	.mmap = iommufd_fops_mmap,
 };
 
 /**

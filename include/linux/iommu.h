@@ -364,6 +364,7 @@ struct iommu_domain_ops {
 			   struct iommu_iotlb_gather *iotlb_gather);
 	void (*cache_invalidate_user)(struct iommu_domain *domain,
 				      void *user_data);
+	void *(*get_mmap_page)(struct iommu_domain *domain, size_t pgsize);
 
 	phys_addr_t (*iova_to_phys)(struct iommu_domain *domain,
 				    dma_addr_t iova);
