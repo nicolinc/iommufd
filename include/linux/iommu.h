@@ -257,6 +257,9 @@ struct iommu_iotlb_gather {
  * @remove_dev_pasid: Remove any translation configurations of a specific
  *                    pasid, so that any DMA transactions with this pasid
  *                    will be blocked by the hardware.
+ * @set/unset_dev_data_user: set/unset an iommu specific device data from user
+ *                           space. The user device data info will be used by
+ *                           the driver to take care of user space requests.
  * @hw_info_type: One of enum iommu_hw_info_type defined in
  *                include/uapi/linux/iommufd.h. It is used to tag the type
  *                of data returned by .hw_info callback. The drivers that
@@ -302,6 +305,9 @@ struct iommu_ops {
 
 	int (*def_domain_type)(struct device *dev);
 	void (*remove_dev_pasid)(struct device *dev, ioasid_t pasid);
+
+	int (*set_dev_data_user)(struct device *dev, const void *user_data);
+	void (*unset_dev_data_user)(struct device *dev);
 
 	const struct iommu_domain_ops *default_domain_ops;
 	enum iommu_hw_info_type hw_info_type;
