@@ -106,6 +106,8 @@ union ucmd_buffer {
 	struct iommu_ioas_unmap unmap;
 	struct iommu_option option;
 	struct iommu_resv_iova_ranges resv_ranges;
+	struct iommu_set_dev_data set_dev_data;
+	struct iommu_unset_dev_data unset_dev_data;
 	struct iommu_vfio_ioas vfio_ioas;
 #ifdef CONFIG_IOMMUFD_TEST
 	struct iommu_test_cmd test;
@@ -342,6 +344,7 @@ struct iommufd_device {
 	/* always the physical device */
 	struct device *dev;
 	bool enforce_cache_coherency;
+	bool has_user_data;
 };
 
 static inline struct iommufd_device *
