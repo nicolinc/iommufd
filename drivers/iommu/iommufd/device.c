@@ -621,6 +621,8 @@ out_unlock:
 static const size_t iommufd_device_data_size[] = {
 	[IOMMU_HW_INFO_TYPE_NONE] = 0,
 	[IOMMU_HW_INFO_TYPE_INTEL_VTD] = 0,
+	[IOMMU_HW_INFO_TYPE_ARM_SMMUV3] =
+		sizeof(struct iommu_device_data_arm_smmuv3),
 };
 
 /**
