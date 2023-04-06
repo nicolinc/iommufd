@@ -248,6 +248,7 @@ struct iommu_iotlb_gather {
  *                      driver init to device driver init (default no)
  * @dev_enable/disable_feat: per device entries to enable/disable
  *                               iommu specific features.
+ * @set/unset_rid_user: per device entries to set/unset user space Request ID
  * @page_response: handle page request response
  * @def_domain_type: device default domain type, return value:
  *		- IOMMU_DOMAIN_IDENTITY: must use an identity domain
@@ -290,6 +291,9 @@ struct iommu_ops {
 	/* Per device IOMMU features */
 	int (*dev_enable_feat)(struct device *dev, enum iommu_dev_features f);
 	int (*dev_disable_feat)(struct device *dev, enum iommu_dev_features f);
+
+	int (*set_rid_user)(struct device *dev, u32 rid, u32 rid_base);
+	int (*unset_rid_user)(struct device *dev);
 
 	int (*page_response)(struct device *dev,
 			     struct iommu_fault_event *evt,
