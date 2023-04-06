@@ -590,6 +590,10 @@ struct iommu_hw_info {
 };
 #define IOMMU_DEVICE_GET_HW_INFO _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DEVICE_GET_HW_INFO)
 
+struct iommu_device_user_arm_smmuv3 {
+	__u32 sid;
+};
+
 /**
  * enum iommu_vtd_qi_granularity - Intel VT-d specific granularity of
  *                                 queued invalidation
