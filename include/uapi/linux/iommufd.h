@@ -466,10 +466,12 @@ struct iommu_hwpt_alloc {
 /**
  * enum iommu_hw_info_type - IOMMU Hardware Info Types
  * @IOMMU_HW_INFO_TYPE_INTEL_VTD: Intel VT-d iommu info type
+ * @IOMMU_HW_INFO_TYPE_ARM_SMMUV3: ARM SMMUv3 iommu info type
  */
 enum iommu_hw_info_type {
 	IOMMU_HW_INFO_TYPE_NONE,
 	IOMMU_HW_INFO_TYPE_INTEL_VTD,
+	IOMMU_HW_INFO_TYPE_ARM_SMMUV3,
 };
 
 /**
@@ -546,6 +548,10 @@ struct iommu_hw_info {
 	__aligned_u64 out_hwpt_type_bitmap;
 };
 #define IOMMU_DEVICE_GET_HW_INFO _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DEVICE_GET_HW_INFO)
+
+struct iommu_device_user_arm_smmuv3 {
+	__u32 sid;
+};
 
 /**
  * enum iommu_vtd_qi_granularity - Intel VT-d specific granularity of

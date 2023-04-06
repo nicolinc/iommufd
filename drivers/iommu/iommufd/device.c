@@ -146,6 +146,8 @@ void iommufd_device_destroy(struct iommufd_object *obj)
 static const size_t iommufd_device_probe_data_size[] = {
 	[IOMMU_HW_INFO_TYPE_NONE] = 0,
 	[IOMMU_HW_INFO_TYPE_INTEL_VTD] = 0,
+	[IOMMU_HW_INFO_TYPE_ARM_SMMUV3] =
+		sizeof(struct iommu_device_user_arm_smmuv3),
 };
 
 /**
