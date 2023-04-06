@@ -2843,6 +2843,48 @@ static void arm_smmu_remove_dev_pasid(struct device *dev, ioasid_t pasid)
 	arm_smmu_sva_remove_dev_pasid(domain, dev, pasid);
 }
 
+static int arm_smmu_set_rid_user(struct device *dev, u32 rid, u32 rid_base)
+{
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+	struct arm_smmu_stream *stream = &master->streams[0];
+	struct arm_smmu_device *smmu = master->smmu;
+	u32 sid_user = rid_base | rid;
+	int ret = 0;
+
+	if (!sid_user)
+		return -EINVAL;
+
+	ret = xa_alloc(&smmu->streams_user, &sid_user, stream,
+			XA_LIMIT(sid_user, sid_user), GFP_KERNEL_ACCOUNT);
+	if (ret)
+		return ret;
+	stream->id_user = sid_user;
+	return 0;
+}
+
+static int arm_smmu_unset_rid_user(struct device *dev)
+{
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+	struct arm_smmu_stream *stream = &master->streams[0];
+	struct arm_smmu_device *smmu = master->smmu;
+	u32 sid_user = stream->id_user;
+
+	if (!sid_user)
+		return -ENODEV;
+
+	xa_lock(&smmu->streams_user);
+	stream = __xa_erase(&smmu->streams_user, sid_user);
+	if (stream != master->streams) {
+		WARN_ON(__xa_alloc(&smmu->streams_user, &sid_user, stream,
+				   XA_LIMIT(sid_user, sid_user),
+				   GFP_KERNEL_ACCOUNT));
+		xa_unlock(&smmu->streams_user);
+		return -EINVAL;
+	}
+	xa_unlock(&smmu->streams_user);
+	return 0;
+}
+
 static struct iommu_ops arm_smmu_ops = {
 	.capable		= arm_smmu_capable,
 	.domain_alloc		= arm_smmu_domain_alloc,
@@ -2854,6 +2896,8 @@ static struct iommu_ops arm_smmu_ops = {
 	.remove_dev_pasid	= arm_smmu_remove_dev_pasid,
 	.dev_enable_feat	= arm_smmu_dev_enable_feature,
 	.dev_disable_feat	= arm_smmu_dev_disable_feature,
+	.set_rid_user		= arm_smmu_set_rid_user,
+	.unset_rid_user		= arm_smmu_unset_rid_user,
 	.page_response		= arm_smmu_page_response,
 	.def_domain_type	= arm_smmu_def_domain_type,
 	.pgsize_bitmap		= -1UL, /* Restricted during device attach */
@@ -3082,6 +3126,7 @@ static int arm_smmu_init_structures(struct arm_smmu_device *smmu)
 
 	mutex_init(&smmu->streams_mutex);
 	smmu->streams = RB_ROOT;
+	xa_init_flags(&smmu->streams_user, XA_FLAGS_ALLOC1 | XA_FLAGS_ACCOUNT);
 
 	ret = arm_smmu_init_queues(smmu);
 	if (ret)
