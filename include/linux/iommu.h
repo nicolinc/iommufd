@@ -236,6 +236,8 @@ struct iommu_iotlb_gather {
  * @domain_alloc_user: allocate user iommu domain
  * @probe_device: Add device to iommu driver handling
  * @release_device: Remove device from iommu driver handling
+ * @probe_device_user: Add user_data of a device to iommu driver handling
+ * @release_device_user: Remove user_data of a device from iommu driver handling
  * @probe_finalize: Do final setup work after the device is added to an IOMMU
  *                  group and attached to the groups domain
  * @set_platform_dma_ops: Returning control back to the platform DMA ops. This op
@@ -282,6 +284,8 @@ struct iommu_ops {
 
 	struct iommu_device *(*probe_device)(struct device *dev);
 	void (*release_device)(struct device *dev);
+	int (*probe_device_user)(struct device *dev, const void *user_data);
+	void (*release_device_user)(struct device *dev);
 	void (*probe_finalize)(struct device *dev);
 	void (*set_platform_dma_ops)(struct device *dev);
 	struct iommu_group *(*device_group)(struct device *dev);
