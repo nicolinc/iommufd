@@ -126,5 +126,45 @@ out_unlock_veventqs:
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_viommu_report_event, "IOMMUFD");
 
+struct iommufd_mmap *iommufd_ctx_alloc_mmap(struct iommufd_ctx *ictx,
+					    phys_addr_t base, size_t size,
+					    bool is_io)
+{
+	struct iommufd_mmap *immap;
+	int rc;
+
+	if (base & ~PAGE_MASK)
+		return ERR_PTR(-EINVAL);
+	if (!size || size & ~PAGE_MASK)
+		return ERR_PTR(-EINVAL);
+
+	immap = kzalloc(sizeof(*immap), GFP_KERNEL);
+	if (!immap)
+		return ERR_PTR(-ENOMEM);
+	immap->pfn_start = base >> PAGE_SHIFT;
+	immap->pfn_end = immap->pfn_start + (size >> PAGE_SHIFT) - 1;
+	immap->is_io = is_io;
+
+	rc = mtree_insert_range(&ictx->mt_mmap, immap->pfn_start,
+				immap->pfn_end, immap, GFP_KERNEL);
+	if (rc) {
+		kfree(immap);
+		return ERR_PTR(rc);
+	}
+
+	return immap;
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_ctx_alloc_mmap, "IOMMUFD");
+
+void iommufd_ctx_free_mmap(struct iommufd_ctx *ictx, struct iommufd_mmap *immap)
+{
+	if (!immap)
+		return;
+	mtree_store_range(&ictx->mt_mmap, immap->pfn_start, immap->pfn_end,
+			  NULL, GFP_KERNEL);
+	kfree(immap);
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_ctx_free_mmap, "IOMMUFD");
+
 MODULE_DESCRIPTION("iommufd code shared with builtin modules");
 MODULE_LICENSE("GPL");
