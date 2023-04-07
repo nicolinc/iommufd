@@ -372,7 +372,12 @@ int iommufd_hwpt_invalidate(struct iommufd_ucmd *ucmd)
 	if (rc)
 		goto out_put_hwpt;
 
-	hwpt->domain->ops->cache_invalidate_user(hwpt->domain, cmd);
+	rc = hwpt->domain->ops->cache_invalidate_user(hwpt->domain, cmd);
+
+	/* Report the user_data in cmd that might carry a HW speicific error */
+	if (copy_to_user(u64_to_user_ptr(user_ptr), cmd, user_data_len))
+		rc = -EFAULT;
+
 out_put_hwpt:
 	iommufd_put_object(&hwpt->obj);
 	return rc;
