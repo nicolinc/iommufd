@@ -26,6 +26,7 @@ struct iommufd_ctx {
 	struct xarray groups;
 	wait_queue_head_t destroy_wait;
 	struct rw_semaphore ioas_creation_lock;
+	struct list_head mmap_list;
 
 	u8 account_mode;
 	/* Compatibility with VFIO no iommu */

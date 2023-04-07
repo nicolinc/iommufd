@@ -23,6 +23,14 @@ struct iommufd_device;
 struct iommufd_viommu_ops;
 struct page;
 
+struct iommufd_mmap {
+	unsigned long pfn_start;
+	unsigned long pfn_end;
+	bool is_io;
+
+	struct list_head mmap_item;
+};
+
 enum iommufd_object_type {
 	IOMMUFD_OBJ_NONE,
 	IOMMUFD_OBJ_ANY = IOMMUFD_OBJ_NONE,
@@ -218,6 +226,11 @@ static inline int iommufd_vfio_compat_set_no_iommu(struct iommufd_ctx *ictx)
 #endif /* CONFIG_IOMMUFD */
 
 #if IS_ENABLED(CONFIG_IOMMUFD_DRIVER_CORE)
+struct iommufd_mmap *iommufd_ctx_alloc_mmap(struct iommufd_ctx *ictx,
+					    phys_addr_t base, size_t size,
+					    bool is_io);
+void iommufd_ctx_free_mmap(struct iommufd_ctx *ictx,
+			   struct iommufd_mmap *immap);
 struct iommufd_object *_iommufd_object_alloc(struct iommufd_ctx *ictx,
 					     size_t size,
 					     enum iommufd_object_type type);
@@ -229,6 +242,18 @@ unsigned long iommufd_viommu_get_vdev_id(struct iommufd_viommu *viommu,
 int iommufd_viommu_report_irq(struct iommufd_viommu *viommu, unsigned int type,
 			      void *irq_ptr, size_t irq_len);
 #else /* !CONFIG_IOMMUFD_DRIVER_CORE */
+static inline struct iommufd_mmap *
+iommufd_ctx_alloc_mmap(struct iommufd_ctx *ictx, phys_addr_t base, size_t size,
+		       bool is_io);
+{
+	return ERR_PTR(-EOPNOTSUPP);
+}
+
+static inline void iommufd_ctx_free_mmap(struct iommufd_ctx *ictx,
+					 struct iommufd_mmap *immap)
+{
+}
+
 static inline struct iommufd_object *
 _iommufd_object_alloc(struct iommufd_ctx *ictx, size_t size,
 		      enum iommufd_object_type type)

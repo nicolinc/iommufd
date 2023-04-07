@@ -213,6 +213,7 @@ static int iommufd_fops_open(struct inode *inode, struct file *filp)
 	xa_init_flags(&ictx->objects, XA_FLAGS_ALLOC1 | XA_FLAGS_ACCOUNT);
 	xa_init(&ictx->groups);
 	ictx->file = filp;
+	INIT_LIST_HEAD(&ictx->mmap_list);
 	init_waitqueue_head(&ictx->destroy_wait);
 	filp->private_data = ictx;
 	return 0;
@@ -401,11 +402,45 @@ static long iommufd_fops_ioctl(struct file *filp, unsigned int cmd,
 	return ret;
 }
 
+/*
+ * The pfn and size carried in @vma from the user space mmap call should be
+ * previously given to user space via a prior ioctl output.
+ */
+static int iommufd_fops_mmap(struct file *filp, struct vm_area_struct *vma)
+{
+	struct iommufd_ctx *ictx = filp->private_data;
+	size_t size = vma->vm_end - vma->vm_start;
+	unsigned long pfn_start = vma->vm_pgoff;
+	unsigned long pfn_end =
+		pfn_start + (PAGE_ALIGN(size) >> PAGE_SHIFT) - 1;
+	struct iommufd_mmap *immap;
+
+	if (!(vma->vm_flags & VM_SHARED))
+		return -EINVAL;
+	if (vma->vm_flags & VM_EXEC)
+		return -EPERM;
+
+	/* FIXME do we need an owner_id to match with an immap->owner? */
+	list_for_each_entry(immap, &ictx->mmap_list, mmap_item) {
+		if (pfn_start < immap->pfn_start || pfn_end > immap->pfn_end)
+			continue;
+		vma->vm_pgoff = 0;
+		vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+		vm_flags_set(vma, VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP);
+		if (immap->is_io)
+			vm_flags_set(vma, VM_IO);
+		return remap_pfn_range(vma, vma->vm_start, pfn_start, size,
+				       vma->vm_page_prot);
+	}
+	return -EPERM;
+}
+
 static const struct file_operations iommufd_fops = {
 	.owner = THIS_MODULE,
 	.open = iommufd_fops_open,
 	.release = iommufd_fops_release,
 	.unlocked_ioctl = iommufd_fops_ioctl,
+	.mmap = iommufd_fops_mmap,
 };
 
 /**
