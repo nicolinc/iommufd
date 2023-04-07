@@ -377,6 +377,7 @@ struct iommu_domain_ops {
 	void (*free)(struct iommu_domain *domain);
 	struct iommu_domain *
 		(*get_msi_mapping_domain)(struct iommu_domain *domain);
+	void *(*get_mmap_page)(struct iommu_domain *domain, size_t pgsize);
 };
 
 /**

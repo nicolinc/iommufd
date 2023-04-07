@@ -2093,6 +2093,9 @@ static void arm_smmu_domain_free(struct iommu_domain *domain)
 			arm_smmu_bitmap_free(smmu->vmid_map, cfg->vmid);
 	}
 
+	if (smmu_domain->cmdq_user)
+		free_pages_exact(smmu_domain->cmdq_user,
+				 smmu_domain->cmdq_user_pgsize);
 	kfree(smmu_domain);
 }
 
@@ -2957,6 +2960,7 @@ static int arm_smmu_fix_user_cmd(struct arm_smmu_domain *smmu_domain, u64 *cmd)
 	return 0;
 }
 
+#if 0
 static int arm_smmu_cache_invalidate_user(struct iommu_domain *domain,
 					   void *user_data)
 {
@@ -3019,12 +3023,50 @@ out_free_cmds:
 	kfree(cmds);
 	return ret;
 }
+#endif
+
+static int arm_smmu_cache_invalidate_user(struct iommu_domain *domain,
+					  void *user_data)
+{
+	const u32 cons_err = FIELD_PREP(CMDQ_CONS_ERR, CMDQ_ERR_CERROR_ILL_IDX);
+	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+	struct iommu_hwpt_invalidate_arm_smmuv3 *inv = user_data;
+	struct arm_smmu_device *smmu = smmu_domain->smmu;
+	u64 *cmds;
+	int ret;
+	int i;
+
+	if (!smmu || !smmu_domain->s2 || domain->type != IOMMU_DOMAIN_NESTED)
+		return -EINVAL;
+	cmds = smmu_domain->cmdq_user;
+	for (i = 0; i < inv->cmdq_prod; i++) {
+		ret = arm_smmu_fix_user_cmd(smmu_domain, &cmds[i * 2]);
+		if (ret && ret != -EOPNOTSUPP) {
+			inv->cmdq_cons = cons_err | i;
+			return ret;
+		}
+	}
+	ret = arm_smmu_cmdq_issue_cmdlist(smmu, cmds, i, true);
+	inv->cmdq_cons = i;
+	return ret;
+}
+
+static void *arm_smmu_get_mmap_page(struct iommu_domain *domain, size_t pgsize)
+{
+	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+
+	if (!smmu_domain->cmdq_user)
+		smmu_domain->cmdq_user = alloc_pages_exact(pgsize, GFP_KERNEL);
+	smmu_domain->cmdq_user_pgsize = pgsize;
+	return smmu_domain->cmdq_user;
+}
 
 static const struct iommu_domain_ops arm_smmu_nested_domain_ops = {
 	.attach_dev		= arm_smmu_attach_dev,
 	.free			= arm_smmu_domain_free,
 	.get_msi_mapping_domain	= arm_smmu_get_msi_mapping_domain,
 	.cache_invalidate_user	= arm_smmu_cache_invalidate_user,
+	.get_mmap_page		= arm_smmu_get_mmap_page,
 };
 
 /**
