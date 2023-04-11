@@ -98,8 +98,8 @@ static void intel_nested_invalidate(struct device *dev,
 	}
 }
 
-static void intel_nested_cache_invalidate_user(struct iommu_domain *domain,
-					       void *user_data)
+static int intel_nested_cache_invalidate_user(struct iommu_domain *domain,
+					      void *user_data)
 {
 	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
 	struct device_domain_info *info;
@@ -110,6 +110,7 @@ static void intel_nested_cache_invalidate_user(struct iommu_domain *domain,
 		intel_nested_invalidate(info->dev, dmar_domain,
 					user_data);
 	spin_unlock_irqrestore(&dmar_domain->lock, flags);
+	return 0;
 }
 
 static const struct iommu_domain_ops intel_nested_domain_ops = {
