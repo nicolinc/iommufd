@@ -419,23 +419,23 @@ struct iommu_hwpt_intel_vtd {
 /**
  * struct iommu_hwpt_arm_smmuv3 - ARM SMMUv3 specific page table data
  *
- * @flags: page table entry attributes
- * @s2vmid: Virtual machine identifier
- * @s1ctxptr: Stage-1 context descriptor pointer
- * @s1cdmax: Number of CDs pointed to by s1ContextPtr
- * @s1fmt: Stage-1 Format
- * @s1dss: Default substream
+ * @flags: Page table entry attributes
+ * @event_len: Length of the user Stream Table Entry
+ * @ste_uptr: User pointer to a user Stream Table Entry
+ * @event_len: Length of the returning event
+ * @out_event_uptr: User pointer to a returning event, to report a C_BAD_STE upon
+ *                 an STE configuration failure
+ *
+ * If event_len or out_event_uptr is unset, remainning at value 0, an STE
+ * configuration failure during the hwpt allocation will not be reported.
  */
 struct iommu_hwpt_arm_smmuv3 {
 #define IOMMU_SMMUV3_FLAG_S2	(1 << 0) /* if unset, stage-1 */
-#define IOMMU_SMMUV3_FLAG_VMID	(1 << 1) /* vmid override */
 	__u64 flags;
-	__u32 s2vmid;
-	__u32 __reserved;
-	__u64 s1ctxptr;
-	__u64 s1cdmax;
-	__u64 s1fmt;
-	__u64 s1dss;
+	__u64 ste_len;
+	__aligned_u64 ste_uptr;
+	__u64 event_len;
+	__aligned_u64 out_event_uptr;
 };
 
 /**

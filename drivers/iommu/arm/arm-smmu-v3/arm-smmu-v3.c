@@ -2193,6 +2193,76 @@ static int arm_smmu_domain_finalise_s2(struct arm_smmu_domain *smmu_domain,
 	return 0;
 }
 
+static int
+arm_smmu_domain_finalise_nested(struct iommu_domain *domain,
+				struct arm_smmu_master *master,
+				const struct iommu_hwpt_arm_smmuv3 *user_cfg)
+{
+	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+	struct arm_smmu_device *smmu = smmu_domain->smmu;
+	bool feat_2lvl_cdtab = smmu->features & ARM_SMMU_FEAT_2_LVL_CDTAB;
+	bool feat_s1 = smmu->features & ARM_SMMU_FEAT_TRANS_S1;
+	bool feat_s2 = smmu->features & ARM_SMMU_FEAT_TRANS_S2;
+	size_t event_len = EVTQ_ENT_DWORDS * sizeof(u64);
+	size_t ste_len = STRTAB_STE_DWORDS * sizeof(u64);
+	struct device *dev = master->dev;
+	void __user *event_user = NULL;
+	u64 event[EVTQ_ENT_DWORDS];
+	u64 ste[STRTAB_STE_DWORDS];
+	u8 s1dss, s1fmt, s1cdmax;
+	u64 s1ctxptr;
+
+	if (user_cfg->out_event_uptr && user_cfg->event_len == event_len)
+		event_user = u64_to_user_ptr(user_cfg->out_event_uptr);
+	event[0] = FIELD_PREP(EVTQ_0_ID, EVT_ID_BAD_STE);
+
+	if (!feat_s1 || !feat_s2) {
+		dev_dbg(dev, "does not implement two stages\n");
+		if (event_user && copy_to_user(event_user, event, event_len))
+			return -EFAULT;
+		return -EINVAL;
+	}
+
+	if (!user_cfg->ste_uptr || user_cfg->ste_len != ste_len)
+		return -EINVAL;
+	if (copy_from_user(ste, u64_to_user_ptr(user_cfg->ste_uptr), ste_len))
+		return -EFAULT;
+
+	s1dss = FIELD_GET(STRTAB_STE_1_S1DSS, ste[1]);
+
+	s1fmt = FIELD_GET(STRTAB_STE_0_S1FMT, ste[0]);
+	if (!feat_2lvl_cdtab && s1fmt != STRTAB_STE_0_S1FMT_LINEAR) {
+		dev_dbg(dev, "unsupported format (0x%x)\n", s1fmt);
+		if (event_user && copy_to_user(event_user, event, event_len))
+			return -EFAULT;
+		return -EINVAL;
+	}
+
+	s1cdmax = FIELD_GET(STRTAB_STE_0_S1CDMAX, ste[0]);
+	if (s1cdmax > master->ssid_bits) {
+		dev_dbg(dev, "s1cdmax (%d-bit) is out of range (%d-bit)\n",
+			s1cdmax, master->ssid_bits);
+		if (event_user && copy_to_user(event_user, event, event_len))
+			return -EFAULT;
+		return -EINVAL;
+	}
+
+	s1ctxptr = ste[0] & STRTAB_STE_0_S1CTXPTR_MASK;
+	if (s1ctxptr & ~GENMASK_ULL(smmu->ias, 0)) {
+		dev_dbg(dev, "s1ctxptr (0x%llx) is out of range (%lu-bit)\n",
+			s1ctxptr, smmu->ias);
+		if (event_user && copy_to_user(event_user, event, event_len))
+			return -EFAULT;
+		return -EINVAL;
+	}
+
+	smmu_domain->s1_cfg.s1dss = s1dss;
+	smmu_domain->s1_cfg.s1fmt = s1fmt;
+	smmu_domain->s1_cfg.s1cdmax = s1cdmax;
+	smmu_domain->s1_cfg.cdcfg.cdtab_dma = s1ctxptr;
+	return 0;
+}
+
 static int arm_smmu_domain_finalise(struct iommu_domain *domain,
 				    struct arm_smmu_master *master,
 				    const struct iommu_hwpt_arm_smmuv3 *user_cfg)
@@ -2208,8 +2278,8 @@ static int arm_smmu_domain_finalise(struct iommu_domain *domain,
 	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
 	struct arm_smmu_device *smmu = smmu_domain->smmu;
 	bool user_cfg_s2 = user_cfg && (user_cfg->flags & IOMMU_SMMUV3_FLAG_S2);
-	bool feat_has_s1 = smmu->features & ARM_SMMU_FEAT_TRANS_S1;
-	bool feat_has_s2 = smmu->features & ARM_SMMU_FEAT_TRANS_S2;
+	bool feat_s1 = smmu->features & ARM_SMMU_FEAT_TRANS_S1;
+	bool feat_s2 = smmu->features & ARM_SMMU_FEAT_TRANS_S2;
 
 	if (domain->type == IOMMU_DOMAIN_IDENTITY) {
 		smmu_domain->stage = ARM_SMMU_DOMAIN_BYPASS;
@@ -2217,27 +2287,19 @@ static int arm_smmu_domain_finalise(struct iommu_domain *domain,
 	}
 
 	if (domain->type == IOMMU_DOMAIN_NESTED) {
-		if (!feat_has_s1 || !feat_has_s2) {
-			dev_dbg(smmu->dev, "does not implement two stages\n");
-			return -EINVAL;
-		}
 		smmu_domain->stage = ARM_SMMU_DOMAIN_S1;
-		smmu_domain->s1_cfg.s1fmt = user_cfg->s1fmt;
-		smmu_domain->s1_cfg.s1dss = user_cfg->s1dss;
-		smmu_domain->s1_cfg.s1cdmax = user_cfg->s1cdmax;
-		smmu_domain->s1_cfg.cdcfg.cdtab_dma = user_cfg->s1ctxptr;
-		return 0;
+		return arm_smmu_domain_finalise_nested(domain, master, user_cfg);
 	}
 
-	if (user_cfg_s2 && !feat_has_s2)
+	if (user_cfg_s2 && !feat_s2)
 		return -EINVAL;
 	if (user_cfg_s2)
 		smmu_domain->stage = ARM_SMMU_DOMAIN_S2;
 
 	/* Restrict the stage to what we can actually support */
-	if (!feat_has_s1)
+	if (!feat_s1)
 		smmu_domain->stage = ARM_SMMU_DOMAIN_S2;
-	if (!feat_has_s2)
+	if (!feat_s2)
 		smmu_domain->stage = ARM_SMMU_DOMAIN_S1;
 
 	switch (smmu_domain->stage) {
