@@ -2193,6 +2193,60 @@ static int arm_smmu_domain_finalise_s2(struct arm_smmu_domain *smmu_domain,
 	return 0;
 }
 
+static int
+arm_smmu_domain_finalise_nested(struct iommu_domain *domain,
+				struct arm_smmu_master *master,
+				const struct iommu_hwpt_arm_smmuv3 *user_cfg)
+{
+	const bool feat_has_s1 = master->smmu->features & ARM_SMMU_FEAT_TRANS_S1;
+	const bool feat_has_s2 = master->smmu->features & ARM_SMMU_FEAT_TRANS_S2;
+	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+	struct arm_smmu_device *smmu = smmu_domain->smmu;
+	const size_t event_len = EVTQ_ENT_DWORDS * 8;
+	struct device *dev = master->dev;
+	void __user *evt_user = NULL;
+	u64 evt[EVTQ_ENT_DWORDS] = {
+		[0] = FIELD_PREP(EVTQ_0_ID, EVT_ID_BAD_STE),
+	};
+
+	if (user_cfg->out_event_ptr && user_cfg->event_len == event_len)
+		evt_user = u64_to_user_ptr(user_cfg->out_event_ptr);
+
+	if (!feat_has_s1 || !feat_has_s2) {
+		dev_dbg(dev, "does not implement two stages\n");
+		if (evt_user && copy_to_user(evt_user, evt, event_len))
+			return -EFAULT;
+		return -EINVAL;
+	}
+	if (user_cfg->s1cdmax > master->ssid_bits) {
+		dev_dbg(dev, "s1cdmax (%d-bit) is out of range (%d-bit)\n",
+			user_cfg->s1cdmax, master->ssid_bits);
+		if (evt_user && copy_to_user(evt_user, evt, event_len))
+			return -EFAULT;
+		return -EINVAL;
+	}
+	if (!(smmu->features & ARM_SMMU_FEAT_2_LVL_CDTAB) &&
+	    user_cfg->s1fmt != STRTAB_STE_0_S1FMT_LINEAR) {
+		dev_dbg(dev, "unsupported format (0x%x)\n", user_cfg->s1fmt);
+		if (evt_user && copy_to_user(evt_user, evt, event_len))
+			return -EFAULT;
+		return -EINVAL;
+	}
+	if (~GENMASK_ULL(smmu->ias, 0) & user_cfg->s1ctxptr) {
+		dev_dbg(dev, "s1ctxptr (0x%llx) is out of range (%lu-bit)\n",
+			user_cfg->s1ctxptr, smmu->ias);
+		if (evt_user && copy_to_user(evt_user, evt, event_len))
+			return -EFAULT;
+		return -EINVAL;
+	}
+
+	smmu_domain->s1_cfg.s1fmt = user_cfg->s1fmt;
+	smmu_domain->s1_cfg.s1dss = user_cfg->s1dss;
+	smmu_domain->s1_cfg.s1cdmax = user_cfg->s1cdmax;
+	smmu_domain->s1_cfg.cdcfg.cdtab_dma = user_cfg->s1ctxptr;
+	return 0;
+}
+
 static int arm_smmu_domain_finalise(struct iommu_domain *domain,
 				    struct arm_smmu_master *master,
 				    const struct iommu_hwpt_arm_smmuv3 *user_cfg)
@@ -2217,16 +2271,8 @@ static int arm_smmu_domain_finalise(struct iommu_domain *domain,
 	}
 
 	if (domain->type == IOMMU_DOMAIN_NESTED) {
-		if (!feat_has_s1 || !feat_has_s2) {
-			dev_dbg(smmu->dev, "does not implement two stages\n");
-			return -EINVAL;
-		}
 		smmu_domain->stage = ARM_SMMU_DOMAIN_S1;
-		smmu_domain->s1_cfg.s1fmt = user_cfg->s1fmt;
-		smmu_domain->s1_cfg.s1dss = user_cfg->s1dss;
-		smmu_domain->s1_cfg.s1cdmax = user_cfg->s1cdmax;
-		smmu_domain->s1_cfg.cdcfg.cdtab_dma = user_cfg->s1ctxptr;
-		return 0;
+		return arm_smmu_domain_finalise_nested(domain, master, user_cfg);
 	}
 
 	if (user_cfg_s2 && !feat_has_s2)
