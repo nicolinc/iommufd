@@ -643,19 +643,23 @@ struct iommu_hwpt_invalidate_intel_vtd {
 
 /**
  * struct iommu_hwpt_invalidate_arm_smmuv3 - ARM SMMUv3 cahce invalidation info
- * @cmdq_base: User space base virtual address of user command queue
- * @cmdq_entry_size: Entry size of user command queue
- * @cmdq_log2size: User command queue size as log 2 (entries)
- *                 Refer to LOG2SIZE field of CMD_BASE regisiter
- * @cmdq_prod: Producer index of user command queue
- * @cmdq_cons: Consumer index of user command queue
+ * @cmdq_uptr: User pointer to a user command queue
+ * @cmdq_cons_uptr: User pointer to the consumer index of a user command queue,
+ *                  allowing kernel to read and also update the consumer index
+ *                  for a successful call or a failure with a CERROR_ILL code.
+ *                  This pointer must point to a __u32 type of memory location.
+ * @cmdq_prod: Producer index of user command queues
+ * @cmdq_entry_size: Entry size of a user command queue
+ * @cmdq_log2size: Queue size as log2(entries). Refer to 6.3.25 SMMU_CMDQ_BASE
+ * @__reserved: Must be 0
  */
 struct iommu_hwpt_invalidate_arm_smmuv3 {
-	__u64 cmdq_base;
+	__aligned_u64 cmdq_uptr;
+	__aligned_u64 cmdq_cons_uptr;
+	__u32 cmdq_prod;
 	__u32 cmdq_entry_size;
 	__u32 cmdq_log2size;
-	__u32 cmdq_prod;
-	__u32 cmdq_cons;
+	__u32 __reserved;
 };
 
 /**

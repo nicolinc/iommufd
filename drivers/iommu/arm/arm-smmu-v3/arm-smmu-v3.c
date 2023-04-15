@@ -3029,16 +3029,15 @@ static int arm_smmu_cache_invalidate_user(struct iommu_domain *domain,
 	struct arm_smmu_queue q = {
 		.llq = {
 			.prod = inv->cmdq_prod,
-			.cons = inv->cmdq_cons,
 			.max_n_shift = inv->cmdq_log2size,
 		},
-		.base = (void *)inv->cmdq_base,	/* Note: user space VA! */
+		.base = u64_to_user_ptr(inv->cmdq_uptr),
 		.ent_dwords = inv->cmdq_entry_size / sizeof(u64),
 	};
-	int ncmds = inv->cmdq_prod - inv->cmdq_cons;
 	unsigned int nents = 1 << q.llq.max_n_shift;
+	void __user *cons_uptr;
+	int ncmds, i = 0;
 	u64 *cmds;
-	int i = 0;
 	int ret;
 
 	if (!smmu || !smmu_domain->s2 || domain->type != IOMMU_DOMAIN_NESTED)
@@ -3049,6 +3048,11 @@ static int arm_smmu_cache_invalidate_user(struct iommu_domain *domain,
 		return -EINVAL;
 	WARN_ON(q.llq.max_n_shift > smmu->cmdq.q.llq.max_n_shift);
 
+	cons_uptr = u64_to_user_ptr(inv->cmdq_cons_uptr);
+	if (copy_from_user(&q.llq.cons, cons_uptr, sizeof(u32)))
+		return -EFAULT;
+
+	ncmds = q.llq.prod - q.llq.cons;
 	if (ncmds <= 0)
 		ncmds += nents;
 	cmds = kcalloc(ncmds, inv->cmdq_entry_size, GFP_KERNEL);
@@ -3068,7 +3072,7 @@ static int arm_smmu_cache_invalidate_user(struct iommu_domain *domain,
 		ret = arm_smmu_fix_user_cmd(smmu_domain, cmd);
 		if (ret && ret != -EOPNOTSUPP) {
 			q.llq.cons |= cons_err;
-			goto out_free_cmds;
+			goto out_copy_cons;
 		}
 		if (!ret)
 			i++;
@@ -3076,7 +3080,9 @@ static int arm_smmu_cache_invalidate_user(struct iommu_domain *domain,
 	} while (!queue_empty(&q.llq));
 
 	ret = arm_smmu_cmdq_issue_cmdlist(smmu, cmds, i, true);
-	inv->cmdq_cons = q.llq.cons;
+out_copy_cons:
+	if (copy_to_user(cons_uptr, &q.llq.cons, sizeof(u32)))
+		ret = -EFAULT;
 out_free_cmds:
 	kfree(cmds);
 	return ret;
