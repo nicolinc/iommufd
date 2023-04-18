@@ -104,9 +104,10 @@ static struct iommufd_ctx *vfio_get_iommufd_from_fd(int fd)
 long vfio_device_ioctl_bind_iommufd(struct vfio_device_file *df,
 				    struct vfio_device_bind_iommufd __user *arg)
 {
+	uint32_t mask = VFIO_DEVICE_BIND_IOMMUFD_FLAG_DATA;
 	struct vfio_device *device = df->device;
 	struct vfio_device_bind_iommufd bind;
-	unsigned long minsz;
+	unsigned long minsz, datasz;
 	bool is_noiommu;
 	int ret;
 
@@ -117,8 +118,22 @@ long vfio_device_ioctl_bind_iommufd(struct vfio_device_file *df,
 	if (copy_from_user(&bind, arg, minsz))
 		return -EFAULT;
 
-	if (bind.argsz < minsz || bind.flags)
+	if (bind.argsz < minsz || bind.flags & ~mask)
 		return -EINVAL;
+
+	if (bind.flags & VFIO_DEVICE_BIND_IOMMUFD_FLAG_DATA) {
+		datasz = offsetofend(struct vfio_device_bind_iommufd,
+				     dev_data_len);
+		if (bind.argsz < datasz)
+			return -EINVAL;
+		if (copy_from_user((void *)&bind + minsz,
+				   (void __user *)arg + minsz, datasz - minsz))
+			return -EFAULT;
+		if (!bind.dev_data_uptr ^ !bind.dev_data_len)
+			return -EINVAL;
+		device->user_data = u64_to_user_ptr(bind.dev_data_uptr);
+		device->user_data_len = bind.dev_data_len;
+	}
 
 	/* BIND_IOMMUFD only allowed for cdev fds */
 	if (df->group)
