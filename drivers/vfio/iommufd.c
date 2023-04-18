@@ -88,7 +88,8 @@ int vfio_iommufd_physical_bind(struct vfio_device *vdev,
 {
 	struct iommufd_device *idev;
 
-	idev = iommufd_device_bind(ictx, vdev->dev, out_device_id, NULL, 0);
+	idev = iommufd_device_bind(ictx, vdev->dev, out_device_id,
+				   vdev->user_data, vdev->user_data_len);
 	if (IS_ERR(idev))
 		return PTR_ERR(idev);
 	vdev->iommufd_device = idev;

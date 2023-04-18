@@ -212,15 +212,28 @@ struct vfio_group_status {
  *		as long as the input @iommufd is valid. Otherwise, it is
  *		meaningless. devid is a handle for this device and can be
  *		used in IOMMUFD commands.
+ * @dev_data_uptr: User pointer of the device user data.
+ * @dev_data_len: Length of the device user data.
+ *
+ * A device user data is an iommu specific structure that must be defined in
+ * the include/uapi/linux/iommufd.h file. On some platform enabling the iommu
+ * nested translation configuration, a device behind the iommu, while working
+ * in a guest VM, needs to provide the host kernel a certain virtual ID in the
+ * guest VM. For example, ARM SMMUv3 requires a virtual Stream ID to sanity a
+ * cache invalidation command from the user space. User space wanting to pass a
+ * user data must set VFIO_DEVICE_BIND_IOMMUFD_FLAGS_DATA flag.
  *
  * Return: 0 on success, -errno on failure.
  */
 struct vfio_device_bind_iommufd {
 	__u32		argsz;
 	__u32		flags;
+#define VFIO_DEVICE_BIND_IOMMUFD_FLAGS_DATA		(1 << 0)
 	__s32		iommufd;
 #define VFIO_NOIOMMU_FD	(-1)
 	__u32		out_devid;
+	__aligned_u64	dev_data_uptr;
+	__u32		dev_data_len;
 };
 
 #define VFIO_DEVICE_BIND_IOMMUFD	_IO(VFIO_TYPE, VFIO_BASE + 19)
