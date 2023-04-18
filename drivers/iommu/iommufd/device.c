@@ -610,6 +610,71 @@ out_unlock:
 	return destroy_hwpt;
 }
 
+/* size of iommu specific device data, indexed by enum hw_info_type. */
+static const size_t iommufd_device_data_size[] = {
+	[IOMMU_HW_INFO_TYPE_NONE] = 0,
+	[IOMMU_HW_INFO_TYPE_INTEL_VTD] = 0,
+};
+
+/**
+ * iommufd_device_set_data - Set an iommu specific device data
+ * @idev: device to set data
+ * @data_uptr: User pointer to an iommu specific device data
+ * @data_len: Length of the iommu specific device user data
+ *
+ * This sets an iommu specific device data from the user space.
+ */
+int iommufd_device_set_data(struct iommufd_device *idev,
+			    void __user *data_uptr, size_t data_len)
+{
+	const struct iommu_ops *ops = dev_iommu_ops(idev->dev);
+	void *data = NULL;
+	u32 klen = 0;
+	int rc;
+
+	if (!data_uptr || !data_len)
+		return -EINVAL;
+	if (!ops->set_dev_data_user || !ops->unset_dev_data_user)
+		return -EOPNOTSUPP;
+	if (ops->hw_info_type >= ARRAY_SIZE(iommufd_device_data_size))
+		return -EOPNOTSUPP;
+
+	klen = iommufd_device_data_size[ops->hw_info_type];
+	if (!klen)
+		return -EOPNOTSUPP;
+
+	data = kzalloc(klen, GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	if (copy_struct_from_user(data, klen, data_uptr, data_len)) {
+		rc = -EFAULT;
+		goto out_free_data;
+	}
+
+	rc = ops->set_dev_data_user(idev->dev, data);
+out_free_data:
+	kfree(data);
+	return rc;
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_device_set_data, IOMMUFD);
+
+/**
+ * iommufd_device_unset_data - Unset a device's iommu specific data
+ * @idev: device to unset data
+ *
+ * This unsets an iommu specific device data that is previously set from user
+ * space, calling ops->unset_dev_data_user.
+ */
+void iommufd_device_unset_data(struct iommufd_device *idev)
+{
+	const struct iommu_ops *ops = dev_iommu_ops(idev->dev);
+
+	if (ops->unset_dev_data_user)
+		ops->unset_dev_data_user(idev->dev);
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_device_unset_data, IOMMUFD);
+
 static int iommufd_device_change_pt(struct iommufd_device *idev, u32 *pt_id,
 				    attach_fn do_attach)
 {
