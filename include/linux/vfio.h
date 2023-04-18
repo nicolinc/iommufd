@@ -68,6 +68,8 @@ struct vfio_device {
 #if IS_ENABLED(CONFIG_IOMMUFD)
 	struct iommufd_device *iommufd_device;
 	bool iommufd_attached;
+	void *user_data;
+	u32 user_data_len;
 #endif
 	bool noiommu;
 };

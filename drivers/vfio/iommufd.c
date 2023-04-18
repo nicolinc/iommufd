@@ -91,6 +91,16 @@ int vfio_iommufd_physical_bind(struct vfio_device *vdev,
 	idev = iommufd_device_bind(ictx, vdev->dev, out_device_id);
 	if (IS_ERR(idev))
 		return PTR_ERR(idev);
+
+	if (vdev->user_data) {
+		int rc = iommufd_device_set_data(idev, vdev->user_data,
+						 vdev->user_data_len);
+		if (rc) {
+			iommufd_device_unbind(idev);
+			return rc;
+		}
+	}
+
 	vdev->iommufd_device = idev;
 	return 0;
 }
@@ -104,8 +114,11 @@ void vfio_iommufd_physical_unbind(struct vfio_device *vdev)
 		iommufd_device_detach(vdev->iommufd_device);
 		vdev->iommufd_attached = false;
 	}
+	iommufd_device_unset_data(vdev->iommufd_device);
 	iommufd_device_unbind(vdev->iommufd_device);
 	vdev->iommufd_device = NULL;
+	vdev->user_data = NULL;
+	vdev->user_data_len = 0;
 }
 EXPORT_SYMBOL_GPL(vfio_iommufd_physical_unbind);
 
