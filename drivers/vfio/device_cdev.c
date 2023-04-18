@@ -199,9 +199,10 @@ out_unlock:
 int vfio_ioctl_device_attach(struct vfio_device_file *df,
 			     struct vfio_device_attach_iommufd_pt __user *arg)
 {
+	uint32_t mask = VFIO_DEVICE_BIND_IOMMUFD_FLAG_DATA;
 	struct vfio_device *device = df->device;
 	struct vfio_device_attach_iommufd_pt attach;
-	unsigned long minsz;
+	unsigned long minsz, datasz;
 	int ret;
 
 	minsz = offsetofend(struct vfio_device_attach_iommufd_pt, pt_id);
@@ -209,14 +210,32 @@ int vfio_ioctl_device_attach(struct vfio_device_file *df,
 	if (copy_from_user(&attach, arg, minsz))
 		return -EFAULT;
 
-	if (attach.argsz < minsz || attach.flags)
+	if (attach.argsz < minsz || attach.flags & ~mask)
 		return -EINVAL;
 
 	/* ATTACH only allowed for cdev fds */
 	if (df->group)
 		return -EINVAL;
 
+	if (attach.flags & VFIO_DEVICE_BIND_IOMMUFD_FLAG_DATA) {
+		datasz = offsetofend(struct vfio_device_attach_iommufd_pt,
+				     dev_data_len);
+		if (attach.argsz < datasz)
+			return -EINVAL;
+		if (copy_from_user(&attach.dev_data_uptr,
+				   arg + minsz, datasz - minsz))
+			return -EFAULT;
+		if (attach.dev_data_uptr ^ attach.dev_data_len)
+			return -EINVAL;
+	}
+
 	mutex_lock(&device->dev_set->lock);
+
+	if (attach.flags & VFIO_DEVICE_BIND_IOMMUFD_FLAG_DATA) {
+		device->user_data = u64_to_user_ptr(attach.dev_data_uptr);
+		device->user_data_len = attach.dev_data_len;
+	}
+
 	/* noiommufd mode doesn't allow attach */
 	if (!df->iommufd) {
 		ret = -EOPNOTSUPP;
@@ -268,6 +287,8 @@ int vfio_ioctl_device_detach(struct vfio_device_file *df,
 		return -EOPNOTSUPP;
 	}
 	device->ops->detach_ioas(device);
+	device->user_data = NULL;
+	device->user_data_len = 0;
 	mutex_unlock(&device->dev_set->lock);
 
 	return 0;

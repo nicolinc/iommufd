@@ -118,14 +118,23 @@ int vfio_iommufd_physical_attach_ioas(struct vfio_device *vdev, u32 *pt_id)
 	if (WARN_ON(!vdev->iommufd_device))
 		return -EINVAL;
 
+	rc = iommufd_device_set_data(vdev->iommufd_device,
+				     vdev->user_data,
+				     vdev->user_data_len);
+	if (rc)
+		return rc;
+
 	if (vdev->iommufd_attached)
 		rc = iommufd_device_replace(vdev->iommufd_device, pt_id);
 	else
 		rc = iommufd_device_attach(vdev->iommufd_device, pt_id);
-	if (rc)
+	if (rc) {
+		iommufd_device_set_data(vdev->iommufd_device, NULL, 0);
 		return rc;
+	}
 	vdev->iommufd_attached = true;
-	return 0;
+
+	return rc;
 }
 EXPORT_SYMBOL_GPL(vfio_iommufd_physical_attach_ioas);
 

@@ -250,13 +250,26 @@ struct vfio_device_bind_iommufd {
  *		Output the attached hwpt id which could be the specified
  *		hwpt itself or a hwpt automatically created for the
  *		specified ioas by kernel during the attachment.
+ * @dev_data_uptr: User pointer of the device user data.
+ * @dev_data_len: Length of the device user data.
+ *
+ * A device user data is an iommu specific structure that must be defined in
+ * the include/uapi/linux/iommufd.h file. On some platform enabling the iommu
+ * nested translation configuration, a device behind the iommu, while working
+ * in a guest VM, needs to provide the host kernel a certain virtual ID in the
+ * guest VM. For example, ARM SMMUv3 requires a virtual Stream ID to sanity a
+ * cache invalidation command from the user space. User space wanting to pass a
+ * user data must set VFIO_DEVICE_BIND_IOMMUFD_FLAG_DATA flag.
  *
  * Return: 0 on success, -errno on failure.
  */
 struct vfio_device_attach_iommufd_pt {
 	__u32	argsz;
 	__u32	flags;
+#define VFIO_DEVICE_BIND_IOMMUFD_FLAG_DATA		(1 << 0)
 	__u32	pt_id;
+	__u32	dev_data_len;
+	__aligned_u64	dev_data_uptr;
 };
 
 #define VFIO_DEVICE_ATTACH_IOMMUFD_PT		_IO(VFIO_TYPE, VFIO_BASE + 20)
