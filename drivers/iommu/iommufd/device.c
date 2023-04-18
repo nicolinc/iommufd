@@ -142,11 +142,19 @@ void iommufd_device_destroy(struct iommufd_object *obj)
 		iommufd_ctx_put(idev->ictx);
 }
 
+/* size of iommu specific device data, indexed by enum hw_info_type. */
+static const size_t iommufd_device_probe_data_size[] = {
+	[IOMMU_HW_INFO_TYPE_NONE] = 0,
+	[IOMMU_HW_INFO_TYPE_INTEL_VTD] = 0,
+};
+
 /**
  * iommufd_device_bind - Bind a physical device to an iommu fd
  * @ictx: iommufd file descriptor
  * @dev: Pointer to a physical device struct
  * @id: Output ID number to return to userspace for this device
+ * @data_uptr: User pointer to an iommu specific device data
+ * @data_len: Length of the iommu specific device user data
  *
  * A successful bind establishes an ownership over the device and returns
  * struct iommufd_device pointer, otherwise returns error pointer.
@@ -159,11 +167,23 @@ void iommufd_device_destroy(struct iommufd_object *obj)
  * The caller must undo this with iommufd_device_unbind()
  */
 struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
-					   struct device *dev, u32 *id)
+					   struct device *dev, u32 *id,
+					   void __user *data_uptr,
+					   size_t data_len)
 {
+	const struct iommu_ops *ops = dev_iommu_ops(dev);
 	struct iommufd_device *idev;
 	struct iommufd_group *igroup;
+	void *data = NULL;
+	u32 klen = 0;
 	int rc;
+
+	if (data_len) {
+		if (!ops->probe_device_user)
+			return ERR_PTR(-EOPNOTSUPP);
+		if (ops->hw_info_type != IOMMU_HWPT_TYPE_SELFTTEST)
+			klen = iommufd_device_probe_data_size[ops->hw_info_type];
+	}
 
 	/*
 	 * iommufd always sets IOMMU_CACHE because we offer no way for userspace
@@ -216,6 +236,22 @@ struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 	/* igroup refcount moves into iommufd_device */
 	idev->igroup = igroup;
 
+	if (klen) {
+		data = kzalloc(klen, GFP_KERNEL);
+		if (!data) {
+			rc = -ENOMEM;
+			goto out_abort;
+		}
+
+		rc = copy_struct_from_user(data, klen, data_uptr, data_len);
+		if (rc)
+			goto out_free_data;
+
+		rc = ops->probe_device_user(dev, data);
+		if (rc)
+			goto out_free_data;
+	}
+
 	/*
 	 * If the caller fails after this success it must call
 	 * iommufd_unbind_device() which is safe since we hold this refcount.
@@ -226,6 +262,10 @@ struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 	*id = idev->obj.id;
 	return idev;
 
+out_free_data:
+	kfree(data);
+out_abort:
+	iommufd_object_abort_and_destroy(idev->ictx, &idev->obj);
 out_release_owner:
 	iommu_device_release_dma_owner(dev);
 out_group_put:
@@ -245,8 +285,11 @@ EXPORT_SYMBOL_NS_GPL(iommufd_device_bind, IOMMUFD);
  */
 void iommufd_device_unbind(struct iommufd_device *idev)
 {
+	const struct iommu_ops *ops = dev_iommu_ops(idev->dev);
 	bool was_destroyed;
 
+	if (ops->release_device_user)
+		ops->release_device_user(idev->dev);
 	was_destroyed = iommufd_object_destroy_user(idev->ictx, &idev->obj);
 	WARN_ON(!was_destroyed);
 }

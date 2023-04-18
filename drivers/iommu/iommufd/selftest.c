@@ -514,7 +514,7 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 	}
 
 	idev = iommufd_device_bind(ucmd->ictx, &sobj->idev.mock_dev->dev,
-				   &idev_id);
+				   &idev_id, NULL, 0);
 	if (IS_ERR(idev)) {
 		rc = PTR_ERR(idev);
 		goto out_mdev;
