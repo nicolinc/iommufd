@@ -288,6 +288,7 @@ struct iommu_ops {
 	struct iommu_domain *(*domain_alloc_user)(struct device *dev,
 						  struct iommu_domain *parent,
 						  const void *user_data);
+	const size_t *domain_alloc_user_data_len;
 
 	struct iommu_device *(*probe_device)(struct device *dev);
 	void (*release_device)(struct device *dev);

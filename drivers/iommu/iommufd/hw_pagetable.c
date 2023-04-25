@@ -179,16 +179,6 @@ out_abort:
 	return ERR_PTR(rc);
 }
 
-/*
- * size of page table type specific data, indexed by
- * enum iommu_hwpt_type.
- */
-static const size_t iommufd_hwpt_alloc_data_size[] = {
-	[IOMMU_HWPT_TYPE_DEFAULT] = 0,
-	[IOMMU_HWPT_TYPE_VTD_S1] = sizeof(struct iommu_hwpt_intel_vtd),
-	[IOMMU_HWPT_TYPE_ARM_SMMUV3] = sizeof(struct iommu_hwpt_arm_smmuv3),
-};
-
 int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 {
 	struct iommufd_hw_pagetable *hwpt, *parent = NULL;
@@ -198,8 +188,8 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	struct iommufd_device *idev;
 	struct iommufd_ioas *ioas;
 	void *data = NULL;
-	u32 klen = 0;
 	int rc = 0;
+	u32 klen;
 
 	if (cmd->flags || cmd->__reserved)
 		return -EOPNOTSUPP;
@@ -212,12 +202,18 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 
 	/*
 	 * All drivers support IOMMU_HWPT_TYPE_DEFAULT, so pass it through.
-	 * For any other cmd->hwpt_type, check ops->hwpt_type_bitmap.
+	 * For any other cmd->hwpt_type, check the ops->hwpt_type_bitmap and
+	 * the ops->domain_alloc_user_data_len array.
 	 */
-	if (cmd->hwpt_type != IOMMU_HWPT_TYPE_DEFAULT &&
-	    !(BIT_ULL(cmd->hwpt_type) & ops->hwpt_type_bitmap)) {
-		rc = -EINVAL;
-		goto out_put_idev;
+	if (cmd->hwpt_type != IOMMU_HWPT_TYPE_DEFAULT) {
+		if (!(BIT_ULL(cmd->hwpt_type) & ops->hwpt_type_bitmap)) {
+			rc = -EINVAL;
+			goto out_put_idev;
+		}
+		if (!ops->domain_alloc_user_data_len) {
+			rc = -EOPNOTSUPP;
+			goto out_put_idev;
+		}
 	}
 
 	pt_obj = iommufd_get_object(ucmd->ictx, cmd->pt_id, IOMMUFD_OBJ_ANY);
@@ -254,12 +250,20 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 		goto out_put_pt;
 	}
 
-	if (cmd->hwpt_type != IOMMU_HWPT_TYPE_SELFTTEST)
-		klen = iommufd_hwpt_alloc_data_size[cmd->hwpt_type];
+	switch (cmd->hwpt_type) {
+	case IOMMU_HWPT_TYPE_DEFAULT:
+		klen = 0;
+		break;
 #ifdef CONFIG_IOMMUFD_TEST
-	else
-		klen = sizeof(struct iommu_hwpt_selftest);
+	case IOMMU_HWPT_TYPE_SELFTTEST:
+		klen = ops->domain_alloc_user_data_len[0];
+		break;
 #endif
+	default:
+		klen = ops->domain_alloc_user_data_len[cmd->hwpt_type];
+		break;
+	}
+
 	if (klen) {
 		if (!cmd->data_len) {
 			rc = -EINVAL;

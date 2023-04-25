@@ -3200,11 +3200,16 @@ arm_smmu_domain_alloc_user(struct device *dev, struct iommu_domain *parent,
 	return __arm_smmu_domain_alloc(type, s2, master, user_cfg);
 }
 
+static const size_t arm_smmu_domain_user_data_len[] = {
+	[IOMMU_HWPT_TYPE_ARM_SMMUV3] = sizeof(struct iommu_hwpt_arm_smmuv3),
+};
+
 static struct iommu_ops arm_smmu_ops = {
 	.capable		= arm_smmu_capable,
 	.hw_info		= arm_smmu_hw_info,
 	.domain_alloc		= arm_smmu_domain_alloc,
 	.domain_alloc_user	= arm_smmu_domain_alloc_user,
+	.domain_alloc_user_data_len = arm_smmu_domain_user_data_len,
 	.probe_device		= arm_smmu_probe_device,
 	.release_device		= arm_smmu_release_device,
 	.set_dev_user_data	= arm_smmu_set_dev_user_data,

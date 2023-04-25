@@ -350,6 +350,10 @@ static void mock_domain_unset_dev_user_data(struct device *dev)
 	mdev->dev_data = 0;
 }
 
+static const size_t mock_domain_user_data_len[] = {
+	[0] = sizeof(struct iommu_hwpt_selftest),
+};
+
 static const struct iommu_ops mock_ops = {
 	.owner = THIS_MODULE,
 	.pgsize_bitmap = MOCK_IO_PAGE_SIZE,
@@ -358,6 +362,7 @@ static const struct iommu_ops mock_ops = {
 	.hwpt_type_bitmap = IOMMU_HWPT_TYPE_BITMAP_SELFTTEST,
 	.domain_alloc = mock_domain_alloc,
 	.domain_alloc_user = mock_domain_alloc_user,
+	.domain_alloc_user_data_len = mock_domain_user_data_len,
 	.capable = mock_domain_capable,
 	.set_platform_dma_ops = mock_domain_set_plaform_dma_ops,
 	.set_dev_user_data = mock_domain_set_dev_user_data,

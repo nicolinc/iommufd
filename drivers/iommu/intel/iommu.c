@@ -4817,11 +4817,16 @@ static void *intel_iommu_hw_info(struct device *dev, u32 *length)
 	return vtd;
 }
 
+static const size_t intel_iommu_domain_user_data_len[] = {
+	[IOMMU_HWPT_TYPE_VTD_S1] = sizeof(struct iommu_hwpt_intel_vtd),
+};
+
 const struct iommu_ops intel_iommu_ops = {
 	.capable		= intel_iommu_capable,
 	.hw_info		= intel_iommu_hw_info,
 	.domain_alloc		= intel_iommu_domain_alloc,
 	.domain_alloc_user	= intel_iommu_domain_alloc_user,
+	.domain_alloc_user_data_len = intel_iommu_domain_user_data_len,
 	.probe_device		= intel_iommu_probe_device,
 	.probe_finalize		= intel_iommu_probe_finalize,
 	.release_device		= intel_iommu_release_device,
