@@ -123,6 +123,8 @@ static int intel_nested_cache_invalidate_user(struct iommu_domain *domain,
 static const struct iommu_domain_ops intel_nested_domain_ops = {
 	.attach_dev		= intel_nested_attach_dev,
 	.cache_invalidate_user	= intel_nested_cache_invalidate_user,
+	.cache_invalidate_user_data_len =
+		sizeof(struct iommu_hwpt_invalidate_intel_vtd),
 	.free			= intel_nested_domain_free,
 	.enforce_cache_coherency = intel_iommu_enforce_cache_coherency,
 };

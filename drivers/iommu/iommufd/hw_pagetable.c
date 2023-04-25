@@ -300,27 +300,16 @@ out_put_idev:
 	return rc;
 }
 
-/*
- * size of page table type specific invalidate_info, indexed by
- * enum iommu_hwpt_type.
- */
-static const size_t iommufd_hwpt_invalidate_info_size[] = {
-	[IOMMU_HWPT_TYPE_VTD_S1] = sizeof(struct iommu_hwpt_invalidate_intel_vtd),
-	[IOMMU_HWPT_TYPE_ARM_SMMUV3] = sizeof(struct iommu_hwpt_invalidate_arm_smmuv3),
-};
-
 int iommufd_hwpt_invalidate(struct iommufd_ucmd *ucmd)
 {
 	struct iommu_hwpt_invalidate *cmd = ucmd->cmd;
 	struct iommufd_hw_pagetable *hwpt;
-	u32 user_data_len, klen = 0;
+	u32 user_data_len, klen;
 	u64 user_ptr;
 	int rc = 0;
 
 	/* For a user-managed HWPT, type should not be IOMMU_HWPT_TYPE_DEFAULT */
-	if (cmd->hwpt_type == IOMMU_HWPT_TYPE_DEFAULT || !cmd->data_len ||
-	    (cmd->hwpt_type != IOMMU_HWPT_TYPE_SELFTTEST &&
-	     cmd->hwpt_type >= ARRAY_SIZE(iommufd_hwpt_invalidate_info_size)))
+	if (cmd->hwpt_type == IOMMU_HWPT_TYPE_DEFAULT || !cmd->data_len)
 		return -EOPNOTSUPP;
 
 	hwpt = iommufd_get_hwpt(ucmd, cmd->hwpt_id);
@@ -333,14 +322,9 @@ int iommufd_hwpt_invalidate(struct iommufd_ucmd *ucmd)
 		goto out_put_hwpt;
 	}
 
-	if (cmd->hwpt_type != IOMMU_HWPT_TYPE_SELFTTEST)
-		klen = iommufd_hwpt_invalidate_info_size[cmd->hwpt_type];
-#ifdef CONFIG_IOMMUFD_TEST
-	else
-		klen = sizeof(struct iommu_hwpt_invalidate_selftest);
-#endif
-	if (!klen) {
-		rc = -EINVAL;
+	klen = hwpt->domain->ops->cache_invalidate_user_data_len;
+	if (!hwpt->domain->ops->cache_invalidate_user || !klen) {
+		rc = -EOPNOTSUPP;
 		goto out_put_hwpt;
 	}
 

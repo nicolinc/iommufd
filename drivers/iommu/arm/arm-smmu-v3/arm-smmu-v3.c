@@ -3091,6 +3091,8 @@ static const struct iommu_domain_ops arm_smmu_nested_domain_ops = {
 	.free			= arm_smmu_domain_free,
 	.get_msi_mapping_domain	= arm_smmu_get_msi_mapping_domain,
 	.cache_invalidate_user	= arm_smmu_cache_invalidate_user,
+	.cache_invalidate_user_data_len =
+		sizeof(struct iommu_hwpt_invalidate_arm_smmuv3),
 };
 
 /**
