@@ -188,8 +188,8 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	struct iommufd_device *idev;
 	struct iommufd_ioas *ioas;
 	void *data = NULL;
+	u32 klen = 0;
 	int rc = 0;
-	u32 klen;
 
 	if (cmd->flags || cmd->__reserved)
 		return -EOPNOTSUPP;
@@ -250,19 +250,8 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 		goto out_put_pt;
 	}
 
-	switch (cmd->hwpt_type) {
-	case IOMMU_HWPT_TYPE_DEFAULT:
-		klen = 0;
-		break;
-#ifdef CONFIG_IOMMUFD_TEST
-	case IOMMU_HWPT_TYPE_SELFTTEST:
-		klen = ops->domain_alloc_user_data_len[0];
-		break;
-#endif
-	default:
+	if (cmd->hwpt_type != IOMMU_HWPT_TYPE_DEFAULT)
 		klen = ops->domain_alloc_user_data_len[cmd->hwpt_type];
-		break;
-	}
 
 	if (klen) {
 		if (!cmd->data_len) {

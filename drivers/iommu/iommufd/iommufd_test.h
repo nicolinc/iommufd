@@ -135,7 +135,7 @@ struct iommu_test_device_data {
 };
 
 /* Should not be equal to any defined value in enum iommu_hwpt_type */
-#define IOMMU_HWPT_TYPE_SELFTTEST	0xbadbeef
+#define IOMMU_HWPT_TYPE_SELFTTEST		0xdead
 #define IOMMU_HWPT_TYPE_BITMAP_SELFTTEST	U64_MAX
 
 /**

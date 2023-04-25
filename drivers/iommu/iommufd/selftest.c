@@ -351,7 +351,7 @@ static void mock_domain_unset_dev_user_data(struct device *dev)
 }
 
 static const size_t mock_domain_user_data_len[] = {
-	[0] = sizeof(struct iommu_hwpt_selftest),
+	[IOMMU_HWPT_TYPE_SELFTTEST] = sizeof(struct iommu_hwpt_selftest),
 };
 
 static const struct iommu_ops mock_ops = {
