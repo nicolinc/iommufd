@@ -249,6 +249,8 @@ union iommu_domain_user_data {
  * include/uapi/linux/iommufd.h.
  */
 union iommu_cache_invalidate_user_data {
+	struct iommu_hwpt_vtd_s1_invalidate vtd;
+	struct iommu_hwpt_vtd_s1_invalidate_desc req_vtd;
 };
 
 /**
