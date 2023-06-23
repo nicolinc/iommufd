@@ -430,7 +430,7 @@ static int iommufd_device_enforce_rr(struct iommufd_device *idev,
 	else
 		ioas = hwpt->ioas;
 	return iopt_table_enforce_dev_resv_regions(&ioas->iopt, idev->dev,
-						   sw_msi_start);
+						   sw_msi_start, false);
 }
 
 int iommufd_hw_pagetable_attach(struct iommufd_hw_pagetable *hwpt,
