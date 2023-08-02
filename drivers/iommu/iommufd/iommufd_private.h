@@ -263,9 +263,14 @@ int iommufd_vfio_ioas(struct iommufd_ucmd *ucmd);
 struct iommufd_hw_pagetable {
 	struct iommufd_object obj;
 	struct iommu_domain *domain;
+	bool user_managed : 1;
 	union {
+		struct { /* user-managed */
+			struct iommufd_hw_pagetable *parent;
+		};
 		struct { /* kernel-managed */
 			struct iommufd_ioas *ioas;
+			struct mutex mutex;
 			bool auto_domain : 1;
 			bool enforce_cache_coherency : 1;
 			bool msi_cookie : 1;

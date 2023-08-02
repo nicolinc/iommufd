@@ -12,19 +12,25 @@ void iommufd_hw_pagetable_destroy(struct iommufd_object *obj)
 {
 	struct iommufd_hw_pagetable *hwpt =
 		container_of(obj, struct iommufd_hw_pagetable, obj);
+	struct iommufd_object *pt_obj;
 
-	if (!list_empty(&hwpt->hwpt_item)) {
-		mutex_lock(&hwpt->ioas->mutex);
-		list_del(&hwpt->hwpt_item);
-		mutex_unlock(&hwpt->ioas->mutex);
+	if (hwpt->user_managed) {
+		pt_obj = &hwpt->parent->obj;
+	} else {
+		if (!list_empty(&hwpt->hwpt_item)) {
+			mutex_lock(&hwpt->ioas->mutex);
+			list_del(&hwpt->hwpt_item);
+			mutex_unlock(&hwpt->ioas->mutex);
 
-		iopt_table_remove_domain(&hwpt->ioas->iopt, hwpt->domain);
+			iopt_table_remove_domain(&hwpt->ioas->iopt,
+						 hwpt->domain);
+		}
+		pt_obj = &hwpt->ioas->obj;
 	}
-
 	if (hwpt->domain)
 		iommu_domain_free(hwpt->domain);
 
-	refcount_dec(&hwpt->ioas->obj.users);
+	refcount_dec(&pt_obj->users);
 }
 
 void iommufd_hw_pagetable_abort(struct iommufd_object *obj)
@@ -32,14 +38,96 @@ void iommufd_hw_pagetable_abort(struct iommufd_object *obj)
 	struct iommufd_hw_pagetable *hwpt =
 		container_of(obj, struct iommufd_hw_pagetable, obj);
 
-	/* The ioas->mutex must be held until finalize is called. */
-	lockdep_assert_held(&hwpt->ioas->mutex);
+	/* A corresponding mutex must be held until finalize is called. */
+	if (hwpt->user_managed) {
+		lockdep_assert_held(&hwpt->parent->mutex);
+	} else {
+		lockdep_assert_held(&hwpt->ioas->mutex);
 
-	if (!list_empty(&hwpt->hwpt_item)) {
-		list_del_init(&hwpt->hwpt_item);
-		iopt_table_remove_domain(&hwpt->ioas->iopt, hwpt->domain);
+		if (!list_empty(&hwpt->hwpt_item)) {
+			list_del_init(&hwpt->hwpt_item);
+			iopt_table_remove_domain(&hwpt->ioas->iopt,
+						 hwpt->domain);
+		}
 	}
+
 	iommufd_hw_pagetable_destroy(obj);
+}
+
+/**
+ * iommufd_user_managed_hwpt_alloc() - Get a user-managed hw_pagetable
+ * @ictx: iommufd context
+ * @pt_obj: Parent object to an HWPT to associate the domain with
+ * @idev: Device to get an iommu_domain for
+ * @hwpt_type: Requested type of hw_pagetable
+ * @user_data: user_data pointer
+ *
+ * Allocate a new iommu_domain (must be IOMMU_DOMAIN_NESTED) and return it as
+ * a user-managed hw_pagetable.
+ */
+static struct iommufd_hw_pagetable *
+iommufd_user_managed_hwpt_alloc(struct iommufd_ctx *ictx,
+				struct iommufd_object *pt_obj,
+				struct iommufd_device *idev,
+				enum iommu_hwpt_type hwpt_type,
+				union iommu_domain_user_data *user_data,
+				bool dummy)
+{
+	struct iommufd_hw_pagetable *parent =
+		container_of(pt_obj, struct iommufd_hw_pagetable, obj);
+	const struct iommu_ops *ops = dev_iommu_ops(idev->dev);
+	struct iommufd_hw_pagetable *hwpt;
+	int rc;
+
+	if (!parent || !user_data)
+		return ERR_PTR(-EINVAL);
+	if (parent->auto_domain)
+		return ERR_PTR(-EINVAL);
+	if (hwpt_type == IOMMU_HWPT_TYPE_DEFAULT)
+		return ERR_PTR(-EINVAL);
+
+	if (!ops->domain_alloc_user)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	lockdep_assert_held(&parent->mutex);
+
+	hwpt = iommufd_object_alloc(ictx, hwpt, IOMMUFD_OBJ_HW_PAGETABLE);
+	if (IS_ERR(hwpt))
+		return hwpt;
+
+	hwpt->parent = parent;
+	hwpt->user_managed = true;
+	refcount_inc(&parent->obj.users);
+
+	hwpt->domain = ops->domain_alloc_user(idev->dev, hwpt_type,
+					      parent->domain, user_data);
+	if (IS_ERR(hwpt->domain)) {
+		rc = PTR_ERR(hwpt->domain);
+		hwpt->domain = NULL;
+		goto out_abort;
+	}
+
+	if (WARN_ON_ONCE(hwpt->domain->type != IOMMU_DOMAIN_NESTED)) {
+		rc = -EINVAL;
+		goto out_abort;
+	}
+	/*
+	 * Either the driver is broken by having an invalid size, or the user
+	 * invalidate data struct used by the driver is missing in the union.
+	 */
+	if (WARN_ON_ONCE(hwpt->domain->ops->cache_invalidate_user &&
+			 (!hwpt->domain->ops->cache_invalidate_user_data_len ||
+			  hwpt->domain->ops->cache_invalidate_user_data_len >
+			  sizeof(union ucmd_buffer)))) {
+		rc = -EINVAL;
+		goto out_abort;
+
+	}
+	return hwpt;
+
+out_abort:
+	iommufd_object_abort_and_destroy(ictx, &hwpt->obj);
+	return ERR_PTR(rc);
 }
 
 int iommufd_hw_pagetable_enforce_cc(struct iommufd_hw_pagetable *hwpt)
@@ -98,6 +186,7 @@ iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx,
 	if (IS_ERR(hwpt))
 		return hwpt;
 
+	mutex_init(&hwpt->mutex);
 	INIT_LIST_HEAD(&hwpt->hwpt_item);
 	/* Pairs with iommufd_hw_pagetable_destroy() */
 	refcount_inc(&ioas->obj.users);
@@ -165,11 +254,16 @@ out_abort:
 
 int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 {
+	struct iommufd_hw_pagetable *(*alloc_fn)(
+			struct iommufd_ctx *ictx, struct iommufd_object *pt_obj,
+			struct iommufd_device *idev, enum iommu_hwpt_type type,
+			union iommu_domain_user_data *user_data, bool flag);
+	struct iommufd_hw_pagetable *hwpt, *parent;
 	struct iommu_hwpt_alloc *cmd = ucmd->cmd;
-	struct iommufd_hw_pagetable *hwpt;
 	struct iommufd_object *pt_obj;
 	struct iommufd_device *idev;
 	struct iommufd_ioas *ioas;
+	struct mutex *mutex;
 	int rc;
 
 	if (cmd->flags || cmd->__reserved)
@@ -184,11 +278,31 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 		rc = -EINVAL;
 		goto out_put_idev;
 	}
-	ioas = container_of(pt_obj, struct iommufd_ioas, obj);
 
-	mutex_lock(&ioas->mutex);
-	hwpt = iommufd_hw_pagetable_alloc(ucmd->ictx, pt_obj, idev,
-					  IOMMU_HWPT_TYPE_DEFAULT, NULL, false);
+	switch (pt_obj->type) {
+	case IOMMUFD_OBJ_IOAS:
+		ioas = container_of(pt_obj, struct iommufd_ioas, obj);
+		mutex = &ioas->mutex;
+		alloc_fn = iommufd_hw_pagetable_alloc;
+		break;
+	case IOMMUFD_OBJ_HW_PAGETABLE:
+		parent = container_of(pt_obj, struct iommufd_hw_pagetable, obj);
+		/* No user-managed HWPT on top of an user-managed one */
+		if (parent->user_managed) {
+			rc = -EINVAL;
+			goto out_put_pt;
+		}
+		mutex = &parent->mutex;
+		alloc_fn = iommufd_user_managed_hwpt_alloc;
+		break;
+	default:
+		rc = -EINVAL;
+		goto out_put_pt;
+	}
+
+	mutex_lock(mutex);
+	hwpt = alloc_fn(ucmd->ictx, pt_obj, idev,
+			IOMMU_HWPT_TYPE_DEFAULT, NULL, false);
 	if (IS_ERR(hwpt)) {
 		rc = PTR_ERR(hwpt);
 		goto out_unlock;
@@ -204,7 +318,8 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 out_hwpt:
 	iommufd_object_abort_and_destroy(ucmd->ictx, &hwpt->obj);
 out_unlock:
-	mutex_unlock(&ioas->mutex);
+	mutex_unlock(mutex);
+out_put_pt:
 	iommufd_put_object(pt_obj);
 out_put_idev:
 	iommufd_put_object(&idev->obj);
