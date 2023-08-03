@@ -57,6 +57,7 @@ struct iopt_allowed {
 struct iopt_reserved {
 	struct interval_tree_node node;
 	void *owner;
+	bool sw_msi : 1;
 };
 
 int iopt_area_fill_domains(struct iopt_area *area, struct iopt_pages *pages);
