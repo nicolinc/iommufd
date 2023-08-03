@@ -378,7 +378,7 @@ static void iommufd_device_remove_rr(struct iommufd_device *idev,
 		ioas = hwpt->parent->ioas;
 	else
 		ioas = hwpt->ioas;
-	iopt_remove_reserved_iova(&ioas->iopt, idev->dev);
+	iopt_remove_reserved_iova(&ioas->iopt, idev->dev, false);
 }
 
 static bool iommufd_must_enforce_rr(struct iommufd_hw_pagetable *old_hwpt,
