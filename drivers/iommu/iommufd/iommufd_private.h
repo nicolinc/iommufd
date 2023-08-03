@@ -9,6 +9,8 @@
 #include <linux/refcount.h>
 #include <linux/uaccess.h>
 
+#include "iommufd_test.h"
+
 struct iommu_domain;
 struct iommu_group;
 struct iommu_option;
@@ -88,6 +90,23 @@ int iopt_cut_iova(struct io_pagetable *iopt, unsigned long *iovas,
 		  size_t num_iovas);
 void iopt_enable_large_pages(struct io_pagetable *iopt);
 int iopt_disable_large_pages(struct io_pagetable *iopt);
+
+union ucmd_buffer {
+	struct iommu_destroy destroy;
+	struct iommu_hw_info info;
+	struct iommu_hwpt_alloc hwpt;
+	struct iommu_ioas_alloc alloc;
+	struct iommu_ioas_allow_iovas allow_iovas;
+	struct iommu_ioas_copy ioas_copy;
+	struct iommu_ioas_iova_ranges iova_ranges;
+	struct iommu_ioas_map map;
+	struct iommu_ioas_unmap unmap;
+	struct iommu_option option;
+	struct iommu_vfio_ioas vfio_ioas;
+#ifdef CONFIG_IOMMUFD_TEST
+	struct iommu_test_cmd test;
+#endif
+};
 
 struct iommufd_ucmd {
 	struct iommufd_ctx *ictx;
