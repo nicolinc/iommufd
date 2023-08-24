@@ -2378,6 +2378,31 @@ static void arm_smmu_detach_dev(struct arm_smmu_master *master)
 		arm_smmu_write_ctx_desc(master, IOMMU_NO_PASID, NULL);
 }
 
+static bool arm_smmu_domain_needs_cdtab(struct arm_smmu_domain *smmu_domain,
+					struct arm_smmu_master *master)
+{
+	switch (smmu_domain->stage) {
+	/*
+	 * The SMMU can support IOMMU_DOMAIN_IDENTITY either by programming
+	 * STE.Config to 0b100 (bypass) or by configuring STE.Config to 0b101
+	 * (S1 translate) and setting STE.S1DSS[1:0] to 0b01 "bypass". The
+	 * latter requires allocating a CD table.
+	 *
+	 * The 0b100 config has the drawback that ATS and PASID cannot be used,
+	 * however it could be higher performance. Select the "S1 translation"
+	 * option if we might need those features.
+	 */
+	case ARM_SMMU_DOMAIN_BYPASS:
+		return master->ssid_bits || arm_smmu_ats_supported(master);
+	case ARM_SMMU_DOMAIN_S1:
+	case ARM_SMMU_DOMAIN_NESTED:
+		return true;
+	case ARM_SMMU_DOMAIN_S2:
+		return false;
+	}
+	return false;
+}
+
 static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 {
 	int ret = 0;
@@ -2386,6 +2411,7 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 	struct arm_smmu_device *smmu;
 	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
 	struct arm_smmu_master *master;
+	bool needs_cdtab;
 
 	if (!fwspec)
 		return -ENOENT;
@@ -2421,6 +2447,13 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 
 	master->domain = smmu_domain;
 
+	needs_cdtab = arm_smmu_domain_needs_cdtab(smmu_domain, master);
+	if (master->cd_table.cdtab && !needs_cdtab) {
+		if (atomic_read(&master->cd_table.users))
+			return -EBUSY;
+		arm_smmu_free_cd_tables(master);
+	}
+
 	/*
 	 * The SMMU does not support enabling ATS with bypass. When the STE is
 	 * in bypass (STE.Config[2:0] == 0b100), ATS Translation Requests and
@@ -2428,22 +2461,22 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 	 * stream (STE.EATS == 0b00), causing F_BAD_ATS_TREQ and
 	 * F_TRANSL_FORBIDDEN events (IHI0070Ea 5.2 Stream Table Entry).
 	 */
-	if (smmu_domain->stage != ARM_SMMU_DOMAIN_BYPASS)
+	if (needs_cdtab || smmu_domain->stage != ARM_SMMU_DOMAIN_BYPASS)
 		master->ats_enabled = arm_smmu_ats_supported(master);
 
 	spin_lock_irqsave(&smmu_domain->devices_lock, flags);
 	list_add(&master->domain_head, &smmu_domain->devices);
 	spin_unlock_irqrestore(&smmu_domain->devices_lock, flags);
 
-	if (smmu_domain->stage == ARM_SMMU_DOMAIN_S1) {
-		if (!master->cd_table.cdtab) {
-			ret = arm_smmu_alloc_cd_tables(master);
-			if (ret) {
-				master->domain = NULL;
-				goto out_list_del;
-			}
+	if (needs_cdtab && !master->cd_table.cdtab) {
+		ret = arm_smmu_alloc_cd_tables(master);
+		if (ret) {
+			master->domain = NULL;
+			goto out_list_del;
 		}
+	}
 
+	if (smmu_domain->stage == ARM_SMMU_DOMAIN_S1) {
 		/*
 		 * Prevent SVA from concurrently modifying the CD or writing to
 		 * the CD entry
