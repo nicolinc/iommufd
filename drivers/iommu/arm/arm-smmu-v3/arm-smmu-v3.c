@@ -1273,122 +1273,134 @@ static inline bool arm_smmu_strtab_ent_is_live(u64 val)
 	return false;
 }
 
-static void arm_smmu_write_strtab_ent(struct arm_smmu_master *master, u32 sid,
-				      __le64 *dst)
+static void arm_smmu_setup_ste_by_domain(struct arm_smmu_master *master,
+					 u64 *ste)
 {
-	/*
-	 * This is hideously complicated, but we only really care about
-	 * three cases at the moment:
-	 *
-	 * 1. Invalid (all zero) -> bypass/fault (init)
-	 * 2. Bypass/fault -> translation/bypass (attach)
-	 * 3. Translation/bypass -> bypass/fault (detach)
-	 *
-	 * Given that we can't update the STE atomically and the SMMU
-	 * doesn't read the thing in a defined order, that leaves us
-	 * with the following maintenance requirements:
-	 *
-	 * 1. Update Config, return (init time STEs aren't live)
-	 * 2. Write everything apart from dword 0, sync, write dword 0, sync
-	 * 3. Update Config, sync
-	 */
-	u64 val = le64_to_cpu(dst[0]);
-	bool ste_live = false;
-	struct arm_smmu_device *smmu = NULL;
-	struct arm_smmu_ctx_desc_cfg *cd_table = NULL;
-	struct arm_smmu_s2_cfg *s2_cfg = NULL;
-	struct arm_smmu_domain *smmu_domain = NULL;
+	struct arm_smmu_domain *smmu_domain = master->domain;
+	struct arm_smmu_s2_cfg *s2_cfg;
 
-	if (master) {
-		smmu_domain = master->domain;
-		smmu = master->smmu;
-	}
-
-	if (smmu_domain) {
-		switch (smmu_domain->stage) {
-		case ARM_SMMU_DOMAIN_S1:
-			cd_table = &master->cd_table;
-			break;
-		case ARM_SMMU_DOMAIN_S2:
-		case ARM_SMMU_DOMAIN_NESTED:
-			s2_cfg = &smmu_domain->s2_cfg;
-			break;
-		default:
-			break;
-		}
-	}
-
-	ste_live = arm_smmu_strtab_ent_is_live(val);
-
-	/* Nuke the existing STE_0 value, as we're going to rewrite it */
-	val = STRTAB_STE_0_V;
-
-	/* Bypass/fault */
-	if (!smmu_domain || !(cd_table || s2_cfg)) {
-		if (!smmu_domain && disable_bypass)
-			val |= FIELD_PREP(STRTAB_STE_0_CFG, STRTAB_STE_0_CFG_ABORT);
-		else
-			val |= FIELD_PREP(STRTAB_STE_0_CFG, STRTAB_STE_0_CFG_BYPASS);
-
-		dst[0] = cpu_to_le64(val);
-		dst[1] = cpu_to_le64(FIELD_PREP(STRTAB_STE_1_SHCFG,
-						STRTAB_STE_1_SHCFG_INCOMING));
-		dst[2] = 0; /* Nuke the VMID */
-		/*
-		 * The SMMU can perform negative caching, so we must sync
-		 * the STE regardless of whether the old value was live.
-		 */
-		if (smmu)
-			arm_smmu_sync_ste_for_sid(smmu, sid);
+	switch (smmu_domain->stage) {
+	case ARM_SMMU_DOMAIN_NESTED:
+	case ARM_SMMU_DOMAIN_S2:
+		s2_cfg = &smmu_domain->s2_cfg;
+		break;
+	default:
+		WARN_ON(1);
 		return;
 	}
 
-	if (cd_table) {
-		u64 strw = smmu->features & ARM_SMMU_FEAT_E2H ?
-			STRTAB_STE_1_STRW_EL2 : STRTAB_STE_1_STRW_NSEL1;
+	ste[0] |= FIELD_PREP(STRTAB_STE_0_CFG, STRTAB_STE_0_CFG_S2_TRANS);
 
-		BUG_ON(ste_live);
-		dst[1] = cpu_to_le64(
-			 FIELD_PREP(STRTAB_STE_1_S1DSS, STRTAB_STE_1_S1DSS_SSID0) |
-			 FIELD_PREP(STRTAB_STE_1_S1CIR, STRTAB_STE_1_S1C_CACHE_WBRA) |
-			 FIELD_PREP(STRTAB_STE_1_S1COR, STRTAB_STE_1_S1C_CACHE_WBRA) |
-			 FIELD_PREP(STRTAB_STE_1_S1CSH, ARM_SMMU_SH_ISH) |
-			 FIELD_PREP(STRTAB_STE_1_STRW, strw));
-
-		if (smmu->features & ARM_SMMU_FEAT_STALLS &&
-		    !master->stall_enabled)
-			dst[1] |= cpu_to_le64(STRTAB_STE_1_S1STALLD);
-
-		val |= (cd_table->cdtab_dma & STRTAB_STE_0_S1CTXPTR_MASK) |
-			FIELD_PREP(STRTAB_STE_0_CFG, STRTAB_STE_0_CFG_S1_TRANS) |
-			FIELD_PREP(STRTAB_STE_0_S1CDMAX, cd_table->s1cdmax) |
-			FIELD_PREP(STRTAB_STE_0_S1FMT, cd_table->s1fmt);
-	}
-
-	if (s2_cfg) {
-		BUG_ON(ste_live);
-		dst[2] = cpu_to_le64(
-			 FIELD_PREP(STRTAB_STE_2_S2VMID, s2_cfg->vmid) |
-			 FIELD_PREP(STRTAB_STE_2_VTCR, s2_cfg->vtcr) |
+	ste[2] |= FIELD_PREP(STRTAB_STE_2_S2VMID, s2_cfg->vmid) |
+		  FIELD_PREP(STRTAB_STE_2_VTCR, s2_cfg->vtcr) |
 #ifdef __BIG_ENDIAN
-			 STRTAB_STE_2_S2ENDI |
+		  STRTAB_STE_2_S2ENDI |
 #endif
-			 STRTAB_STE_2_S2PTW | STRTAB_STE_2_S2AA64 |
-			 STRTAB_STE_2_S2R);
+		  STRTAB_STE_2_S2PTW | STRTAB_STE_2_S2AA64 | STRTAB_STE_2_S2R;
 
-		dst[3] = cpu_to_le64(s2_cfg->vttbr & STRTAB_STE_3_S2TTB_MASK);
+	ste[3] |= s2_cfg->vttbr & STRTAB_STE_3_S2TTB_MASK;
+}
 
-		val |= FIELD_PREP(STRTAB_STE_0_CFG, STRTAB_STE_0_CFG_S2_TRANS);
-	}
+static void arm_smmu_setup_ste_by_cdtab(struct arm_smmu_master *master,
+					u64 *ste)
+{
+	struct arm_smmu_ctx_desc_cfg *cd_table = &master->cd_table;
+	struct arm_smmu_device *smmu = master->smmu;
+	__le64 *cdptr = arm_smmu_get_cd_ptr(master, 0);
+
+	WARN_ON_ONCE(!cdptr);
+
+	ste[0] |= (cd_table->cdtab_dma & STRTAB_STE_0_S1CTXPTR_MASK) |
+		  FIELD_PREP(STRTAB_STE_0_CFG, STRTAB_STE_0_CFG_S1_TRANS) |
+		  FIELD_PREP(STRTAB_STE_0_S1CDMAX, cd_table->s1cdmax) |
+		  FIELD_PREP(STRTAB_STE_0_S1FMT, cd_table->s1fmt);
+
+	if (master->domain->stage == ARM_SMMU_DOMAIN_BYPASS)
+		ste[1] |= FIELD_PREP(STRTAB_STE_1_S1DSS, STRTAB_STE_1_S1DSS_BYPASS);
+	else
+		ste[1] |= FIELD_PREP(STRTAB_STE_1_S1DSS, STRTAB_STE_1_S1DSS_SSID0);
+
+	ste[1] |= FIELD_PREP(STRTAB_STE_1_SHCFG, STRTAB_STE_1_SHCFG_INCOMING) |
+		  FIELD_PREP(STRTAB_STE_1_S1CIR, STRTAB_STE_1_S1C_CACHE_WBRA) |
+		  FIELD_PREP(STRTAB_STE_1_S1COR, STRTAB_STE_1_S1C_CACHE_WBRA) |
+		  FIELD_PREP(STRTAB_STE_1_S1CSH, ARM_SMMU_SH_ISH);
+
+	if (smmu->features & ARM_SMMU_FEAT_E2H)
+		ste[1] |= FIELD_PREP(STRTAB_STE_1_STRW, STRTAB_STE_1_STRW_EL2);
+	else
+		ste[1] |= FIELD_PREP(STRTAB_STE_1_STRW, STRTAB_STE_1_STRW_NSEL1);
+
+	if (master->domain->stage == ARM_SMMU_DOMAIN_NESTED)
+		arm_smmu_setup_ste_by_domain(master, ste);
+}
+
+static void arm_smmu_setup_ste_by_master(struct arm_smmu_master *master,
+					 u64 *ste)
+{
+	struct arm_smmu_device *smmu = master->smmu;
+
+	if (smmu->features & ARM_SMMU_FEAT_STALLS && !master->stall_enabled)
+		ste[1] |= STRTAB_STE_1_S1STALLD;
 
 	if (master->ats_enabled)
-		dst[1] |= cpu_to_le64(FIELD_PREP(STRTAB_STE_1_EATS,
-						 STRTAB_STE_1_EATS_TRANS));
+		ste[1] |= FIELD_PREP(STRTAB_STE_1_EATS, STRTAB_STE_1_EATS_TRANS);
+}
 
-	arm_smmu_sync_ste_for_sid(smmu, sid);
+static void arm_smmu_setup_ste_abort(u64 *ste)
+{
+	ste[0] |= FIELD_PREP(STRTAB_STE_0_CFG, STRTAB_STE_0_CFG_ABORT);
+}
+
+static void arm_smmu_setup_ste_bypass(u64 *ste)
+{
+	ste[0] |= FIELD_PREP(STRTAB_STE_0_CFG, STRTAB_STE_0_CFG_BYPASS);
+	ste[1] |= FIELD_PREP(STRTAB_STE_1_SHCFG, STRTAB_STE_1_SHCFG_INCOMING);
+}
+
+static void arm_smmu_sync_strtab_ent(struct arm_smmu_master *master, u32 sid,
+				     __le64 *dst, u64 *src)
+{
+	struct arm_smmu_device *smmu = master->smmu;
+	bool ste_sync_all = false;
+	int i;
+
+	for (i = 1; i < 4; i++) {
+		if (dst[i] == cpu_to_le64(src[i]))
+			continue;
+		dst[i] = cpu_to_le64(src[i]);
+		ste_sync_all = true;
+	}
+
+	if (ste_sync_all)
+		arm_smmu_sync_ste_for_sid(smmu, sid);
 	/* See comment in arm_smmu_write_ctx_desc() */
-	WRITE_ONCE(dst[0], cpu_to_le64(val));
+	WRITE_ONCE(dst[0], cpu_to_le64(src[0]));
 	arm_smmu_sync_ste_for_sid(smmu, sid);
+}
+
+static void arm_smmu_clear_strtab_ent(struct arm_smmu_master *master, u64 *ste)
+{
+	if (disable_bypass)
+		arm_smmu_setup_ste_abort(ste);
+	else
+		arm_smmu_setup_ste_bypass(ste);
+}
+
+static void arm_smmu_setup_strtab_ent(struct arm_smmu_master *master, u64 *ste,
+				      bool ste_live)
+{
+	if (master->cd_table.cdtab) {
+		BUG_ON(ste_live);
+		arm_smmu_setup_ste_by_cdtab(master, ste);
+		arm_smmu_setup_ste_by_master(master, ste);
+	} else if (master->domain->stage == ARM_SMMU_DOMAIN_S2) {
+		BUG_ON(ste_live);
+		arm_smmu_setup_ste_by_domain(master, ste);
+		arm_smmu_setup_ste_by_master(master, ste);
+	} else {
+		arm_smmu_setup_ste_bypass(ste);
+		return;
+	}
 }
 
 static void arm_smmu_init_bypass_stes(__le64 *strtab, unsigned int nent, bool force)
@@ -2235,12 +2247,15 @@ static void arm_smmu_install_ste_for_dev(struct arm_smmu_master *master)
 	for (i = 0; i < master->num_streams; ++i) {
 		u32 sid = master->streams[i].id;
 		__le64 *step = arm_smmu_get_step_for_sid(smmu, sid);
+		u64 val0 = le64_to_cpu(step[0]);
+		bool ste_live = arm_smmu_strtab_ent_is_live(val0);
 		struct arm_smmu_cmdq_ent prefetch_cmd = {
 			.opcode		= CMDQ_OP_PREFETCH_CFG,
 			.prefetch	= {
 				.sid	= sid,
 			},
 		};
+		u64 ste[4] = { STRTAB_STE_0_V, };
 
 		/* Bridged PCI devices may end up with duplicated IDs */
 		for (j = 0; j < i; j++)
@@ -2249,7 +2264,27 @@ static void arm_smmu_install_ste_for_dev(struct arm_smmu_master *master)
 		if (j < i)
 			continue;
 
-		arm_smmu_write_strtab_ent(master, sid, step);
+		/*
+		 * This is hideously complicated, but we only really care about
+		 * three cases at the moment:
+		 *
+		 * 1. Invalid (all zero) -> bypass/fault (init)
+		 * 2. Bypass/fault -> translation/bypass (attach)
+		 * 3. Translation/bypass -> bypass/fault (detach)
+		 *
+		 * Given that we can't update the STE atomically and the SMMU
+		 * doesn't read the thing in a defined order, that leaves us
+		 * with the following maintenance requirements:
+		 *
+		 * 1. Update Config, return (init time STEs aren't live)
+		 * 2. Write everything apart from dword 0, sync, write dword 0, sync
+		 * 3. Update Config, sync
+		 */
+		if (master->domain)
+			arm_smmu_setup_strtab_ent(master, ste, ste_live);
+		else
+			arm_smmu_clear_strtab_ent(master, ste);
+		arm_smmu_sync_strtab_ent(master, sid, step, ste);
 
 		/* It's likely that we'll want to use the new STE soon */
 		if (!(smmu->options & ARM_SMMU_OPT_SKIP_PREFETCH))
