@@ -332,15 +332,24 @@ static int iommufd_group_setup_msi(struct iommufd_group *igroup,
 static bool iommufd_must_remove_rr(struct iommufd_hw_pagetable *old_hwpt,
 				   struct iommufd_hw_pagetable *new_hwpt)
 {
-	struct iommufd_ioas *new_ioas;
+	struct iommufd_ioas *old_ioas, *new_ioas;
+
+	if (!old_hwpt)
+		return false;
+	if (!old_hwpt->user_managed)
+		old_ioas = old_hwpt->ioas;
+	else
+		old_ioas = old_hwpt->parent->ioas;
 
 	if (!new_hwpt)
 		new_ioas = NULL;
-	else
+	else if (!new_hwpt->user_managed)
 		new_ioas = new_hwpt->ioas;
+	else
+		new_ioas = new_hwpt->parent->ioas;
 
 	/* When switching IOAS, cleaning up the old IOAS is a must */
-	if (old_hwpt->ioas != new_ioas)
+	if (old_ioas != new_ioas)
 		return true;
 	return false;
 }
@@ -357,27 +366,40 @@ static void iommufd_device_remove_rr(struct iommufd_device *idev,
 				     struct iommufd_hw_pagetable *hwpt,
 				     struct iommufd_hw_pagetable *new_hwpt)
 {
+	struct iommufd_ioas *ioas;
+
 	if (WARN_ON(!hwpt))
-		return;
-	if (hwpt->user_managed)
 		return;
 	if (!iommufd_must_remove_rr(hwpt, new_hwpt))
 		return;
-	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->dev);
+	if (hwpt->user_managed)
+		ioas = hwpt->parent->ioas;
+	else
+		ioas = hwpt->ioas;
+	iopt_remove_reserved_iova(&ioas->iopt, idev->dev);
 }
 
 static bool iommufd_must_enforce_rr(struct iommufd_hw_pagetable *old_hwpt,
 				    struct iommufd_hw_pagetable *new_hwpt)
 {
-	struct iommufd_ioas *old_ioas;
+	struct iommufd_ioas *old_ioas, *new_ioas;
+
+	if (!new_hwpt)
+		return false;
+	if (!new_hwpt->user_managed)
+		new_ioas = new_hwpt->ioas;
+	else
+		new_ioas = new_hwpt->parent->ioas;
 
 	if (!old_hwpt)
 		old_ioas = NULL;
-	else
+	else if (!old_hwpt->user_managed)
 		old_ioas = old_hwpt->ioas;
+	else
+		old_ioas = old_hwpt->parent->ioas;
 
 	/* When switching IOAS, enforcing the new IOAS is a must */
-	if (old_ioas != new_hwpt->ioas)
+	if (old_ioas != new_ioas)
 		return true;
 	return false;
 }
@@ -395,14 +417,17 @@ static int iommufd_device_enforce_rr(struct iommufd_device *idev,
 				     phys_addr_t *sw_msi_start)
 {
 	struct iommufd_hw_pagetable *old_hwpt = idev->igroup->hwpt;
+	struct iommufd_ioas *ioas;
 
 	if (WARN_ON(!hwpt))
 		return -EINVAL;
-	if (hwpt->user_managed)
-		return -EINVAL;
 	if (!iommufd_must_enforce_rr(old_hwpt, hwpt))
 		return 0;
-	return iopt_table_enforce_dev_resv_regions(&hwpt->ioas->iopt, idev->dev,
+	if (hwpt->user_managed)
+		ioas = hwpt->parent->ioas;
+	else
+		ioas = hwpt->ioas;
+	return iopt_table_enforce_dev_resv_regions(&ioas->iopt, idev->dev,
 						   sw_msi_start);
 }
 
