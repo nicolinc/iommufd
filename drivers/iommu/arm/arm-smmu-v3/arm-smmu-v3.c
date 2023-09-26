@@ -1122,6 +1122,10 @@ int arm_smmu_write_ctx_desc(struct arm_smmu_master *master, int ssid,
 	 */
 	WRITE_ONCE(cdptr[0], cpu_to_le64(val));
 	arm_smmu_sync_cd(master, ssid, true);
+	if (!cd_live && (val & CTXDESC_CD_0_V))
+		atomic_inc(&cd_table->users);
+	else if (cd_live && !(val & CTXDESC_CD_0_V))
+		atomic_dec(&cd_table->users);
 	return 0;
 }
 
@@ -1164,6 +1168,7 @@ static int arm_smmu_alloc_cd_tables(struct arm_smmu_master *master)
 		ret = -ENOMEM;
 		goto err_free_l1;
 	}
+	atomic_set(&cd_table->users, 0);
 
 	return 0;
 
@@ -2830,8 +2835,12 @@ static void arm_smmu_release_device(struct device *dev)
 	arm_smmu_detach_dev(master);
 	arm_smmu_disable_pasid(master);
 	arm_smmu_remove_master(master);
-	if (master->cd_table.cdtab)
+	if (master->cd_table.cdtab) {
+		/* WARN on any undetached substream */
+		WARN_ON(atomic_read(&master->cd_table.users));
+		/* Yet, have to carry on to avoid a memory leak */
 		arm_smmu_free_cd_tables(master);
+	}
 	kfree(master);
 }
 
