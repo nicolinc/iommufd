@@ -1248,37 +1248,169 @@ static void arm_smmu_sync_ste_for_sid(struct arm_smmu_device *smmu, u32 sid)
 	arm_smmu_cmdq_issue_cmd_with_sync(smmu, &cmd);
 }
 
-static void arm_smmu_write_strtab_ent(struct arm_smmu_master *master, u32 sid,
+/*
+ * Based on the value of ent, report the masks of the critical STE fields being
+ * used by the HW. It would be nice if this was complete according to the spec,
+ * but minimally it has to capture the bits this driver uses.
+ */
+static void arm_smmu_get_ste_used(const __le64 *ent, __le64 *used)
+{
+	memset(used, 0, sizeof(*used) * STRTAB_STE_DWORDS);
+
+	if (!(ent[0] & cpu_to_le64(STRTAB_STE_0_V))) {
+		used[0] = cpu_to_le64(STRTAB_STE_0_V);
+		return;
+	}
+
+	used[0] |= cpu_to_le64(STRTAB_STE_0_CFG);
+
+	switch (FIELD_GET(STRTAB_STE_0_CFG, le64_to_cpu(ent[0]))) {
+	case STRTAB_STE_0_CFG_ABORT:
+		break;
+	case STRTAB_STE_0_CFG_BYPASS:
+		used[1] |= cpu_to_le64(STRTAB_STE_1_SHCFG);
+		break;
+	case STRTAB_STE_0_CFG_S1_TRANS:
+		used[0] |= cpu_to_le64(STRTAB_STE_0_S1FMT |
+				       STRTAB_STE_0_S1CTXPTR_MASK |
+				       STRTAB_STE_0_S1CDMAX);
+		used[1] |= cpu_to_le64(STRTAB_STE_1_S1DSS | STRTAB_STE_1_S1CIR |
+				       STRTAB_STE_1_S1COR | STRTAB_STE_1_S1CSH |
+				       STRTAB_STE_1_EATS | STRTAB_STE_1_STRW |
+				       STRTAB_STE_1_S1STALLD);
+		break;
+	case STRTAB_STE_0_CFG_S2_TRANS:
+		used[1] |= cpu_to_le64(STRTAB_STE_1_EATS);
+		used[2] |= cpu_to_le64(STRTAB_STE_2_S2VMID | STRTAB_STE_2_VTCR |
+				       STRTAB_STE_2_S2AA64 | STRTAB_STE_2_S2ENDI |
+				       STRTAB_STE_2_S2PTW | STRTAB_STE_2_S2R);
+		used[3] |= cpu_to_le64(STRTAB_STE_3_S2TTB_MASK);
+		break;
+	case STRTAB_STE_0_CFG_S1_S2_TRANS:
+	default:
+		memset(used, 0xFF, sizeof(*used) * STRTAB_STE_DWORDS);
+	}
+}
+
+/*
+ * Do one step along the coherent update algorithm. Each step either changes
+ * only bits that the HW isn't using or entirely changes 1 qword. It may take
+ * several iterations of this routine to make the full change.
+ */
+static bool arm_smmu_write_ste_step(__le64 *cur, const __le64 *new,
+				    const __le64 *new_used)
+{
+	__le64 cur_used[STRTAB_STE_DWORDS];
+	__le64 step[STRTAB_STE_DWORDS];
+	u8 step_used_diff = 0;
+	u8 step_any_diff = 0;
+	u8 step_change = 0;
+	unsigned int i;
+
+	arm_smmu_get_ste_used(cur, cur_used);
+
+	/*
+	 * Compute a step that has all the bits currently unused by HW set to
+	 * their new values.
+	 */
+	for (i = 0; i < STRTAB_STE_DWORDS; i++) {
+		step[i] = (cur[i] & cur_used[i]) | (new[i] & ~cur_used[i]);
+		if (cur[i] != step[i])
+			step_change |= 1 << i;
+		if ((step[i] & new_used[i]) != (new[i] & new_used[i]))
+			step_used_diff |= 1 << i;
+		if (step[i] != new[i])
+			step_any_diff |= 1 << i;
+	}
+
+	if (hweight8(step_used_diff) > 1) {
+		/*
+		 * More than one critical qword is mismatched, this cannot be
+		 * done without a break. Clear the V bit and go again.
+		 */
+		step[0] &= cpu_to_le64(~STRTAB_STE_0_V);
+	} else if (!step_change) {
+		/* cur == new, so all done */
+		if (!step_any_diff)
+			return true;
+
+		if (step_used_diff) {
+			/*
+			 * Have exactly one critical qword, all the other qwords
+			 * are set correctly, so we can set this qword now.
+			 */
+			i = ffs(step_used_diff) - 1;
+			step[i] = new[i];
+		} else {
+			/*
+			 * All the used HW bits match, back fill in the unused
+			 * ones. Technically this isn't necessary but it brings
+			 * the STE to the full new state, so if there are
+			 * bugs in the mask calculation this will obscure them.
+			 */
+			for (i = 0; i < STRTAB_STE_DWORDS; i++)
+				step[i] = new[i];
+		}
+	}
+
+	for (i = 0; i < STRTAB_STE_DWORDS; i++)
+		WRITE_ONCE(cur[i], step[i]);
+	return false;
+}
+
+/*
+ * This algorithm updates any STE to any value without creating a situation
+ * where the HW can percieve a corrupted STE. HW is only required to have a 64
+ * bit atomicity with stores.
+ *
+ * In the most general case we can make an update by clearing the V bit,
+ * rewriting the STE, and then storing the set V bit. However this disrupts
+ * the HW while it is happening. There are several interesting cases where
+ * a STE should be updated without disturbing the HW, and a few cases where
+ * the STE update can be done with a single 64 bit store.
+ *
+ * This is possible because the HW only uses bits according to the current
+ * configuration. ie when in STE.Abort we know that most of the bits are not
+ * used. Thus we can write to unused bits.
+ */
+static void arm_smmu_write_strtab_ent(struct arm_smmu_device *smmu, u32 sid,
+				      __le64 *cur, const __le64 *new)
+{
+	__le64 new_used[STRTAB_STE_DWORDS];
+	int loop = 100;
+
+	arm_smmu_get_ste_used(new, new_used);
+	while (true) {
+		bool done;
+
+		done = arm_smmu_write_ste_step(cur, new, new_used);
+		if (done || !--loop)
+			break;
+		arm_smmu_sync_ste_for_sid(smmu, sid);
+	}
+
+	WARN_ON(unlikely(!loop)); /* Some bug in the algorithm */
+
+	/* It's likely that we'll want to use the new STE soon */
+	if (!(smmu->options & ARM_SMMU_OPT_SKIP_PREFETCH)) {
+		struct arm_smmu_cmdq_ent prefetch_cmd = {
+			.opcode = CMDQ_OP_PREFETCH_CFG,
+			.prefetch = { .sid = sid, },
+		};
+		arm_smmu_cmdq_issue_cmd(smmu, &prefetch_cmd);
+	}
+}
+
+
+static void arm_smmu_setup_strtab_ent(struct arm_smmu_master *master,
 				      __le64 *dst)
 {
-	/*
-	 * This is hideously complicated, but we only really care about
-	 * three cases at the moment:
-	 *
-	 * 1. Invalid (all zero) -> bypass/fault (init)
-	 * 2. Bypass/fault -> translation/bypass (attach)
-	 * 3. Translation/bypass -> bypass/fault (detach)
-	 *
-	 * Given that we can't update the STE atomically and the SMMU
-	 * doesn't read the thing in a defined order, that leaves us
-	 * with the following maintenance requirements:
-	 *
-	 * 1. Update Config, return (init time STEs aren't live)
-	 * 2. Write everything apart from dword 0, sync, write dword 0, sync
-	 * 3. Update Config, sync
-	 */
-	u64 val = le64_to_cpu(dst[0]);
+	u64 val = STRTAB_STE_0_V;
 	bool ste_live = false;
 	struct arm_smmu_device *smmu = NULL;
 	struct arm_smmu_ctx_desc_cfg *cd_table = NULL;
 	struct arm_smmu_s2_cfg *s2_cfg = NULL;
 	struct arm_smmu_domain *smmu_domain = NULL;
-	struct arm_smmu_cmdq_ent prefetch_cmd = {
-		.opcode		= CMDQ_OP_PREFETCH_CFG,
-		.prefetch	= {
-			.sid	= sid,
-		},
-	};
 
 	if (master) {
 		smmu_domain = master->domain;
@@ -1299,25 +1431,6 @@ static void arm_smmu_write_strtab_ent(struct arm_smmu_master *master, u32 sid,
 		}
 	}
 
-	if (val & STRTAB_STE_0_V) {
-		switch (FIELD_GET(STRTAB_STE_0_CFG, val)) {
-		case STRTAB_STE_0_CFG_BYPASS:
-			break;
-		case STRTAB_STE_0_CFG_S1_TRANS:
-		case STRTAB_STE_0_CFG_S2_TRANS:
-			ste_live = true;
-			break;
-		case STRTAB_STE_0_CFG_ABORT:
-			BUG_ON(!disable_bypass);
-			break;
-		default:
-			BUG(); /* STE corruption */
-		}
-	}
-
-	/* Nuke the existing STE_0 value, as we're going to rewrite it */
-	val = STRTAB_STE_0_V;
-
 	/* Bypass/fault */
 	if (!smmu_domain || !(cd_table || s2_cfg)) {
 		if (!smmu_domain && disable_bypass)
@@ -1329,12 +1442,6 @@ static void arm_smmu_write_strtab_ent(struct arm_smmu_master *master, u32 sid,
 		dst[1] = cpu_to_le64(FIELD_PREP(STRTAB_STE_1_SHCFG,
 						STRTAB_STE_1_SHCFG_INCOMING));
 		dst[2] = 0; /* Nuke the VMID */
-		/*
-		 * The SMMU can perform negative caching, so we must sync
-		 * the STE regardless of whether the old value was live.
-		 */
-		if (smmu)
-			arm_smmu_sync_ste_for_sid(smmu, sid);
 		return;
 	}
 
@@ -1379,15 +1486,7 @@ static void arm_smmu_write_strtab_ent(struct arm_smmu_master *master, u32 sid,
 	if (master->ats_enabled)
 		dst[1] |= cpu_to_le64(FIELD_PREP(STRTAB_STE_1_EATS,
 						 STRTAB_STE_1_EATS_TRANS));
-
-	arm_smmu_sync_ste_for_sid(smmu, sid);
-	/* See comment in arm_smmu_write_ctx_desc() */
-	WRITE_ONCE(dst[0], cpu_to_le64(val));
-	arm_smmu_sync_ste_for_sid(smmu, sid);
-
-	/* It's likely that we'll want to use the new STE soon */
-	if (!(smmu->options & ARM_SMMU_OPT_SKIP_PREFETCH))
-		arm_smmu_cmdq_issue_cmd(smmu, &prefetch_cmd);
+	dst[0] = cpu_to_le64(val);
 }
 
 static void arm_smmu_init_bypass_stes(__le64 *strtab, unsigned int nent, bool force)
@@ -2234,6 +2333,7 @@ static void arm_smmu_install_ste_for_dev(struct arm_smmu_master *master)
 	for (i = 0; i < master->num_streams; ++i) {
 		u32 sid = master->streams[i].id;
 		__le64 *step = arm_smmu_get_step_for_sid(smmu, sid);
+		__le64 ste[STRTAB_STE_DWORDS];
 
 		/* Bridged PCI devices may end up with duplicated IDs */
 		for (j = 0; j < i; j++)
@@ -2242,7 +2342,8 @@ static void arm_smmu_install_ste_for_dev(struct arm_smmu_master *master)
 		if (j < i)
 			continue;
 
-		arm_smmu_write_strtab_ent(master, sid, step);
+		arm_smmu_setup_strtab_ent(master, ste);
+		arm_smmu_write_strtab_ent(smmu, sid, step, ste);
 	}
 }
 
