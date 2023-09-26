@@ -1253,6 +1253,26 @@ static void arm_smmu_sync_ste_for_sid(struct arm_smmu_device *smmu, u32 sid)
 	arm_smmu_cmdq_issue_cmd_with_sync(smmu, &cmd);
 }
 
+static inline bool arm_smmu_strtab_ent_is_live(u64 val)
+{
+	if (val & STRTAB_STE_0_V) {
+		switch (FIELD_GET(STRTAB_STE_0_CFG, val)) {
+		case STRTAB_STE_0_CFG_BYPASS:
+			break;
+		case STRTAB_STE_0_CFG_S1_TRANS:
+		case STRTAB_STE_0_CFG_S2_TRANS:
+			return true;
+		case STRTAB_STE_0_CFG_ABORT:
+			WARN_ON(!disable_bypass);
+			break;
+		default:
+			WARN(1, "STE corruption");
+		}
+	}
+
+	return false;
+}
+
 static void arm_smmu_write_strtab_ent(struct arm_smmu_master *master, u32 sid,
 				      __le64 *dst)
 {
@@ -1304,21 +1324,7 @@ static void arm_smmu_write_strtab_ent(struct arm_smmu_master *master, u32 sid,
 		}
 	}
 
-	if (val & STRTAB_STE_0_V) {
-		switch (FIELD_GET(STRTAB_STE_0_CFG, val)) {
-		case STRTAB_STE_0_CFG_BYPASS:
-			break;
-		case STRTAB_STE_0_CFG_S1_TRANS:
-		case STRTAB_STE_0_CFG_S2_TRANS:
-			ste_live = true;
-			break;
-		case STRTAB_STE_0_CFG_ABORT:
-			BUG_ON(!disable_bypass);
-			break;
-		default:
-			BUG(); /* STE corruption */
-		}
-	}
+	ste_live = arm_smmu_strtab_ent_is_live(val);
 
 	/* Nuke the existing STE_0 value, as we're going to rewrite it */
 	val = STRTAB_STE_0_V;
