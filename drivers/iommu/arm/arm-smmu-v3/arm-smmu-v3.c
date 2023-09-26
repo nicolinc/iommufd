@@ -1122,6 +1122,10 @@ int arm_smmu_write_ctx_desc(struct arm_smmu_master *master, int ssid,
 	 */
 	WRITE_ONCE(cdptr[0], cpu_to_le64(val));
 	arm_smmu_sync_cd(master, ssid, true);
+	if (!cd_live && (val & CTXDESC_CD_0_V))
+		atomic_inc(&cd_table->users);
+	else if (cd_live && !(val & CTXDESC_CD_0_V))
+		atomic_dec(&cd_table->users);
 	return 0;
 }
 
@@ -1164,6 +1168,7 @@ static int arm_smmu_alloc_cd_tables(struct arm_smmu_master *master)
 		ret = -ENOMEM;
 		goto err_free_l1;
 	}
+	atomic_set(&cd_table->users, 0);
 
 	return 0;
 
