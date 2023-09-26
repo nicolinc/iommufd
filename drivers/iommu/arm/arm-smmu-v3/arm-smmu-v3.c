@@ -1298,12 +1298,6 @@ static void arm_smmu_write_strtab_ent(struct arm_smmu_master *master, u32 sid,
 	struct arm_smmu_ctx_desc_cfg *cd_table = NULL;
 	struct arm_smmu_s2_cfg *s2_cfg = NULL;
 	struct arm_smmu_domain *smmu_domain = NULL;
-	struct arm_smmu_cmdq_ent prefetch_cmd = {
-		.opcode		= CMDQ_OP_PREFETCH_CFG,
-		.prefetch	= {
-			.sid	= sid,
-		},
-	};
 
 	if (master) {
 		smmu_domain = master->domain;
@@ -1395,10 +1389,6 @@ static void arm_smmu_write_strtab_ent(struct arm_smmu_master *master, u32 sid,
 	/* See comment in arm_smmu_write_ctx_desc() */
 	WRITE_ONCE(dst[0], cpu_to_le64(val));
 	arm_smmu_sync_ste_for_sid(smmu, sid);
-
-	/* It's likely that we'll want to use the new STE soon */
-	if (!(smmu->options & ARM_SMMU_OPT_SKIP_PREFETCH))
-		arm_smmu_cmdq_issue_cmd(smmu, &prefetch_cmd);
 }
 
 static void arm_smmu_init_bypass_stes(__le64 *strtab, unsigned int nent, bool force)
@@ -2245,6 +2235,12 @@ static void arm_smmu_install_ste_for_dev(struct arm_smmu_master *master)
 	for (i = 0; i < master->num_streams; ++i) {
 		u32 sid = master->streams[i].id;
 		__le64 *step = arm_smmu_get_step_for_sid(smmu, sid);
+		struct arm_smmu_cmdq_ent prefetch_cmd = {
+			.opcode		= CMDQ_OP_PREFETCH_CFG,
+			.prefetch	= {
+				.sid	= sid,
+			},
+		};
 
 		/* Bridged PCI devices may end up with duplicated IDs */
 		for (j = 0; j < i; j++)
@@ -2254,6 +2250,10 @@ static void arm_smmu_install_ste_for_dev(struct arm_smmu_master *master)
 			continue;
 
 		arm_smmu_write_strtab_ent(master, sid, step);
+
+		/* It's likely that we'll want to use the new STE soon */
+		if (!(smmu->options & ARM_SMMU_OPT_SKIP_PREFETCH))
+			arm_smmu_cmdq_issue_cmd(smmu, &prefetch_cmd);
 	}
 }
 
