@@ -196,7 +196,6 @@ struct apple_dart_hw {
  * @lock: lock for hardware operations involving this dart
  * @pgsize: pagesize supported by this DART
  * @supports_bypass: indicates if this DART supports bypass mode
- * @force_bypass: force bypass mode due to pagesize mismatch?
  * @sid2group: maps stream ids to iommu_groups
  * @iommu: iommu core device
  */
@@ -217,7 +216,6 @@ struct apple_dart {
 	u32 pgsize;
 	u32 num_streams;
 	u32 supports_bypass : 1;
-	u32 force_bypass : 1;
 
 	struct iommu_group *sid2group[DART_MAX_STREAMS];
 	struct iommu_device iommu;
@@ -577,6 +575,9 @@ static int apple_dart_finalize_domain(struct apple_dart_domain *dart_domain,
 	int ret = 0;
 	int i, j;
 
+	if (dart->pgsize > PAGE_SIZE)
+		return -EINVAL;
+
 	mutex_lock(&dart_domain->init_lock);
 
 	if (dart_domain->finalized)
@@ -660,9 +661,6 @@ static int apple_dart_attach_dev_paging(struct iommu_domain *domain,
 	struct apple_dart_master_cfg *cfg = dev_iommu_priv_get(dev);
 	struct apple_dart_domain *dart_domain = to_dart_domain(domain);
 
-	if (cfg->stream_maps[0].dart->force_bypass)
-		return -EINVAL;
-
 	ret = apple_dart_finalize_domain(dart_domain, cfg);
 	if (ret)
 		return ret;
@@ -706,9 +704,6 @@ static int apple_dart_attach_dev_blocked(struct iommu_domain *domain,
 	struct apple_dart_master_cfg *cfg = dev_iommu_priv_get(dev);
 	struct apple_dart_stream_map *stream_map;
 	int i;
-
-	if (cfg->stream_maps[0].dart->force_bypass)
-		return -EINVAL;
 
 	for_each_stream_map(i, cfg, stream_map)
 		apple_dart_hw_disable_dma(stream_map);
@@ -803,8 +798,6 @@ static int apple_dart_of_xlate(struct device *dev, struct of_phandle_args *args)
 	cfg_dart = cfg->stream_maps[0].dart;
 	if (cfg_dart) {
 		if (cfg_dart->supports_bypass != dart->supports_bypass)
-			return -EINVAL;
-		if (cfg_dart->force_bypass != dart->force_bypass)
 			return -EINVAL;
 		if (cfg_dart->pgsize != dart->pgsize)
 			return -EINVAL;
@@ -947,7 +940,7 @@ static int apple_dart_def_domain_type(struct device *dev)
 {
 	struct apple_dart_master_cfg *cfg = dev_iommu_priv_get(dev);
 
-	if (cfg->stream_maps[0].dart->force_bypass)
+	if (cfg->stream_maps[0].dart->pgsize > PAGE_SIZE)
 		return IOMMU_DOMAIN_IDENTITY;
 	if (!cfg->stream_maps[0].dart->supports_bypass)
 		return IOMMU_DOMAIN_DMA;
@@ -1147,8 +1140,6 @@ static int apple_dart_probe(struct platform_device *pdev)
 		goto err_clk_disable;
 	}
 
-	dart->force_bypass = dart->pgsize > PAGE_SIZE;
-
 	ret = apple_dart_hw_reset(dart);
 	if (ret)
 		goto err_clk_disable;
@@ -1172,7 +1163,8 @@ static int apple_dart_probe(struct platform_device *pdev)
 	dev_info(
 		&pdev->dev,
 		"DART [pagesize %x, %d streams, bypass support: %d, bypass forced: %d] initialized\n",
-		dart->pgsize, dart->num_streams, dart->supports_bypass, dart->force_bypass);
+		dart->pgsize, dart->num_streams, dart->supports_bypass,
+		dart->pgsize > PAGE_SIZE);
 	return 0;
 
 err_sysfs_remove:
