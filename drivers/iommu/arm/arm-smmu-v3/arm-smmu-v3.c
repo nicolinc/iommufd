@@ -1450,7 +1450,9 @@ static void arm_smmu_setup_ste_by_cdtab(struct arm_smmu_master *master,
 		  FIELD_PREP_LE64(STRTAB_STE_0_S1CDMAX, cd_table->s1cdmax) |
 		  FIELD_PREP_LE64(STRTAB_STE_0_S1FMT, cd_table->s1fmt);
 
-	if (master->domain->stage == ARM_SMMU_DOMAIN_BYPASS)
+	if (master->domain->stage == ARM_SMMU_DOMAIN_NESTED)
+		ste[1] |= FIELD_PREP_LE64(STRTAB_STE_1_S1DSS, cd_table->s1dss);
+	else if (master->domain->stage == ARM_SMMU_DOMAIN_BYPASS)
 		ste[1] |= FIELD_PREP_LE64(STRTAB_STE_1_S1DSS, STRTAB_STE_1_S1DSS_BYPASS);
 	else
 		ste[1] |= FIELD_PREP_LE64(STRTAB_STE_1_S1DSS, STRTAB_STE_1_S1DSS_SSID0);

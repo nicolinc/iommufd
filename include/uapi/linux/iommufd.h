@@ -389,15 +389,17 @@ struct iommu_hwpt_vtd_s1 {
 };
 
 /**
- * struct iommu_hwpt_arm_smmuv3 - ARM SMMUv3 specific translation table info
+ * struct iommu_hwpt_arm_smmuv3 - ARM SMMUv3 Context Descriptor table info
  *                                (IOMMU_HWPT_TYPE_ARM_SMMUV3)
  *
- * @flags: Translation table entry attributes
- * @ste_len: Length of the user Stream Table Entry
- * @ste_uptr: User pointer to a user Stream Table Entry
- * @event_len: Length of the returning event
- * @out_event_uptr: User pointer to a returning event, to report a C_BAD_STE
- *                  upon an STE configuration failure
+ * @flags: Must be set to 0
+ * @s1ctxptr: Stage-1 context descriptor pointer
+ * @s1cdmax: Number of CDs pointed to by s1ContextPtr
+ * @s1fmt: Stage-1 Format
+ * @s1dss: Default substream
+ * @__reserved: Must be 0
+ * @out_event_uptr: User pointer to an 8-bit user space buffer for a returning
+ *                  event, to report a C_BAD_STE upon a configuration failure
  *
  * ARM SMMUv3 specific data to create page tables for a nested configuration.
  *
@@ -407,19 +409,14 @@ struct iommu_hwpt_vtd_s1 {
  * @out_event_uptr in pair are optional. If they are both provided, kernel will
  * report an STE error to the memory location pointed by @out_event_uptr, when
  * the allocation fails due to some problem in the user space STE.
- *
- * As long as the SMMUv3 hardware supports a stage-1 page table, the default
- * allocation of a page table in the kernel is always for a stage-1 type. So,
- * this data structure can be also used to allocate a kernel-managed stage-2
- * translation table, by setting IOMMU_SMMUV3_FLAG_S2 in the @flags, in which
- * case only this flag matters and the kernel will ignore all other inputs.
  */
 struct iommu_hwpt_arm_smmuv3 {
-#define IOMMU_SMMUV3_FLAG_S2	(1 << 0) /* if unset, stage-1 */
 	__aligned_u64 flags;
-	__aligned_u64 ste_len;
-	__aligned_u64 ste_uptr;
-	__aligned_u64 event_len;
+	__aligned_u64 s1ctxptr;
+	u8 s1cdmax;
+	u8 s1fmt;
+	u8 s1dss;
+	u8 __reserved;
 	__aligned_u64 out_event_uptr;
 };
 
@@ -427,7 +424,7 @@ struct iommu_hwpt_arm_smmuv3 {
  * enum iommu_hwpt_type - IOMMU HWPT Type
  * @IOMMU_HWPT_TYPE_DEFAULT: default
  * @IOMMU_HWPT_TYPE_VTD_S1: Intel VT-d stage-1 page table
- * @IOMMU_HWPT_TYPE_ARM_SMMUV3: ARM SMMUv3 Translation table
+ * @IOMMU_HWPT_TYPE_ARM_SMMUV3: ARM SMMUv3 Context Descriptor table
  */
 enum iommu_hwpt_type {
 	IOMMU_HWPT_TYPE_DEFAULT,
