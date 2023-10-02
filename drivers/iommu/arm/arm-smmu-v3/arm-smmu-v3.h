@@ -750,6 +750,7 @@ struct arm_smmu_entry_writer {
 struct arm_smmu_entry_writer_ops {
 	unsigned int num_entry_qwords;
 	__le64 v_bit;
+	bool no_used_check;
 	void (*get_used)(struct arm_smmu_entry_writer *writer, const __le64 *entry,
 			 __le64 *used);
 	void (*sync)(struct arm_smmu_entry_writer *writer);
