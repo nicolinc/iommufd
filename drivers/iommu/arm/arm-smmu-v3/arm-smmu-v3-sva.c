@@ -626,7 +626,7 @@ static int arm_smmu_sva_set_dev_pasid(struct iommu_domain *domain,
 	struct arm_smmu_cd target;
 	int ret;
 
-	if (mm_get_enqcmd_pasid(mm) != id)
+	if (mm_get_enqcmd_pasid(mm) != id || !master->cd_table.in_ste)
 		return -EINVAL;
 
 	mutex_lock(&sva_lock);
