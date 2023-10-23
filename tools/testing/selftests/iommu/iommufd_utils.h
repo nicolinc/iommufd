@@ -9,14 +9,31 @@
 #include <sys/ioctl.h>
 #include <stdint.h>
 #include <assert.h>
-#include <linux/bitmap.h>
-#include <linux/bitops.h>
 
 #include "../kselftest_harness.h"
 #include "../../../../drivers/iommu/iommufd/iommufd_test.h"
 
 /* Hack to make assertions more readable */
 #define _IOMMU_TEST_CMD(x) IOMMU_TEST_CMD
+
+/* Imported from include/asm-generic/bitops/generic-non-atomic.h */
+#define BITS_PER_BYTE 8
+#define BITS_PER_LONG __BITS_PER_LONG
+#define BIT_MASK(nr) (1UL << ((nr) % __BITS_PER_LONG))
+#define BIT_WORD(nr) ((nr) / __BITS_PER_LONG)
+
+static inline void __set_bit(unsigned int nr, unsigned long *addr)
+{
+	unsigned long mask = BIT_MASK(nr);
+	unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+
+	*p  |= mask;
+}
+
+static inline bool test_bit(unsigned int nr, unsigned long *addr)
+{
+	return 1UL & (addr[BIT_WORD(nr)] >> (nr & (BITS_PER_LONG-1)));
+}
 
 static void *buffer;
 static unsigned long BUFFER_SIZE;

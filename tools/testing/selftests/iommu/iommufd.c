@@ -12,7 +12,6 @@
 static unsigned long HUGEPAGE_SIZE;
 
 #define MOCK_PAGE_SIZE (PAGE_SIZE / 2)
-#define BITS_PER_BYTE 8
 
 static unsigned long get_huge_page_size(void)
 {

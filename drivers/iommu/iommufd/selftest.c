@@ -1098,14 +1098,14 @@ static int iommufd_test_dirty(struct iommufd_ucmd *ucmd, unsigned int mockpt_id,
 			      unsigned long page_size, void __user *uptr,
 			      u32 flags)
 {
-	unsigned long i, max = length / page_size;
+	unsigned long bitmap_size, i, max = length / page_size;
 	struct iommu_test_cmd *cmd = ucmd->cmd;
 	struct iommufd_hw_pagetable *hwpt;
 	struct mock_iommu_domain *mock;
 	int rc, count = 0;
+	void *tmp;
 
-	if (iova % page_size || length % page_size ||
-	    (uintptr_t)uptr % page_size)
+	if (iova % page_size || length % page_size || !uptr)
 		return -EINVAL;
 
 	hwpt = get_md_pagetable(ucmd, mockpt_id, &mock);
@@ -1117,11 +1117,24 @@ static int iommufd_test_dirty(struct iommufd_ucmd *ucmd, unsigned int mockpt_id,
 		goto out_put;
 	}
 
+	bitmap_size = max / BITS_PER_BYTE;
+
+	tmp = kvzalloc(bitmap_size, GFP_KERNEL_ACCOUNT);
+	if (!tmp) {
+		rc = -ENOMEM;
+		goto out_put;
+	}
+
+	if (copy_from_user(tmp, uptr, bitmap_size)) {
+		rc = -EFAULT;
+		goto out_free;
+	}
+
 	for (i = 0; i < max; i++) {
 		unsigned long cur = iova + i * page_size;
 		void *ent, *old;
 
-		if (!test_bit(i, (unsigned long *)uptr))
+		if (!test_bit(i, (unsigned long *)tmp))
 			continue;
 
 		ent = xa_load(&mock->pfns, cur / page_size);
@@ -1138,6 +1151,8 @@ static int iommufd_test_dirty(struct iommufd_ucmd *ucmd, unsigned int mockpt_id,
 
 	cmd->dirty.out_nr_dirty = count;
 	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+out_free:
+	kvfree(tmp);
 out_put:
 	iommufd_put_object(&hwpt->obj);
 	return rc;
