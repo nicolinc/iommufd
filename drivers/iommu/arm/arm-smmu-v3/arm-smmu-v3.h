@@ -396,6 +396,7 @@ struct arm_smmu_cd {
 
 #define EVTQ_0_ID			GENMASK_ULL(7, 0)
 
+#define EVT_ID_BAD_STE			0x4
 #define EVT_ID_TRANSLATION_FAULT	0x10
 #define EVT_ID_ADDR_SIZE_FAULT		0x11
 #define EVT_ID_ACCESS_FAULT		0x12
@@ -692,10 +693,12 @@ struct arm_smmu_device {
 
 	struct rb_root			streams;
 	struct mutex			streams_mutex;
+	struct xarray                   streams_user;
 };
 
 struct arm_smmu_stream {
 	u32				id;
+	u32				id_user;
 	struct arm_smmu_master		*master;
 	struct rb_node			node;
 };
@@ -735,6 +738,7 @@ struct arm_smmu_domain {
 	union {
 		u32 asid;
 		u16 vmid;
+		u32 sid;
 	};
 
 	struct iommu_domain		domain;

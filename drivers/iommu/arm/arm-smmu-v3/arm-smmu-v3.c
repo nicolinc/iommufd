@@ -2233,6 +2233,40 @@ static void *arm_smmu_hw_info(struct device *dev, u32 *length, u32 *type)
 	return info;
 }
 
+static void arm_smmu_domain_free_nested(struct iommu_domain *domain)
+{
+	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+	u32 id_user = smmu_domain->sid;
+
+	if (!WARN_ON(!id_user)) {
+		struct arm_smmu_device *smmu = smmu_domain->smmu;
+		struct arm_smmu_stream *stream;
+
+		xa_lock(&smmu->streams_user);
+		stream = __xa_erase(&smmu->streams_user, id_user);
+		/*
+		 * A mismatched id_user is unlikely to happen, but restore the
+		 * stream back to the xarray for its actual owner to carray on.
+		 */
+		if (unlikely(stream->id_user != id_user)) {
+			WARN_ON(__xa_alloc(&smmu->streams_user, &id_user,
+					   stream, XA_LIMIT(id_user, id_user),
+					   GFP_KERNEL_ACCOUNT));
+		} else
+			stream->id_user = 0;
+		xa_unlock(&smmu->streams_user);
+	}
+
+	kfree(smmu_domain);
+}
+
+static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev);
+
+static const struct iommu_domain_ops arm_smmu_nested_domain_ops = {
+	.attach_dev = arm_smmu_attach_dev,
+	.free = arm_smmu_domain_free_nested,
+};
+
 struct arm_smmu_domain *arm_smmu_domain_alloc(void)
 {
 	struct arm_smmu_domain *smmu_domain;
@@ -2246,6 +2280,122 @@ struct arm_smmu_domain *arm_smmu_domain_alloc(void)
 	spin_lock_init(&smmu_domain->devices_lock);
 
 	return smmu_domain;
+}
+
+static int
+arm_smmu_alloc_cd_tables_nested(struct arm_smmu_master *master,
+				const struct iommu_hwpt_arm_smmuv3 *user_cfg)
+{
+	const size_t event_len = EVTQ_ENT_DWORDS * sizeof(u64);
+	const size_t ste_len = STRTAB_STE_DWORDS * sizeof(u64);
+	struct arm_smmu_device *smmu = master->smmu;
+	struct device *dev = master->dev;
+	void __user *event_user = NULL;
+	u8 eats, s1dss, s1fmt, s1cdmax;
+	u64 event[EVTQ_ENT_DWORDS];
+	u64 ste[STRTAB_STE_DWORDS];
+	u64 s1ctxptr;
+
+	if (user_cfg->out_event_uptr && user_cfg->event_len == event_len)
+		event_user = u64_to_user_ptr(user_cfg->out_event_uptr);
+	event[0] = FIELD_PREP(EVTQ_0_ID, EVT_ID_BAD_STE);
+
+	if (!(smmu->features & ARM_SMMU_FEAT_NESTING)) {
+		if (event_user && copy_to_user(event_user, event, event_len))
+			return -EFAULT;
+		return -EINVAL;
+	}
+
+	if (!user_cfg->ste_uptr || user_cfg->ste_len != ste_len)
+		return -EINVAL;
+	if (copy_from_user(ste, u64_to_user_ptr(user_cfg->ste_uptr), ste_len))
+		return -EFAULT;
+
+	eats = FIELD_GET(STRTAB_STE_1_EATS, ste[1]);
+	s1dss = FIELD_GET(STRTAB_STE_1_S1DSS, ste[1]);
+
+	s1fmt = FIELD_GET(STRTAB_STE_0_S1FMT, ste[0]);
+	if (!(smmu->features & ARM_SMMU_FEAT_2_LVL_CDTAB) &&
+			s1fmt != STRTAB_STE_0_S1FMT_LINEAR) {
+		dev_dbg(dev, "unsupported format (0x%x)\n", s1fmt);
+		if (event_user && copy_to_user(event_user, event, event_len))
+			return -EFAULT;
+		return -EINVAL;
+	}
+
+	s1cdmax = FIELD_GET(STRTAB_STE_0_S1CDMAX, ste[0]);
+	if (s1cdmax > master->ssid_bits) {
+		dev_dbg(dev, "s1cdmax (%d-bit) is out of range (%d-bit)\n",
+				s1cdmax, master->ssid_bits);
+		if (event_user && copy_to_user(event_user, event, event_len))
+			return -EFAULT;
+		return -EINVAL;
+	}
+
+	s1ctxptr = ste[0] & STRTAB_STE_0_S1CTXPTR_MASK;
+	if (s1ctxptr & ~GENMASK_ULL(smmu->ias, 0)) {
+		dev_dbg(dev, "s1ctxptr (0x%llx) is out of range (%lu-bit)\n",
+				s1ctxptr, smmu->ias);
+		if (event_user && copy_to_user(event_user, event, event_len))
+			return -EFAULT;
+		return -EINVAL;
+	}
+
+	if (master->cd_table.cdtab)
+		arm_smmu_free_cd_tables(master);
+
+	master->cd_table.s1dss = s1dss;
+	master->cd_table.s1fmt = s1fmt;
+	master->cd_table.s1cdmax = s1cdmax;
+	master->cd_table.cdtab_dma = s1ctxptr;
+	master->ats_enabled = eats == STRTAB_STE_1_EATS;
+	return 0;
+}
+
+static struct iommu_domain *
+__arm_smmu_domain_alloc_nested(struct device *dev, struct iommu_domain *parent,
+			       const struct iommu_hwpt_arm_smmuv3 *user_cfg)
+{
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+	struct arm_smmu_stream *stream = &master->streams[0];
+	struct arm_smmu_device *smmu = master->smmu;
+	struct arm_smmu_domain *smmu_domain;
+	u32 id_user = user_cfg->sid;
+	int ret;
+
+	if (!dev)
+		return ERR_PTR(-EINVAL);
+	if (!user_cfg->sid)
+		return ERR_PTR(-EINVAL);
+	if (master->num_streams > 1)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	smmu_domain = arm_smmu_domain_alloc();
+	if (!smmu_domain)
+		return ERR_CAST(smmu_domain);
+	smmu_domain->smmu = smmu;
+	smmu_domain->sid = user_cfg->sid;
+	smmu_domain->s2 = to_smmu_domain(parent);
+	smmu_domain->stage = ARM_SMMU_DOMAIN_NESTED;
+	smmu_domain->domain.type = IOMMU_DOMAIN_NESTED;
+	smmu_domain->domain.ops = &arm_smmu_nested_domain_ops;
+
+	ret = xa_alloc(&smmu->streams_user, &id_user, stream,
+		       XA_LIMIT(id_user, id_user), GFP_KERNEL_ACCOUNT);
+	if (ret) {
+		kfree(smmu_domain);
+		return ERR_PTR(ret);
+	}
+
+	ret = arm_smmu_alloc_cd_tables_nested(master, user_cfg);
+	if (ret) {
+		arm_smmu_domain_free_nested(&smmu_domain->domain);
+		return ERR_PTR(ret);
+	}
+
+	stream->id_user = id_user;
+
+	return &smmu_domain->domain;
 }
 
 static struct iommu_ops arm_smmu_ops;
@@ -2298,6 +2448,9 @@ arm_smmu_domain_alloc_user(struct device *dev, u32 flags,
 			   struct iommu_domain *parent,
 			   const struct iommu_user_data *user_data)
 {
+	struct iommu_hwpt_arm_smmuv3 data;
+	int ret;
+
 	/* must be a paging domain */
 	if (!parent) {
 		const u32 paging_flags = IOMMU_HWPT_ALLOC_NEST_PARENT;
@@ -2309,7 +2462,19 @@ arm_smmu_domain_alloc_user(struct device *dev, u32 flags,
 		return __arm_smmu_domain_alloc_paging(dev, flags);
 	}
 
-	return ERR_PTR(-EOPNOTSUPP);
+	/* must be a nested domain that has a paging parent */
+	if (parent->ops != arm_smmu_ops.default_domain_ops)
+		return ERR_PTR(-EINVAL);
+	if (flags)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	ret = iommu_copy_struct_from_user(&data, user_data,
+					  IOMMU_HWPT_DATA_ARM_SMMUV3,
+					  out_event_uptr);
+	if (ret)
+		return ERR_PTR(ret);
+
+	return __arm_smmu_domain_alloc_nested(dev, parent, &data);
 }
 
 int arm_smmu_domain_alloc_id(struct arm_smmu_device *smmu,
@@ -3626,6 +3791,7 @@ static int arm_smmu_init_structures(struct arm_smmu_device *smmu)
 
 	mutex_init(&smmu->streams_mutex);
 	smmu->streams = RB_ROOT;
+	xa_init_flags(&smmu->streams_user, XA_FLAGS_ALLOC1 | XA_FLAGS_ACCOUNT);
 
 	ret = arm_smmu_init_queues(smmu);
 	if (ret)
