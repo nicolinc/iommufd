@@ -1505,15 +1505,14 @@ static void arm_smmu_make_cdtable_ste(struct arm_smmu_ste *target,
 {
 	struct arm_smmu_device *smmu = master->smmu;
 
-	memset(target, 0, sizeof(*target));
-	target->data[0] = cpu_to_le64(
+	target->data[0] |= cpu_to_le64(
 		STRTAB_STE_0_V |
 		FIELD_PREP(STRTAB_STE_0_CFG, STRTAB_STE_0_CFG_S1_TRANS) |
 		FIELD_PREP(STRTAB_STE_0_S1FMT, cd_table->s1fmt) |
 		(cd_table->cdtab_dma & STRTAB_STE_0_S1CTXPTR_MASK) |
 		FIELD_PREP(STRTAB_STE_0_S1CDMAX, cd_table->s1cdmax));
 
-	target->data[1] = cpu_to_le64(
+	target->data[1] |= cpu_to_le64(
 		FIELD_PREP(STRTAB_STE_1_S1DSS, s1dss) |
 		FIELD_PREP(STRTAB_STE_1_S1CIR, STRTAB_STE_1_S1C_CACHE_WBRA) |
 		FIELD_PREP(STRTAB_STE_1_S1COR, STRTAB_STE_1_S1C_CACHE_WBRA) |
@@ -1545,9 +1544,7 @@ static void arm_smmu_make_s2_domain_ste(struct arm_smmu_ste *target,
 		&pgtbl_cfg->arm_lpae_s2_cfg.vtcr;
 	u64 vtcr_val;
 
-	memset(target, 0, sizeof(*target));
-
-	target->data[0] = cpu_to_le64(
+	target->data[0] |= cpu_to_le64(
 		STRTAB_STE_0_V |
 		FIELD_PREP(STRTAB_STE_0_CFG, STRTAB_STE_0_CFG_S2_TRANS));
 
@@ -1562,7 +1559,7 @@ static void arm_smmu_make_s2_domain_ste(struct arm_smmu_ste *target,
 		   FIELD_PREP(STRTAB_STE_2_VTCR_S2SH0, vtcr->sh) |
 		   FIELD_PREP(STRTAB_STE_2_VTCR_S2TG, vtcr->tg) |
 		   FIELD_PREP(STRTAB_STE_2_VTCR_S2PS, vtcr->ps);
-	target->data[2] = cpu_to_le64(
+	target->data[2] |= cpu_to_le64(
 		FIELD_PREP(STRTAB_STE_2_S2VMID, smmu_domain->vmid) |
 		FIELD_PREP(STRTAB_STE_2_VTCR, vtcr_val) |
 		STRTAB_STE_2_S2AA64 |
@@ -1572,8 +1569,8 @@ static void arm_smmu_make_s2_domain_ste(struct arm_smmu_ste *target,
 		STRTAB_STE_2_S2PTW |
 		STRTAB_STE_2_S2R);
 
-	target->data[3] = cpu_to_le64(pgtbl_cfg->arm_lpae_s2_cfg.vttbr &
-				      STRTAB_STE_3_S2TTB_MASK);
+	target->data[3] |= cpu_to_le64(pgtbl_cfg->arm_lpae_s2_cfg.vttbr &
+				       STRTAB_STE_3_S2TTB_MASK);
 }
 
 static void arm_smmu_init_bypass_stes(struct arm_smmu_ste *strtab,
@@ -2696,6 +2693,7 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 		return ret;
 	}
 
+	memset(&target, 0, sizeof(target));
 	switch (smmu_domain->stage) {
 	case ARM_SMMU_DOMAIN_S1: {
 		struct arm_smmu_cd target_cd;
