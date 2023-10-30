@@ -601,6 +601,7 @@ struct arm_smmu_ctx_desc_cfg {
 	unsigned int			used_ssids;
 	u8				used_sid;
 	u8				in_ste;
+	u8				s1dss;
 	u8				s1fmt;
 	/* log2 of the maximum number of CDs supported by this table */
 	u8				s1cdmax;
@@ -719,9 +720,11 @@ struct arm_smmu_master {
 enum arm_smmu_domain_stage {
 	ARM_SMMU_DOMAIN_S1 = 0,
 	ARM_SMMU_DOMAIN_S2,
+	ARM_SMMU_DOMAIN_NESTED,
 };
 
 struct arm_smmu_domain {
+	struct arm_smmu_domain		*s2;
 	struct arm_smmu_device		*smmu;
 	struct mutex			init_mutex; /* Protects smmu pointer */
 

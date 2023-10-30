@@ -2650,6 +2650,7 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
 	struct arm_smmu_device *smmu;
 	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+	struct arm_smmu_domain *s2_domain = smmu_domain;
 	struct arm_smmu_master *master;
 	struct arm_smmu_cd *cdptr;
 	struct attach_state state;
@@ -2707,8 +2708,14 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 		arm_smmu_install_ste_for_dev(master, &target);
 		break;
 	}
+	case ARM_SMMU_DOMAIN_NESTED:
+		arm_smmu_make_cdtable_ste(&target, master, &master->cd_table,
+					  state.want_ats && master->ats_enabled,
+					  master->cd_table.s1dss);
+		s2_domain = smmu_domain->s2;
+		fallthrough;
 	case ARM_SMMU_DOMAIN_S2:
-		arm_smmu_make_s2_domain_ste(&target, master, smmu_domain,
+		arm_smmu_make_s2_domain_ste(&target, master, s2_domain,
 					    state.want_ats);
 		arm_smmu_install_ste_for_dev(master, &target);
 		arm_smmu_clear_cd(master, IOMMU_NO_PASID);
