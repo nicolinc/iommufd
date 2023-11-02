@@ -3031,7 +3031,7 @@ arm_smmu_domain_alloc_nesting(struct device *dev, u32 flags,
 
 	/* EIO is reserved for invalid STE data. */
 	if ((arg.ste[0] & ~STRTAB_STE_0_NESTING_ALLOWED) ||
-	    (arg.ste[0] & ~STRTAB_STE_1_NESTING_ALLOWED))
+	    (arg.ste[1] & ~STRTAB_STE_1_NESTING_ALLOWED))
 		return ERR_PTR(-EIO);
 
 	nested_domain = kzalloc(sizeof(*nested_domain), GFP_KERNEL_ACCOUNT);
