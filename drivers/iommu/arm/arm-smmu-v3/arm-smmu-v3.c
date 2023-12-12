@@ -2281,7 +2281,7 @@ static struct iommu_domain *arm_smmu_domain_alloc_paging(struct device *dev)
 
 	smmu_domain = arm_smmu_domain_alloc();
 	if (!smmu_domain)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	/*
 	 * Allocate the domain and initialise some of its data structures.
@@ -2291,10 +2291,12 @@ static struct iommu_domain *arm_smmu_domain_alloc_paging(struct device *dev)
 
 	if (dev) {
 		struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+		int ret;
 
-		if (arm_smmu_domain_finalise(smmu_domain, master->smmu)) {
+		ret = arm_smmu_domain_finalise(smmu_domain, master->smmu);
+		if (ret) {
 			kfree(smmu_domain);
-			return NULL;
+			return ERR_PTR(ret);
 		}
 	}
 	return &smmu_domain->domain;
