@@ -1246,3 +1246,30 @@ out_put:
 	iommufd_put_object(ucmd->ictx, &idev->obj);
 	return rc;
 }
+
+int iommufd_device_invalidate(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_dev_invalidate *cmd = ucmd->cmd;
+	struct iommu_user_data_array data_array = {
+		.type = cmd->req_type,
+		.uptr = u64_to_user_ptr(cmd->reqs_uptr),
+		.entry_len = cmd->req_len,
+		.entry_num = cmd->req_num,
+	};
+	struct iommufd_device *idev;
+	const struct iommu_ops *ops;
+	int rc = 0;
+
+	if (!cmd->reqs_uptr || !cmd->req_len || !cmd->req_num)
+		return -EINVAL;
+
+	idev = iommufd_get_device(ucmd, cmd->dev_id);
+	if (IS_ERR(idev))
+		return PTR_ERR(idev);
+
+	ops = dev_iommu_ops(idev->dev);
+	rc = ops->dev_invalidate_user(idev->dev, &data_array);
+	cmd->req_num = data_array.entry_num;
+	iommufd_put_object(&idev->obj);
+	return rc;
+}

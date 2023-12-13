@@ -324,6 +324,7 @@ union ucmd_buffer {
 	struct iommu_hwpt_get_dirty_bitmap get_dirty_bitmap;
 	struct iommu_hwpt_set_dirty_tracking set_dirty_tracking;
 	struct iommu_hwpt_invalidate cache;
+	struct iommu_dev_invalidate dev_cache;
 	struct iommu_ioas_alloc alloc;
 	struct iommu_ioas_allow_iovas allow_iovas;
 	struct iommu_ioas_copy ioas_copy;
@@ -365,6 +366,8 @@ static const struct iommufd_ioctl_op iommufd_ioctl_ops[] = {
 		 struct iommu_hwpt_set_dirty_tracking, __reserved),
 	IOCTL_OP(IOMMU_HWPT_INVALIDATE, iommufd_hwpt_invalidate,
 		 struct iommu_hwpt_invalidate, __reserved),
+	IOCTL_OP(IOMMU_DEV_INVALIDATE, iommufd_device_invalidate,
+		 struct iommu_dev_invalidate, req_num),
 	IOCTL_OP(IOMMU_IOAS_ALLOC, iommufd_ioas_alloc_ioctl,
 		 struct iommu_ioas_alloc, out_ioas_id),
 	IOCTL_OP(IOMMU_IOAS_ALLOW_IOVAS, iommufd_ioas_allow_iovas,

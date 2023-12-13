@@ -50,6 +50,7 @@ enum {
 	IOMMUFD_CMD_HWPT_SET_DIRTY_TRACKING,
 	IOMMUFD_CMD_HWPT_GET_DIRTY_BITMAP,
 	IOMMUFD_CMD_HWPT_INVALIDATE,
+	IOMMUFD_CMD_DEV_INVALIDATE,
 };
 
 /**
@@ -771,4 +772,41 @@ struct iommu_hwpt_invalidate {
 	__u32 __reserved;
 };
 #define IOMMU_HWPT_INVALIDATE _IO(IOMMUFD_TYPE, IOMMUFD_CMD_HWPT_INVALIDATE)
+
+/**
+ * enum iommu_dev_invalidate_data_type - IOMMU Device Cache Invalidate Data Type
+ */
+enum iommu_dev_invalidate_data_type {
+};
+
+/**
+ * struct iommu_dev_invalidate - ioctl(IOMMU_DEV_INVALIDATE)
+ * @size: sizeof(struct iommu_dev_invalidate)
+ * @hwpt_id: HWPT ID of a nested HWPT for cache invalidation
+ * @dev_id: device ID for cache invalidate_user
+ * @reqs_uptr: User pointer to an array having @req_num of cache invalidation
+ *             requests. The request entries in the array are of fixed width
+ *             @req_len, and contain a user data structure for invalidation
+ *             request specific to the given hardware page table.
+ * @req_type: One of enum iommu_hwpt_data_type, defining the data type of all
+ *            the entries in the invalidation request array. It should suit
+ *            with the data_type passed per the allocation of the hwpt pointed
+ *            by @hwpt_id.
+ * @req_len: Length (in bytes) of a request entry in the request array
+ * @req_num: Input the number of cache invalidation requests in the array.
+ *           Output the number of requests successfully handled by kernel.
+ *
+ * Invalidate the iommu cache used by a  device in the user space.
+ * Each ioctl can support one or more cache invalidation requests in the array
+ * that has a total size of @req_len * @req_num.
+ */
+struct iommu_dev_invalidate {
+	__u32 size;
+	__u32 dev_id;
+	__aligned_u64 reqs_uptr;
+	__u32 req_type;
+	__u32 req_len;
+	__u32 req_num;
+};
+#define IOMMU_DEV_INVALIDATE _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DEV_INVALIDATE)
 #endif
