@@ -435,6 +435,14 @@ __iommu_copy_struct_from_user_array(void *dst_data,
  *                      driver init to device driver init (default no)
  * @dev_enable/disable_feat: per device entries to enable/disable
  *                               iommu specific features.
+ * @dev_invalidate_user: Flush hardware cache used by a device in user space.
+ *                       The @dev must be attached to an IOMMU_DOMAIN_NESTED.
+ *                       The @array passes in the cache invalidation requests,
+ *                       in form of a driver data structure. The driver must
+ *                       update the array->entry_num to report the number of
+ *                       handled invalidation requests. The data structure of
+ *                       the array entry must be defined in
+ *                       include/uapi/linux/iommufd.h
  * @page_response: handle page request response
  * @def_domain_type: device default domain type, return value:
  *		- IOMMU_DOMAIN_IDENTITY: must use an identity domain
@@ -481,6 +489,9 @@ struct iommu_ops {
 	/* Per device IOMMU features */
 	int (*dev_enable_feat)(struct device *dev, enum iommu_dev_features f);
 	int (*dev_disable_feat)(struct device *dev, enum iommu_dev_features f);
+
+	int (*dev_invalidate_user)(struct device *dev,
+				   struct iommu_user_data_array *array);
 
 	int (*page_response)(struct device *dev,
 			     struct iommu_fault_event *evt,
