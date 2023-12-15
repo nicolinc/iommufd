@@ -39,6 +39,7 @@
 #include "iommu-sva.h"
 
 static struct kset *iommu_group_kset;
+static DEFINE_XARRAY_ALLOC(iommu_ids);
 static DEFINE_IDA(iommu_group_ida);
 static DEFINE_IDA(iommu_global_pasid_ida);
 
@@ -258,6 +259,10 @@ int iommu_device_register(struct iommu_device *iommu,
 	if (WARN_ON(is_module_address((unsigned long)ops) && !ops->owner))
 		return -EINVAL;
 
+	err = xa_alloc(&iommu_ids, &iommu->id, iommu, xa_limit_32b, GFP_KERNEL);
+	if (err)
+		return err;
+
 	iommu->ops = ops;
 	if (hwdev)
 		iommu->fwnode = dev_fwnode(hwdev);
@@ -268,8 +273,10 @@ int iommu_device_register(struct iommu_device *iommu,
 
 	for (int i = 0; i < ARRAY_SIZE(iommu_buses) && !err; i++)
 		err = bus_iommu_probe(iommu_buses[i]);
-	if (err)
+	if (err) {
 		iommu_device_unregister(iommu);
+		WARN_ON(iommu != xa_erase(&iommu_ids, iommu->id));
+	}
 	return err;
 }
 EXPORT_SYMBOL_GPL(iommu_device_register);
@@ -286,8 +293,14 @@ void iommu_device_unregister(struct iommu_device *iommu)
 	/* Pairs with the alloc in generic_single_device_group() */
 	iommu_group_put(iommu->singleton_group);
 	iommu->singleton_group = NULL;
+	WARN_ON(iommu != xa_erase(&iommu_ids, iommu->id));
 }
 EXPORT_SYMBOL_GPL(iommu_device_unregister);
+
+struct iommu_device *iommu_device_get_from_id(u32 iommu_id)
+{
+	return xa_load(&iommu_ids, iommu_id);
+}
 
 #if IS_ENABLED(CONFIG_IOMMUFD_TEST)
 void iommu_device_unregister_bus(struct iommu_device *iommu,
