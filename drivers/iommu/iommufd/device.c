@@ -1182,7 +1182,7 @@ int iommufd_get_hw_info(struct iommufd_ucmd *ucmd)
 	void *data;
 	int rc;
 
-	if (cmd->flags || cmd->__reserved)
+	if (cmd->flags)
 		return -EOPNOTSUPP;
 
 	idev = iommufd_get_device(ucmd, cmd->dev_id);
@@ -1238,6 +1238,7 @@ int iommufd_get_hw_info(struct iommufd_ucmd *ucmd)
 	cmd->out_capabilities = 0;
 	if (device_iommu_capable(idev->dev, IOMMU_CAP_DIRTY_TRACKING))
 		cmd->out_capabilities |= IOMMU_HW_CAP_DIRTY_TRACKING;
+	cmd->out_iommu_id = idev->dev->iommu->iommu_dev->id;
 
 	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
 out_free:
