@@ -567,7 +567,7 @@ enum iommufd_hw_capabilities {
  *                 iommu_hw_info_type.
  * @out_capabilities: Output the generic iommu capability info type as defined
  *                    in the enum iommu_hw_capabilities.
- * @__reserved: Must be 0
+ * @out_iommu_id: The ID of the iommu that's behind the device; starts from 0.
  *
  * Query an iommu type specific hardware information data from an iommu behind
  * a given device that has been bound to iommufd. This hardware info data will
@@ -590,7 +590,7 @@ struct iommu_hw_info {
 	__u32 data_len;
 	__aligned_u64 data_uptr;
 	__u32 out_data_type;
-	__u32 __reserved;
+	__u32 out_iommu_id;
 	__aligned_u64 out_capabilities;
 };
 #define IOMMU_GET_HW_INFO _IO(IOMMUFD_TYPE, IOMMUFD_CMD_GET_HW_INFO)
