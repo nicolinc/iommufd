@@ -51,6 +51,7 @@ enum {
 	IOMMUFD_CMD_HWPT_GET_DIRTY_BITMAP,
 	IOMMUFD_CMD_HWPT_INVALIDATE,
 	IOMMUFD_CMD_DEV_INVALIDATE,
+	IOMMUFD_CMD_VIOMMU_ALLOC,
 };
 
 /**
@@ -820,4 +821,23 @@ struct iommu_dev_invalidate {
 	__u32 __reserved;
 };
 #define IOMMU_DEV_INVALIDATE _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DEV_INVALIDATE)
+
+/**
+ * struct iommu_viommu_alloc - ioctl(IOMMU_VIOMMU_ALLOC)
+ * @size: sizeof(struct iommu_viommu_alloc)
+ * @flags: Must be 0
+ * @dev_id: The device to allocate this virtual IOMMU for
+ * @hwpt_id: ID of a nested parent HWPT
+ * @out_viommu_id: Output virtual IOMMU ID for the allocated object
+ *
+ * Allocate an virtual IOMMU object that holds a (shared) nested parent HWPT
+ */
+struct iommu_viommu_alloc {
+	__u32 size;
+	__u32 flags;
+	__u32 dev_id;
+	__u32 hwpt_id;
+	__u32 out_viommu_id;
+};
+#define IOMMU_VIOMMU_ALLOC _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VIOMMU_ALLOC)
 #endif
