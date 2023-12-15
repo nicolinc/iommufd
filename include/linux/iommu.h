@@ -583,6 +583,7 @@ struct iommu_domain_ops {
  * @dev: struct device for sysfs handling
  * @singleton_group: Used internally for drivers that have only one group
  * @max_pasids: number of supported PASIDs
+ * @id: iommu instance id
  */
 struct iommu_device {
 	struct list_head list;
@@ -591,6 +592,7 @@ struct iommu_device {
 	struct device *dev;
 	struct iommu_group *singleton_group;
 	u32 max_pasids;
+	u32 id;
 };
 
 /**
