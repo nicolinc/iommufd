@@ -45,3 +45,12 @@ struct iommufd_viommu *_iommufd_viommu_alloc(struct iommufd_ctx *ictx,
 			    struct iommufd_viommu, obj);
 }
 EXPORT_SYMBOL_NS_GPL(_iommufd_viommu_alloc, IOMMUFD);
+
+struct iommufd_vdevice *_iommufd_vdevice_alloc(struct iommufd_ctx *ictx,
+					       size_t size)
+{
+	return container_of(_iommufd_object_alloc_member(ictx, size,
+							 IOMMUFD_OBJ_VDEVICE),
+			    struct iommufd_vdevice, obj);
+}
+EXPORT_SYMBOL_NS_GPL(_iommufd_vdevice_alloc, IOMMUFD);

@@ -76,6 +76,14 @@ struct iommufd_viommu {
 	unsigned int type;
 };
 
+struct iommufd_vdevice {
+	struct iommufd_object obj;
+	struct iommufd_ctx *ictx;
+	struct iommufd_device *idev;
+	struct iommufd_viommu *viommu;
+	u64 id; /* per-vIOMMU virtual ID */
+};
+
 /**
  * struct iommufd_viommu_ops - vIOMMU specific operations
  * @free: Free all driver-specific parts of an iommufd_viommu. The memory of the
@@ -85,12 +93,24 @@ struct iommufd_viommu {
  *                       must be defined in include/uapi/linux/iommufd.h.
  *                       It must fully initialize the new iommu_domain before
  *                       returning. Upon failure, ERR_PTR must be returned.
+ * @vdevice_alloc: Allocate a driver-managed iommufd_vdevice to init some driver
+ *                 specific structure or HW procedure. Note that the core-level
+ *                 structure is filled by the iommufd core after calling this op.
+ *                 It is suggested to call iommufd_vdevice_alloc() helper for
+ *                 a bundled allocation of the core and the driver structures,
+ *                 using the ictx pointer in the given @viommu.
+ * @vdevice_free: Free a driver-managed iommufd_vdevice to de-init its structure
+ *                or HW procedure. The memory of the vdevice will be free-ed by
+ *                iommufd core.
  */
 struct iommufd_viommu_ops {
 	void (*free)(struct iommufd_viommu *viommu);
 	struct iommu_domain *(*domain_alloc_nested)(
 		struct iommufd_viommu *viommu,
 		const struct iommu_user_data *user_data);
+	struct iommufd_vdevice *(*vdevice_alloc)(struct iommufd_viommu *viommu,
+						 struct device *dev, u64 id);
+	void (*vdevice_free)(struct iommufd_vdevice *vdev);
 };
 
 #if IS_ENABLED(CONFIG_IOMMUFD)
@@ -111,6 +131,8 @@ int iommufd_vfio_compat_ioas_create(struct iommufd_ctx *ictx);
 int iommufd_vfio_compat_set_no_iommu(struct iommufd_ctx *ictx);
 struct iommufd_viommu *_iommufd_viommu_alloc(struct iommufd_ctx *ictx,
 					     size_t size);
+struct iommufd_vdevice *_iommufd_vdevice_alloc(struct iommufd_ctx *ictx,
+					       size_t size);
 #else /* !CONFIG_IOMMUFD */
 static inline struct iommufd_ctx *iommufd_ctx_from_file(struct file *file)
 {
@@ -157,6 +179,12 @@ _iommufd_viommu_alloc(struct iommufd_ctx *ictx, size_t size)
 {
 	return ERR_PTR(-EOPNOTSUPP);
 }
+
+static inline struct iommufd_vdevice *
+_iommufd_vdevice_alloc(struct iommufd_ctx *ictx, size_t size)
+{
+	return ERR_PTR(-EOPNOTSUPP);
+}
 #endif /* CONFIG_IOMMUFD */
 
 /*
@@ -176,5 +204,14 @@ _iommufd_viommu_alloc(struct iommufd_ctx *ictx, size_t size)
 		if (!IS_ERR(ret))                                              \
 			ret->member.ops = viommu_ops;                          \
 		ret;                                                           \
+	})
+#define iommufd_vdevice_alloc(ictx, drv_struct, member)                        \
+	({                                                                     \
+		static_assert(                                                 \
+			__same_type(struct iommufd_vdevice,                    \
+				    ((struct drv_struct *)NULL)->member));     \
+		static_assert(offsetof(struct drv_struct, member.obj) == 0);   \
+		(struct drv_struct *)_iommufd_vdevice_alloc(                   \
+			ictx, sizeof(struct drv_struct));                      \
 	})
 #endif
