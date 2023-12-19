@@ -52,6 +52,7 @@ enum {
 	IOMMUFD_CMD_HWPT_INVALIDATE,
 	IOMMUFD_CMD_DEV_INVALIDATE,
 	IOMMUFD_CMD_VIOMMU_ALLOC,
+	IOMMUFD_CMD_DEV_SET_VIRTUAL_ID,
 };
 
 /**
@@ -840,4 +841,13 @@ struct iommu_viommu_alloc {
 	__u32 out_viommu_id;
 };
 #define IOMMU_VIOMMU_ALLOC _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VIOMMU_ALLOC)
+
+struct iommu_dev_set_virtual_id {
+	__u32 size;
+	__u32 dev_id;
+	__u32 viommu_id;
+	__u32 id_type;
+	__aligned_u64 id;
+};
+#define IOMMU_DEV_SET_VIRTUAL_ID _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DEV_SET_VIRTUAL_ID)
 #endif

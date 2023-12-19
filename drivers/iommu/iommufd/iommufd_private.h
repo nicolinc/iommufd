@@ -395,6 +395,7 @@ struct iommufd_device {
 	struct list_head group_item;
 	/* always the physical device */
 	struct device *dev;
+	struct xarray viommus;
 	bool enforce_cache_coherency;
 };
 
@@ -408,6 +409,7 @@ iommufd_get_device(struct iommufd_ucmd *ucmd, u32 id)
 
 void iommufd_device_destroy(struct iommufd_object *obj);
 int iommufd_device_invalidate(struct iommufd_ucmd *ucmd);
+int iommufd_device_set_virtual_id(struct iommufd_ucmd *ucmd);
 int iommufd_get_hw_info(struct iommufd_ucmd *ucmd);
 
 struct iommufd_access {
@@ -435,6 +437,14 @@ struct iommufd_viommu {
 	struct iommufd_hwpt_paging *hwpt;
 	struct xarray idevs;
 };
+
+static inline struct iommufd_viommu *
+iommufd_get_viommu(struct iommufd_ucmd *ucmd, u32 id)
+{
+	return container_of(iommufd_get_object(ucmd->ictx, id,
+					       IOMMUFD_OBJ_VIOMMU),
+			    struct iommufd_viommu, obj);
+}
 
 int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd);
 void iommufd_viommu_destroy(struct iommufd_object *obj);

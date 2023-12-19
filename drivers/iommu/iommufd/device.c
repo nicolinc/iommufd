@@ -135,7 +135,17 @@ void iommufd_device_destroy(struct iommufd_object *obj)
 {
 	struct iommufd_device *idev =
 		container_of(obj, struct iommufd_device, obj);
+	struct iommufd_viommu *viommu;
+	unsigned long index;
 
+	xa_for_each(&idev->viommus, index, viommu) {
+		if (viommu->iommu_dev->ops->viommu_unset_dev_id)
+			viommu->iommu_dev->ops->viommu_unset_dev_id(viommu,
+								    idev->dev);
+		xa_erase(&viommu->idevs, idev->obj.id);
+		xa_erase(&idev->viommus, index);
+	}
+	xa_destroy(&idev->viommus);
 	iommu_device_release_dma_owner(idev->dev);
 	iommufd_put_group(idev->igroup);
 	if (!iommufd_selftest_is_mock_dev(idev->dev))
@@ -215,6 +225,8 @@ struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 	refcount_inc(&idev->obj.users);
 	/* igroup refcount moves into iommufd_device */
 	idev->igroup = igroup;
+
+	xa_init_flags(&idev->viommus, XA_FLAGS_ALLOC1);
 
 	/*
 	 * If the caller fails after this success it must call
@@ -1324,7 +1336,17 @@ void iommufd_viommu_destroy(struct iommufd_object *obj)
 {
 	struct iommufd_viommu *viommu =
 		container_of(obj, struct iommufd_viommu, obj);
+	struct iommufd_device *idev;
+	unsigned long index;
 
+	xa_for_each(&viommu->idevs, index, idev) {
+		if (viommu->iommu_dev->ops->viommu_unset_dev_id)
+			viommu->iommu_dev->ops->viommu_unset_dev_id(viommu,
+								    idev->dev);
+		xa_erase(&idev->viommus, viommu->obj.id);
+		xa_erase(&viommu->idevs, index);
+	}
+	xa_destroy(&viommu->idevs);
 	if (viommu->iommu_dev->ops->viommu_free)
 		viommu->iommu_dev->ops->viommu_free(viommu);
 }
@@ -1391,6 +1413,60 @@ out_free:
 		iommu_dev->ops->viommu_free(viommu);
 out_put_hwpt:
 	iommufd_put_object(ucmd->ictx, &hwpt_paging->common.obj);
+out_put_idev:
+	iommufd_put_object(ucmd->ictx, &idev->obj);
+	return rc;
+}
+
+int iommufd_device_set_virtual_id(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_dev_set_virtual_id *cmd = ucmd->cmd;
+	unsigned int dev_id, viommu_id;
+	struct iommufd_viommu *viommu;
+	struct iommufd_device *idev;
+	int rc;
+
+	idev = iommufd_get_device(ucmd, cmd->dev_id);
+	if (IS_ERR(idev))
+		return PTR_ERR(idev);
+	dev_id = idev->obj.id;
+
+	viommu = iommufd_get_viommu(ucmd, cmd->viommu_id);
+	if (IS_ERR(viommu)) {
+		rc = PTR_ERR(viommu);
+		goto out_put_idev;
+	}
+	viommu_id = viommu->obj.id;
+
+	if (!viommu->iommu_dev->ops->viommu_set_dev_id ||
+	    !viommu->iommu_dev->ops->viommu_unset_dev_id) {
+		rc = -EOPNOTSUPP;
+		goto out_put_viommu;
+	}
+
+	rc = xa_alloc(&idev->viommus, &viommu_id, viommu,
+		      XA_LIMIT(viommu_id, viommu_id), GFP_KERNEL_ACCOUNT);
+	if (rc)
+		goto out_put_viommu;
+
+	rc = xa_alloc(&viommu->idevs, &dev_id, idev,
+		      XA_LIMIT(dev_id, dev_id), GFP_KERNEL_ACCOUNT);
+	if (rc)
+		goto out_xa_erase_viommu;
+
+	rc = viommu->iommu_dev->ops->viommu_set_dev_id(viommu, idev->dev,
+						       cmd->id);
+	if (rc)
+		goto out_xa_erase_idev;
+
+	goto out_put_viommu;
+
+out_xa_erase_idev:
+	xa_erase(&viommu->idevs, idev->obj.id);
+out_xa_erase_viommu:
+	xa_erase(&idev->viommus, viommu->obj.id);
+out_put_viommu:
+	iommufd_put_object(ucmd->ictx, &viommu->obj);
 out_put_idev:
 	iommufd_put_object(ucmd->ictx, &idev->obj);
 	return rc;
