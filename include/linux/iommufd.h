@@ -72,6 +72,10 @@ struct iommufd_viommu {
 
 	const struct iommufd_viommu_ops *ops;
 
+	/* The locking order is vdevs_rwsem -> igroup::lock */
+	struct rw_semaphore vdevs_rwsem;
+	struct xarray vdevs;
+
 	unsigned int type;
 };
 
