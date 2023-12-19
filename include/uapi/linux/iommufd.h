@@ -51,6 +51,7 @@ enum {
 	IOMMUFD_CMD_HWPT_GET_DIRTY_BITMAP,
 	IOMMUFD_CMD_HWPT_INVALIDATE,
 	IOMMUFD_CMD_VIOMMU_ALLOC,
+	IOMMUFD_CMD_VIOMMU_SET_DEV_ID,
 };
 
 /**
@@ -722,4 +723,23 @@ struct iommu_viommu_alloc {
 	__u32 out_viommu_id;
 };
 #define IOMMU_VIOMMU_ALLOC _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VIOMMU_ALLOC)
+
+/**
+ * struct iommu_viommu_set_dev_id - ioctl(IOMMU_VIOMMU_SET_DEV_ID)
+ * @size: sizeof(struct iommu_viommu_set_dev_id)
+ * @viommu_id: viommu ID to associate with the device to store its virtual ID
+ * @dev_id: device ID to set a device virtual ID
+ * @__reserved: Must be 0
+ * @id: Device virtual ID
+ *
+ * Set a viommu-specific virtual ID of a device
+ */
+struct iommu_viommu_set_dev_id {
+	__u32 size;
+	__u32 viommu_id;
+	__u32 dev_id;
+	__u32 __reserved;
+	__aligned_u64 id;
+};
+#define IOMMU_VIOMMU_SET_DEV_ID _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VIOMMU_SET_DEV_ID)
 #endif

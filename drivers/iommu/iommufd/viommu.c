@@ -69,6 +69,7 @@ int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
 		rc = PTR_ERR(viommu);
 		goto out_put_hwpt;
 	}
+	xa_init_flags(&viommu->idevs, XA_FLAGS_ALLOC1);
 
 	/* iommufd_object_finalize will store the viommu->obj.id */
 	rc = xa_alloc(&ucmd->ictx->objects, &viommu->obj.id, XA_ZERO_ENTRY,
@@ -98,6 +99,63 @@ out_free:
 	kfree(viommu);
 out_put_hwpt:
 	iommufd_put_object(ucmd->ictx, &hwpt_paging->common.obj);
+out_put_idev:
+	iommufd_put_object(ucmd->ictx, &idev->obj);
+	return rc;
+}
+
+int iommufd_viommu_set_device_id(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_viommu_set_dev_id *cmd = ucmd->cmd;
+	unsigned int dev_id, viommu_id;
+	struct iommufd_viommu *viommu;
+	struct iommufd_device *idev;
+	int rc;
+
+	idev = iommufd_get_device(ucmd, cmd->dev_id);
+	if (IS_ERR(idev))
+		return PTR_ERR(idev);
+	dev_id = idev->obj.id;
+
+	viommu = iommufd_get_viommu(ucmd, cmd->viommu_id);
+	if (IS_ERR(viommu)) {
+		rc = PTR_ERR(viommu);
+		goto out_put_idev;
+	}
+
+	if (viommu->iommu_dev != idev->dev->iommu->iommu_dev) {
+		rc = -EINVAL;
+		goto out_put_viommu;
+	}
+
+	if (!viommu->ops->set_dev_id || !viommu->ops->unset_dev_id) {
+		rc = -EOPNOTSUPP;
+		goto out_put_viommu;
+	}
+
+	rc = xa_alloc(&idev->viommus, &viommu_id, viommu,
+		      XA_LIMIT(viommu->obj.id, viommu->obj.id),
+		      GFP_KERNEL_ACCOUNT);
+	if (rc)
+		goto out_put_viommu;
+
+	rc = xa_alloc(&viommu->idevs, &dev_id, idev,
+		      XA_LIMIT(dev_id, dev_id), GFP_KERNEL_ACCOUNT);
+	if (rc)
+		goto out_xa_erase_viommu;
+
+	rc = viommu->ops->set_dev_id(viommu, idev->dev, cmd->id);
+	if (rc)
+		goto out_xa_erase_idev;
+
+	goto out_put_viommu;
+
+out_xa_erase_idev:
+	xa_erase(&viommu->idevs, idev->obj.id);
+out_xa_erase_viommu:
+	xa_erase(&idev->viommus, viommu->obj.id);
+out_put_viommu:
+	iommufd_put_object(ucmd->ictx, &viommu->obj);
 out_put_idev:
 	iommufd_put_object(ucmd->ictx, &idev->obj);
 	return rc;

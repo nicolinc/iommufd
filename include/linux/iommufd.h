@@ -10,6 +10,7 @@
 #include <linux/errno.h>
 #include <linux/err.h>
 #include <linux/refcount.h>
+#include <linux/xarray.h>
 
 struct device;
 struct iommufd_device;
@@ -88,6 +89,7 @@ struct iommufd_viommu {
 	const struct iommufd_viommu_ops *ops;
 
 	unsigned int type;
+	struct xarray idevs;
 };
 
 /**

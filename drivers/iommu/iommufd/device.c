@@ -135,7 +135,16 @@ void iommufd_device_destroy(struct iommufd_object *obj)
 {
 	struct iommufd_device *idev =
 		container_of(obj, struct iommufd_device, obj);
+	struct iommufd_viommu *viommu;
+	unsigned long index;
 
+	xa_for_each(&idev->viommus, index, viommu) {
+		if (viommu->ops->unset_dev_id)
+			viommu->ops->unset_dev_id(viommu, idev->dev);
+		xa_erase(&viommu->idevs, idev->obj.id);
+		xa_erase(&idev->viommus, index);
+	}
+	xa_destroy(&idev->viommus);
 	iommu_device_release_dma_owner(idev->dev);
 	iommufd_put_group(idev->igroup);
 	if (!iommufd_selftest_is_mock_dev(idev->dev))
@@ -215,6 +224,8 @@ struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 	refcount_inc(&idev->obj.users);
 	/* igroup refcount moves into iommufd_device */
 	idev->igroup = igroup;
+
+	xa_init_flags(&idev->viommus, XA_FLAGS_ALLOC1);
 
 	/*
 	 * If the caller fails after this success it must call
