@@ -1274,3 +1274,28 @@ int iommufd_device_invalidate(struct iommufd_ucmd *ucmd)
 	iommufd_put_object(ucmd->ictx, &idev->obj);
 	return rc;
 }
+
+struct iommufd_viommu *_iommufd_alloc_viommu(size_t size)
+{
+	struct iommufd_viommu *viommu;
+
+	if (WARN_ON(size < sizeof(*viommu)))
+		return NULL;
+	viommu = kzalloc(size, GFP_KERNEL);
+	if (!viommu)
+		return NULL;
+
+	viommu->obj.type = IOMMUFD_OBJ_VIOMMU;
+	/* Starts out bias'd by 1 until it is removed from the xarray */
+	refcount_set(&viommu->obj.shortterm_users, 1);
+	refcount_set(&viommu->obj.users, 1);
+
+	xa_init_flags(&viommu->idevs, XA_FLAGS_ALLOC1);
+
+	/*
+	 * Unfortunately, the allocation of an viommu->obj.id needs an ictx,
+	 * So it has to be done after this _iommufd_alloc_viommu callback.
+	 */
+
+	return viommu;
+}
