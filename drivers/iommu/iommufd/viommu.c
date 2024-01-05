@@ -17,3 +17,5 @@
 			return NULL;                                           \
 		return container_of(obj, struct iommufd_##name, obj);          \
 	}
+
+viommu_struct_alloc(viommu);

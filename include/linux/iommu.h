@@ -145,6 +145,8 @@ struct iopf_queue {
 	struct mutex lock;
 };
 
+struct iommufd_viommu;
+
 /* iommu fault flags */
 #define IOMMU_FAULT_READ	0x0
 #define IOMMU_FAULT_WRITE	0x1
@@ -527,6 +529,14 @@ static inline int __iommu_copy_struct_from_user_array(
  * @of_xlate: add OF master IDs to iommu grouping
  * @is_attach_deferred: Check if domain attach should be deferred from iommu
  *                      driver init to device driver init (default no)
+ * @viommu_alloc: Allocate an iommufd_viommu as a user space IOMMU instance,
+ *                associated to a nested parent @domain, for iommu-specific
+ *                hardware acceleration. The @viommu_type must be defined in
+ *                the include/uapi/linux/iommufd.h header.
+ *                It is suggested to call iommufd_viommu_alloc() helper for
+ *                a bundled allocation of the core and the driver structure,
+ *                and a driver in gernal should assign an iommufd_viommu_ops
+ *                to the core structure's viommu->ops.
  * @dev_enable/disable_feat: per device entries to enable/disable
  *                               iommu specific features.
  * @page_response: handle page request response
@@ -569,6 +579,11 @@ struct iommu_ops {
 
 	int (*of_xlate)(struct device *dev, const struct of_phandle_args *args);
 	bool (*is_attach_deferred)(struct device *dev);
+
+	/* User space instance allocation by the iommu driver */
+	struct iommufd_viommu *(*viommu_alloc)(struct device *dev,
+					       unsigned int viommu_type,
+					       struct iommu_domain *domain);
 
 	/* Per device IOMMU features */
 	int (*dev_enable_feat)(struct device *dev, enum iommu_dev_features f);
