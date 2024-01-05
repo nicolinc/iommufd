@@ -43,6 +43,7 @@ struct notifier_block;
 struct iommu_sva;
 struct iommu_fault_event;
 struct iommu_dma_cookie;
+struct iommufd_viommu;
 
 /* iommu fault flags */
 #define IOMMU_FAULT_READ	0x0
@@ -429,6 +430,14 @@ static inline int __iommu_copy_struct_from_user_array(
  * @of_xlate: add OF master IDs to iommu grouping
  * @is_attach_deferred: Check if domain attach should be deferred from iommu
  *                      driver init to device driver init (default no)
+ * @viommu_alloc: Allocate an iommufd_viommu as a user space IOMMU instance,
+ *                which can be used to store user space data. It is suggested
+ *                to call the iommufd_alloc_viommu helper to allocate the core
+ *                structure and the driver structure together
+ * @viommu_free: Free all driver-specific parts of an iommufd_viommu. The memory
+ *               of the iommufd_viommu will be free-ed by iommufd core
+ * @viommu_set/unset_dev_id: set/unset a user space virtual id for a device, on
+ *                           a list that is maintained by an iommufd_viommu
  * @dev_enable/disable_feat: per device entries to enable/disable
  *                               iommu specific features.
  * @dev_invalidate_user: Flush hardware cache used by a device in user space.
@@ -481,6 +490,14 @@ struct iommu_ops {
 
 	int (*of_xlate)(struct device *dev, struct of_phandle_args *args);
 	bool (*is_attach_deferred)(struct device *dev);
+
+	/* User space instance allocation and freeing by the iommu driver */
+	struct iommufd_viommu *(*viommu_alloc)(struct device *dev);
+	void (*viommu_free)(struct iommufd_viommu *viommu);
+	int (*viommu_set_dev_id)(struct iommufd_viommu *viommu,
+				 struct device *dev, u64 dev_id);
+	void (*viommu_unset_dev_id)(struct iommufd_viommu *viommu,
+				    struct device *dev);
 
 	/* Per device IOMMU features */
 	int (*dev_enable_feat)(struct device *dev, enum iommu_dev_features f);

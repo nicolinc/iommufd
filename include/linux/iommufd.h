@@ -70,6 +70,7 @@ int iommufd_access_rw(struct iommufd_access *access, unsigned long iova,
 int iommufd_vfio_compat_ioas_get_id(struct iommufd_ctx *ictx, u32 *out_ioas_id);
 int iommufd_vfio_compat_ioas_create(struct iommufd_ctx *ictx);
 int iommufd_vfio_compat_set_no_iommu(struct iommufd_ctx *ictx);
+struct iommufd_viommu *_iommufd_alloc_viommu(size_t size);
 #else /* !CONFIG_IOMMUFD */
 static inline struct iommufd_ctx *iommufd_ctx_from_file(struct file *file)
 {
@@ -110,5 +111,20 @@ static inline int iommufd_vfio_compat_set_no_iommu(struct iommufd_ctx *ictx)
 {
 	return -EOPNOTSUPP;
 }
+
+static inline struct iommufd_viommu *_iommufd_alloc_viommu(size_t size)
+{
+	return NULL;
+}
 #endif /* CONFIG_IOMMUFD */
+
+/*
+ * IOMMU driver calls this to allocate its viommu structure that will be freed
+ * by the iommufd core. Driver is only responsible for its own struct cleanup.
+ */
+#define iommufd_alloc_viommu(drv_struct, member) \
+	container_of(_iommufd_alloc_viommu(sizeof(struct drv_struct) +        \
+					   BUILD_BUG_ON_ZERO(offsetof(        \
+						struct drv_struct, member))), \
+		     struct drv_struct, member)
 #endif
