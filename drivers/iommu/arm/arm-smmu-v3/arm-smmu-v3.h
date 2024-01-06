@@ -773,6 +773,13 @@ void arm_smmu_get_ste_used(struct arm_smmu_entry_writer *writer,
 void arm_smmu_write_entry(struct arm_smmu_entry_writer *writer, __le64 *cur,
 			  const __le64 *target);
 
+void arm_smmu_make_abort_ste(struct arm_smmu_ste *target);
+void arm_smmu_make_bypass_ste(struct arm_smmu_ste *target);
+void arm_smmu_make_cdtable_ste(struct arm_smmu_ste *target,
+			       struct arm_smmu_master *master,
+			       struct arm_smmu_ctx_desc_cfg *cd_table,
+			       bool ats_enabled, unsigned int s1dss);
+
 struct arm_smmu_nested_domain {
 	struct iommu_domain domain;
 	struct arm_smmu_domain *s2_parent;
