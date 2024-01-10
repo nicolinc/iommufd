@@ -266,6 +266,29 @@ TEST_F(iommufd_ioas, ioas_destroy)
 	}
 }
 
+TEST_F(iommufd_ioas, viommu)
+{
+	uint32_t dev_id = self->device_id;
+	uint32_t viommu_id = 0;
+	uint32_t hwpt_id = 0;
+
+	if (dev_id) {
+		test_err_viommu_alloc(ENOENT, dev_id, hwpt_id, &viommu_id);
+		test_cmd_hwpt_alloc(dev_id, self->ioas_id, 0, &hwpt_id);
+		test_err_viommu_alloc(EINVAL, dev_id, hwpt_id, &viommu_id);
+		test_ioctl_destroy(hwpt_id);
+
+		test_cmd_hwpt_alloc(dev_id, self->ioas_id,
+				    IOMMU_HWPT_ALLOC_NEST_PARENT,
+				    &hwpt_id);
+		test_cmd_viommu_alloc(dev_id, hwpt_id, &viommu_id);
+		test_ioctl_destroy(viommu_id);
+		test_ioctl_destroy(hwpt_id);
+	} else {
+		test_err_viommu_alloc(ENOENT, dev_id, hwpt_id, &viommu_id);
+	}
+}
+
 TEST_F(iommufd_ioas, alloc_hwpt_nested)
 {
 	const uint32_t min_data_len =
