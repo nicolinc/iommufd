@@ -601,6 +601,8 @@ static void mock_dev_release(struct device *dev)
 
 static struct mock_dev *mock_dev_create(unsigned long dev_flags)
 {
+	struct iommu_fwspec *fwspec;
+	struct dev_iommu *param;
 	struct mock_dev *mdev;
 	int rc;
 
@@ -611,10 +613,28 @@ static struct mock_dev *mock_dev_create(unsigned long dev_flags)
 	if (!mdev)
 		return ERR_PTR(-ENOMEM);
 
+	/* fwspec and param will be freed in the iommu core */
+	fwspec = kzalloc(sizeof(*fwspec), GFP_KERNEL);
+	if (!fwspec) {
+		kfree(mdev);
+		return ERR_PTR(-ENOMEM);
+	}
+	fwspec->ops = &mock_ops;
+
+	param = kzalloc(sizeof(*param), GFP_KERNEL);
+	if (!param) {
+		kfree(mdev);
+		kfree(fwspec);
+		return ERR_PTR(-ENOMEM);
+	}
+	mutex_init(&param->lock);
+	param->fwspec = fwspec;
+
 	device_initialize(&mdev->dev);
 	mdev->flags = dev_flags;
 	mdev->dev.release = mock_dev_release;
 	mdev->dev.bus = &iommufd_mock_bus_type.bus;
+	mdev->dev.iommu = param;
 
 	rc = dev_set_name(&mdev->dev, "iommufd_mock%u",
 			  atomic_inc_return(&mock_dev_num));
@@ -628,6 +648,8 @@ static struct mock_dev *mock_dev_create(unsigned long dev_flags)
 
 err_put:
 	put_device(&mdev->dev);
+	kfree(param);
+	kfree(fwspec);
 	return ERR_PTR(rc);
 }
 
