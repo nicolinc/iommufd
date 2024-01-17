@@ -288,14 +288,21 @@ TEST_F(iommufd_ioas, viommu)
 		test_err_viommu_set_dev_id(EINVAL, dev_id, viommu_id, 1ULL << 32);
 		test_cmd_viommu_set_dev_id(dev_id, viommu_id, 0x99);
 		test_err_viommu_set_dev_id(EBUSY, dev_id, viommu_id, 0x99);
+		test_cmd_viommu_check_dev_id(viommu_id, dev_id, 0x99);
 
 		test_cmd_mock_domain(self->ioas_id, &stdev2, &hwpt2, &device2);
 		test_err_viommu_set_dev_id(EBUSY, device2, viommu_id, 0x99);
 		test_cmd_viommu_set_dev_id(device2, viommu_id, 0xaa);
 		test_err_viommu_set_dev_id(EBUSY, device2, viommu_id, 0xaa);
+		test_cmd_viommu_check_dev_id(viommu_id, dev_id, 0x99);
+		test_cmd_viommu_check_dev_id(viommu_id, device2, 0xaa);
+
 		test_ioctl_destroy(stdev2);
+		test_cmd_viommu_check_dev_id(viommu_id, dev_id, 0x99);
+		test_err_viommu_check_dev_id(ENOENT, viommu_id, device2, 0xaa);
 
 		test_ioctl_destroy(viommu_id);
+		test_err_viommu_check_dev_id(ENOENT, viommu_id, dev_id, 0x99);
 		test_ioctl_destroy(hwpt_id);
 	} else {
 		test_err_viommu_alloc(ENOENT, dev_id, hwpt_id, &viommu_id);

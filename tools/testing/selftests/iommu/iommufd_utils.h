@@ -731,3 +731,27 @@ static int _test_cmd_viommu_set_dev_id(int fd, __u32 device_id,
 	EXPECT_ERRNO(_errno,                                                 \
 		     _test_cmd_viommu_set_dev_id(self->fd, device_id,        \
 						  viommu_id, virtual_id))
+
+static int _test_cmd_viommu_check_dev_id(int fd, __u32 viommu_id,
+					 __u32 device_id, __u64 virtual_id)
+{
+	struct iommu_test_cmd test_cmd = {
+		.size = sizeof(test_cmd),
+		.op = IOMMU_TEST_OP_MV_CHECK_DEVID,
+		.id = viommu_id,
+		.check_dev_id = {
+			.idev_id = device_id,
+			.dev_id = virtual_id,
+		},
+	};
+	return ioctl(fd, _IOMMU_TEST_CMD(IOMMU_TEST_OP_MV_CHECK_DEVID),
+		     &test_cmd);
+}
+#define test_cmd_viommu_check_dev_id(viommu_id, device_id, expected)    \
+	ASSERT_EQ(0, _test_cmd_viommu_check_dev_id(self->fd, viommu_id, \
+						   device_id, expected))
+
+#define test_err_viommu_check_dev_id(_errno, viommu_id, device_id, expected) \
+	EXPECT_ERRNO(_errno,                                                 \
+		     _test_cmd_viommu_check_dev_id(self->fd, viommu_id,      \
+						  device_id, expected))
