@@ -23,6 +23,7 @@ enum {
 	IOMMU_TEST_OP_DIRTY,
 	IOMMU_TEST_OP_MD_CHECK_IOTLB,
 	IOMMU_TEST_OP_DEV_CHECK_CACHE,
+	IOMMU_TEST_OP_MV_CHECK_DEVID,
 };
 
 enum {
@@ -136,6 +137,10 @@ struct iommu_test_cmd {
 			__u32 id;
 			__u32 cache;
 		} check_dev_cache;
+		struct {
+			__u32 idev_id;
+			__u32 dev_id;
+		} check_dev_id;
 	};
 	__u32 last;
 };
