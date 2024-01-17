@@ -1022,6 +1022,34 @@ static int iommufd_test_dev_check_cache(struct iommufd_ucmd *ucmd,
 	return rc;
 }
 
+static int iommufd_test_mv_check_dev_id(struct iommufd_ucmd *ucmd,
+					u32 viommu_id, unsigned int idev_id,
+					u32 dev_id)
+{
+	struct iommufd_device *idev;
+	struct mock_viommu *mv;
+	int rc = 0;
+
+	mv = container_of(iommufd_get_viommu(ucmd, viommu_id),
+			  struct mock_viommu, core);
+	if (IS_ERR(mv))
+		return PTR_ERR(mv);
+
+	idev = iommufd_get_device(ucmd, idev_id);
+	if (IS_ERR(idev)) {
+		rc = PTR_ERR(idev);
+		goto out_put_viommu;
+	}
+
+	if (idev->dev != xa_load(&mv->ids, dev_id))
+		rc = -EINVAL;
+
+	iommufd_put_object(ucmd->ictx, &idev->obj);
+out_put_viommu:
+	iommufd_put_object(ucmd->ictx, &mv->core.obj);
+	return rc;
+}
+
 struct selftest_access {
 	struct iommufd_access *access;
 	struct file *file;
@@ -1511,6 +1539,10 @@ int iommufd_test(struct iommufd_ucmd *ucmd)
 		return iommufd_test_dev_check_cache(ucmd, cmd->id,
 						    cmd->check_dev_cache.id,
 						    cmd->check_dev_cache.cache);
+	case IOMMU_TEST_OP_MV_CHECK_DEVID:
+		return iommufd_test_mv_check_dev_id(ucmd, cmd->id,
+						    cmd->check_dev_id.idev_id,
+						    cmd->check_dev_id.dev_id);
 	case IOMMU_TEST_OP_CREATE_ACCESS:
 		return iommufd_test_create_access(ucmd, cmd->id,
 						  cmd->create_access.flags);
