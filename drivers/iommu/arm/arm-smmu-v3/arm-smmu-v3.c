@@ -2243,7 +2243,7 @@ static void arm_smmu_tlb_inv_range_s2(struct arm_smmu_domain *smmu_domain,
 
 static void arm_smmu_tlb_inv_all_s2(struct arm_smmu_domain *smmu_domain)
 {
-	arm_smmu_tlb_inv_range_s2(0, 0, PAGE_SIZE, false, smmu_domain);
+	arm_smmu_tlb_inv_range_s2(smmu_domain, 0, 0, PAGE_SIZE, false);
 }
 
 void arm_smmu_tlb_inv_range_s1(struct arm_smmu_domain *smmu_domain,
@@ -2669,6 +2669,8 @@ static void arm_smmu_remove_master_domain(struct arm_smmu_master *master,
 	struct arm_smmu_master_domain *master_domain;
 	unsigned long flags;
 
+	if (!smmu_domain)
+		return;
 	spin_lock_irqsave(&smmu_domain->devices_lock, flags);
 	master_domain = arm_smmu_find_master_domain(smmu_domain, master, ssid);
 	if (master_domain) {
@@ -2777,6 +2779,7 @@ static void arm_smmu_attach_commit(struct arm_smmu_master *master,
 	}
 	master->ats_enabled = state->want_ats;
 
+	if (iommu_get_domain_for_dev(master->dev))
 	arm_smmu_remove_master_domain(
 		master, iommu_get_domain_for_dev(master->dev), state->ssid);
 }
