@@ -595,7 +595,10 @@ struct arm_smmu_l1_ctx_desc {
 };
 
 struct arm_smmu_ctx_desc_cfg {
-	__le64				*cdtab;
+	union {
+		struct arm_smmu_cd *linear;
+		__le64 *l1_desc;
+	} cdtab;
 	dma_addr_t			cdtab_dma;
 	struct arm_smmu_l1_ctx_desc	*l1_desc;
 	unsigned int			num_l1_ents;
@@ -606,6 +609,12 @@ struct arm_smmu_ctx_desc_cfg {
 	/* log2 of the maximum number of CDs supported by this table */
 	u8				s1cdmax;
 };
+
+static inline bool
+arm_smmu_cdtab_allocated(struct arm_smmu_ctx_desc_cfg *cd_table)
+{
+	return cd_table->cdtab.linear;
+}
 
 /* True if the cd table has SSIDS > 0 in use. */
 static inline bool arm_smmu_ssids_in_use(struct arm_smmu_ctx_desc_cfg *cd_table)

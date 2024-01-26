@@ -1176,14 +1176,13 @@ struct arm_smmu_cd *arm_smmu_get_cd_ptr(struct arm_smmu_master *master,
 	struct arm_smmu_device *smmu = master->smmu;
 	struct arm_smmu_ctx_desc_cfg *cd_table = &master->cd_table;
 
-	if (!master->cd_table.cdtab) {
+	if (!arm_smmu_cdtab_allocated(&master->cd_table)) {
 		if (arm_smmu_alloc_cd_tables(master))
 			return NULL;
 	}
 
 	if (cd_table->s1fmt == STRTAB_STE_0_S1FMT_LINEAR)
-		return (struct arm_smmu_cd *)(cd_table->cdtab +
-					      ssid * CTXDESC_CD_DWORDS);
+		return cd_table->cdtab.linear + ssid;
 
 	idx = ssid >> CTXDESC_SPLIT;
 	l1_desc = &cd_table->l1_desc[idx];
@@ -1191,7 +1190,7 @@ struct arm_smmu_cd *arm_smmu_get_cd_ptr(struct arm_smmu_master *master,
 		if (arm_smmu_alloc_cd_leaf_table(smmu, l1_desc))
 			return NULL;
 
-		l1ptr = cd_table->cdtab + idx * CTXDESC_L1_DESC_DWORDS;
+		l1ptr = cd_table->cdtab.l1_desc + idx;
 		arm_smmu_write_cd_l1_desc(l1ptr, l1_desc);
 		/* An invalid L1CD can be cached */
 		arm_smmu_sync_cd(master, ssid, false);
@@ -1305,7 +1304,7 @@ void arm_smmu_clear_cd(struct arm_smmu_master *master, int ssid)
 	struct arm_smmu_cd target = {};
 	struct arm_smmu_cd *cdptr;
 
-	if (!master->cd_table.cdtab)
+	if (!arm_smmu_cdtab_allocated(&master->cd_table))
 		return;
 	cdptr = arm_smmu_get_cd_ptr(master, ssid);
 	if (WARN_ON(!cdptr))
@@ -1315,8 +1314,6 @@ void arm_smmu_clear_cd(struct arm_smmu_master *master, int ssid)
 
 static int arm_smmu_alloc_cd_tables(struct arm_smmu_master *master)
 {
-	int ret;
-	size_t l1size;
 	size_t max_contexts;
 	struct arm_smmu_device *smmu = master->smmu;
 	struct arm_smmu_ctx_desc_cfg *cd_table = &master->cd_table;
@@ -1329,8 +1326,14 @@ static int arm_smmu_alloc_cd_tables(struct arm_smmu_master *master)
 		cd_table->s1fmt = STRTAB_STE_0_S1FMT_LINEAR;
 		cd_table->num_l1_ents = max_contexts;
 
-		l1size = max_contexts * (CTXDESC_CD_DWORDS << 3);
+		cd_table->cdtab.linear = dmam_alloc_coherent(
+			smmu->dev, max_contexts * sizeof(struct arm_smmu_cd),
+			&cd_table->cdtab_dma, GFP_KERNEL);
+		if (!cd_table->cdtab.linear)
+			return -ENOMEM;
 	} else {
+		size_t l1size;
+
 		cd_table->s1fmt = STRTAB_STE_0_S1FMT_64K_L2;
 		cd_table->num_l1_ents = DIV_ROUND_UP(max_contexts,
 						  CTXDESC_L2_ENTRIES);
@@ -1342,24 +1345,15 @@ static int arm_smmu_alloc_cd_tables(struct arm_smmu_master *master)
 			return -ENOMEM;
 
 		l1size = cd_table->num_l1_ents * (CTXDESC_L1_DESC_DWORDS << 3);
+		cd_table->cdtab.l1_desc = dmam_alloc_coherent(
+			smmu->dev, l1size, &cd_table->cdtab_dma, GFP_KERNEL);
+		if (!cd_table->cdtab.l1_desc) {
+			devm_kfree(smmu->dev, cd_table->l1_desc);
+			cd_table->l1_desc = NULL;
+			return -ENOMEM;
+		}
 	}
-
-	cd_table->cdtab = dmam_alloc_coherent(smmu->dev, l1size, &cd_table->cdtab_dma,
-					   GFP_KERNEL);
-	if (!cd_table->cdtab) {
-		dev_warn(smmu->dev, "failed to allocate context descriptor\n");
-		ret = -ENOMEM;
-		goto err_free_l1;
-	}
-
 	return 0;
-
-err_free_l1:
-	if (cd_table->l1_desc) {
-		devm_kfree(smmu->dev, cd_table->l1_desc);
-		cd_table->l1_desc = NULL;
-	}
-	return ret;
 }
 
 static void arm_smmu_free_cd_tables(struct arm_smmu_master *master)
@@ -1384,13 +1378,17 @@ static void arm_smmu_free_cd_tables(struct arm_smmu_master *master)
 		cd_table->l1_desc = NULL;
 
 		l1size = cd_table->num_l1_ents * (CTXDESC_L1_DESC_DWORDS << 3);
+		dmam_free_coherent(smmu->dev, l1size, cd_table->cdtab.l1_desc,
+				   cd_table->cdtab_dma);
 	} else {
-		l1size = cd_table->num_l1_ents * (CTXDESC_CD_DWORDS << 3);
+		dmam_free_coherent(smmu->dev,
+				   cd_table->num_l1_ents *
+					   sizeof(struct arm_smmu_cd),
+				   cd_table->cdtab.linear, cd_table->cdtab_dma);
 	}
 
-	dmam_free_coherent(smmu->dev, l1size, cd_table->cdtab, cd_table->cdtab_dma);
 	cd_table->cdtab_dma = 0;
-	cd_table->cdtab = NULL;
+	cd_table->cdtab.linear = NULL;
 }
 
 /* Stream table manipulation functions */
@@ -3234,7 +3232,7 @@ static void arm_smmu_release_device(struct device *dev)
 
 	arm_smmu_disable_pasid(master);
 	arm_smmu_remove_master(master);
-	if (master->cd_table.cdtab)
+	if (arm_smmu_cdtab_allocated(&master->cd_table))
 		arm_smmu_free_cd_tables(master);
 	kfree(master);
 }
