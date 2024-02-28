@@ -160,18 +160,18 @@
 #define cmdqv_err(fmt, ...) \
 	dev_err(cmdqv->dev, "CMDQV: " fmt, ##__VA_ARGS__)
 #define cmdqv_info(fmt, ...) \
-	dev_info(cmdqv->dev, "CMDQV: " fmt, ##__VA_ARGS__)
+	dev_alert(cmdqv->dev, "CMDQV: " fmt, ##__VA_ARGS__)
 #define cmdqv_dbg(fmt, ...) \
-	dev_dbg(cmdqv->dev, "CMDQV: " fmt, ##__VA_ARGS__)
+	dev_alert(cmdqv->dev, "CMDQV: " fmt, ##__VA_ARGS__)
 
 #define vintf_warn(fmt, ...) \
 	dev_warn(vintf->cmdqv->dev, "VINTF%u: " fmt, vintf->idx, ##__VA_ARGS__)
 #define vintf_err(fmt, ...) \
 	dev_err(vintf->cmdqv->dev, "VINTF%u: " fmt, vintf->idx, ##__VA_ARGS__)
 #define vintf_info(fmt, ...) \
-	dev_info(vintf->cmdqv->dev, "VINTF%u: " fmt, vintf->idx, ##__VA_ARGS__)
+	dev_alert(vintf->cmdqv->dev, "VINTF%u: " fmt, vintf->idx, ##__VA_ARGS__)
 #define vintf_dbg(fmt, ...) \
-	dev_dbg(vintf->cmdqv->dev, "VINTF%u: " fmt, vintf->idx, ##__VA_ARGS__)
+	dev_alert(vintf->cmdqv->dev, "VINTF%u: " fmt, vintf->idx, ##__VA_ARGS__)
 
 #define vcmdq_warn(fmt, ...)                                                   \
 	({                                                                     \
@@ -203,7 +203,7 @@
 				   vcmdq->idx, vcmdq->lidx,                    \
 				   ##__VA_ARGS__);                             \
 		else                                                           \
-			dev_info(vcmdq->cmdqv->dev, "VCMDQ%u: " fmt,           \
+			dev_alert(vcmdq->cmdqv->dev, "VCMDQ%u: " fmt,          \
 				 vcmdq->idx, ##__VA_ARGS__);                   \
 	})
 #define vcmdq_dbg(fmt, ...)                                                    \
@@ -214,7 +214,7 @@
 				  vcmdq->idx, vcmdq->lidx,                     \
 				  ##__VA_ARGS__);                              \
 		else                                                           \
-			dev_dbg(vcmdq->cmdqv->dev, "VCMDQ%u: " fmt,            \
+			dev_alert(vcmdq->cmdqv->dev, "VCMDQ%u: " fmt,            \
 				vcmdq->idx, ##__VA_ARGS__);                    \
 	})
 
