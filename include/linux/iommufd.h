@@ -94,9 +94,13 @@ struct iommufd_viommu {
  * struct iommufd_viommu_ops - viommu specific operations
  * @free: Free all driver-specific parts of an iommufd_viommu. The memory
  *        of the entire viommu will be free-ed by iommufd core
+ * @set/unset_dev_id: set/unset a user space virtual id for a device
  */
 struct iommufd_viommu_ops {
 	void (*free)(struct iommufd_viommu *viommu);
+	int (*set_dev_id)(struct iommufd_viommu *viommu,
+			  struct device *dev, u64 dev_id);
+	void (*unset_dev_id)(struct iommufd_viommu *viommu, struct device *dev);
 };
 
 #if IS_ENABLED(CONFIG_IOMMUFD)
