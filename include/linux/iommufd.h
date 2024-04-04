@@ -20,6 +20,7 @@ struct iommufd_access;
 struct iommufd_hwpt_paging;
 struct file;
 struct iommu_group;
+struct iommu_user_data;
 
 enum iommufd_object_type {
 	IOMMUFD_OBJ_NONE,
@@ -97,12 +98,27 @@ struct iommufd_viommu {
  * @free: Free all driver-specific parts of an iommufd_viommu. The memory
  *        of the entire viommu will be free-ed by iommufd core
  * @set/unset_dev_id: set/unset a user space virtual id for a device
+ * @vqueue_alloc: Allocate an iommufd_vqueue as a user space command queue for a
+ *                @viommu instance. Queue specific @user_data must be defined in
+ *                the include/uapi/linux/iommufd.h header.
+ * @vqueue_free: Free all driver-specific parts of an iommufd_vqueue. The memory
+ *               of the iommufd_vqueue will be free-ed by iommufd core
  */
 struct iommufd_viommu_ops {
 	void (*free)(struct iommufd_viommu *viommu);
 	int (*set_dev_id)(struct iommufd_viommu *viommu,
 			  struct device *dev, u64 dev_id);
 	void (*unset_dev_id)(struct iommufd_viommu *viommu, struct device *dev);
+	struct iommufd_vqueue *(*vqueue_alloc)(
+		struct iommufd_viommu *viommu,
+		const struct iommu_user_data *user_data);
+	void (*vqueue_free)(struct iommufd_vqueue *vqueue);
+};
+
+struct iommufd_vqueue {
+	struct iommufd_object obj;
+	struct iommufd_ctx *ictx;
+	struct iommufd_viommu *viommu;
 };
 
 #if IS_ENABLED(CONFIG_IOMMUFD)
@@ -123,6 +139,7 @@ int iommufd_vfio_compat_ioas_create(struct iommufd_ctx *ictx);
 int iommufd_vfio_compat_set_no_iommu(struct iommufd_ctx *ictx);
 
 struct iommufd_viommu *_iommufd_viommu_alloc(size_t size);
+struct iommufd_vqueue *_iommufd_vqueue_alloc(size_t size);
 #else /* !CONFIG_IOMMUFD */
 static inline struct iommufd_ctx *iommufd_ctx_from_file(struct file *file)
 {
@@ -168,6 +185,11 @@ static inline struct iommufd_viommu *_iommufd_viommu_alloc(size_t size)
 {
 	return NULL;
 }
+
+static inline struct iommufd_vqueue *_iommufd_vqueue_alloc(size_t size)
+{
+	return NULL;
+}
 #endif /* CONFIG_IOMMUFD */
 
 /*
@@ -176,6 +198,11 @@ static inline struct iommufd_viommu *_iommufd_viommu_alloc(size_t size)
  */
 #define iommufd_viommu_alloc(drv_struct, member) \
 	container_of(_iommufd_viommu_alloc(sizeof(struct drv_struct) +        \
+					   BUILD_BUG_ON_ZERO(offsetof(        \
+						struct drv_struct, member))), \
+		     struct drv_struct, member)
+#define iommufd_vqueue_alloc(drv_struct, member) \
+	container_of(_iommufd_vqueue_alloc(sizeof(struct drv_struct) +        \
 					   BUILD_BUG_ON_ZERO(offsetof(        \
 						struct drv_struct, member))), \
 		     struct drv_struct, member)

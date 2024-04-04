@@ -146,6 +146,7 @@ struct iopf_queue {
 };
 
 struct iommufd_viommu;
+struct iommufd_vqueue;
 
 /* iommu fault flags */
 #define IOMMU_FAULT_READ	0x0

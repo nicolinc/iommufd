@@ -19,6 +19,7 @@
 	}
 
 viommu_struct_alloc(viommu);
+viommu_struct_alloc(vqueue);
 
 void iommufd_viommu_destroy(struct iommufd_object *obj)
 {
