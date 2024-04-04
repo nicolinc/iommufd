@@ -119,6 +119,7 @@ struct iommufd_hw_queue {
 	struct iommufd_object obj;
 	struct iommufd_ctx *ictx;
 	struct iommufd_viommu *viommu;
+	struct iommufd_access *access;
 
 	u64 base_addr; /* in guest physical address space */
 	size_t length;
