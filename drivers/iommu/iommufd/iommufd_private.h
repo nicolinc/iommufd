@@ -436,6 +436,8 @@ iommufd_get_viommu(struct iommufd_ucmd *ucmd, u32 id)
 int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd);
 void iommufd_viommu_destroy(struct iommufd_object *obj);
 int iommufd_viommu_set_device_id(struct iommufd_ucmd *ucmd);
+int iommufd_vqueue_alloc_ioctl(struct iommufd_ucmd *ucmd);
+void iommufd_vqueue_destroy(struct iommufd_object *obj);
 
 #ifdef CONFIG_IOMMUFD_TEST
 int iommufd_test(struct iommufd_ucmd *ucmd);

@@ -324,6 +324,7 @@ union ucmd_buffer {
 	struct iommu_ioas_alloc alloc;
 	struct iommu_ioas_allow_iovas allow_iovas;
 	struct iommu_viommu_alloc viommu;
+	struct iommu_vqueue_alloc vqueue;
 	struct iommu_ioas_copy ioas_copy;
 	struct iommu_ioas_iova_ranges iova_ranges;
 	struct iommu_ioas_map map;
@@ -383,6 +384,8 @@ static const struct iommufd_ioctl_op iommufd_ioctl_ops[] = {
 		 struct iommu_viommu_alloc, out_viommu_id),
 	IOCTL_OP(IOMMU_VIOMMU_SET_DEV_ID, iommufd_viommu_set_device_id,
 		 struct iommu_viommu_set_dev_id, id),
+	IOCTL_OP(IOMMU_VQUEUE_ALLOC, iommufd_vqueue_alloc_ioctl,
+		 struct iommu_vqueue_alloc, data_uptr),
 #ifdef CONFIG_IOMMUFD_TEST
 	IOCTL_OP(IOMMU_TEST_CMD, iommufd_test, struct iommu_test_cmd, last),
 #endif
@@ -517,6 +520,9 @@ static const struct iommufd_object_ops iommufd_object_ops[] = {
 	},
 	[IOMMUFD_OBJ_VIOMMU] = {
 		.destroy = iommufd_viommu_destroy,
+	},
+	[IOMMUFD_OBJ_VQUEUE] = {
+		.destroy = iommufd_vqueue_destroy,
 	},
 #ifdef CONFIG_IOMMUFD_TEST
 	[IOMMUFD_OBJ_SELFTEST] = {
