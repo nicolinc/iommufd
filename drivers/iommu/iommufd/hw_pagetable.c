@@ -115,7 +115,7 @@ iommufd_hwpt_paging_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 	if (flags & ~valid_flags)
 		return ERR_PTR(-EOPNOTSUPP);
 
-	hwpt_paging = __iommufd_object_alloc(
+	hwpt_paging = _iommufd_object_alloc(
 		ictx, hwpt_paging, IOMMUFD_OBJ_HWPT_PAGING, common.obj);
 	if (IS_ERR(hwpt_paging))
 		return ERR_CAST(hwpt_paging);
@@ -218,7 +218,7 @@ iommufd_hwpt_nested_alloc(struct iommufd_ctx *ictx,
 	if (parent->auto_domain || !parent->nest_parent)
 		return ERR_PTR(-EINVAL);
 
-	hwpt_nested = __iommufd_object_alloc(
+	hwpt_nested = _iommufd_object_alloc(
 		ictx, hwpt_nested, IOMMUFD_OBJ_HWPT_NESTED, common.obj);
 	if (IS_ERR(hwpt_nested))
 		return ERR_CAST(hwpt_nested);

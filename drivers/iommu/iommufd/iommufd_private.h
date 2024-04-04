@@ -200,12 +200,12 @@ iommufd_object_put_and_try_destroy(struct iommufd_ctx *ictx,
 	iommufd_object_remove(ictx, obj, obj->id, 0);
 }
 
-struct iommufd_object *_iommufd_object_alloc(struct iommufd_ctx *ictx,
-					     size_t size,
-					     enum iommufd_object_type type);
+struct iommufd_object *__iommufd_object_alloc(struct iommufd_ctx *ictx,
+					      size_t size,
+					      enum iommufd_object_type type);
 
-#define __iommufd_object_alloc(ictx, ptr, type, obj)                           \
-	container_of(_iommufd_object_alloc(                                    \
+#define _iommufd_object_alloc(ictx, ptr, type, obj)                            \
+	container_of(__iommufd_object_alloc(                                   \
 			     ictx,                                             \
 			     sizeof(*(ptr)) + BUILD_BUG_ON_ZERO(               \
 						      offsetof(typeof(*(ptr)), \
@@ -214,7 +214,7 @@ struct iommufd_object *_iommufd_object_alloc(struct iommufd_ctx *ictx,
 		     typeof(*(ptr)), obj)
 
 #define iommufd_object_alloc(ictx, ptr, type) \
-	__iommufd_object_alloc(ictx, ptr, type, obj)
+	_iommufd_object_alloc(ictx, ptr, type, obj)
 
 /*
  * The IO Address Space (IOAS) pagetable is a virtual page table backed by the
