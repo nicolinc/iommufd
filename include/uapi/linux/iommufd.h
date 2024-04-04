@@ -56,6 +56,7 @@ enum {
 	IOMMUFD_CMD_VDEVICE_ALLOC = 0x91,
 	IOMMUFD_CMD_IOAS_CHANGE_PROCESS = 0x92,
 	IOMMUFD_CMD_VIRQ_ALLOC = 0x93,
+	IOMMUFD_CMD_VQUEUE_ALLOC = 0x94,
 };
 
 /**
@@ -1064,4 +1065,35 @@ struct iommu_virq_alloc {
 	__u32 out_virq_fd;
 };
 #define IOMMU_VIRQ_ALLOC _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VIRQ_ALLOC)
+
+/**
+ * enum iommu_vqueue_type - Virtual Queue Type
+ * @IOMMU_VQUEUE_TYPE_DEFAULT: Reserved for future use
+ */
+enum iommu_vqueue_data_type {
+	IOMMU_VQUEUE_TYPE_DEFAULT = 0,
+};
+
+/**
+ * struct iommu_vqueue_alloc - ioctl(IOMMU_VQUEUE_ALLOC)
+ * @size: sizeof(struct iommu_vqueue_alloc)
+ * @flags: Must be 0
+ * @viommu_id: viommu ID to associate the virtual queue with
+ * @type: One of enum iommu_vqueue_type
+ * @out_vqueue_id: The ID of the new virtual queue
+ * @data_len: Length of the type specific data
+ * @data_uptr: User pointer to the type specific data
+ *
+ * Allocate a virtual queue object for vIOMMU-specific HW-accelerated queue
+ */
+struct iommu_vqueue_alloc {
+	__u32 size;
+	__u32 flags;
+	__u32 viommu_id;
+	__u32 type;
+	__u32 out_vqueue_id;
+	__u32 data_len;
+	__aligned_u64 data_uptr;
+};
+#define IOMMU_VQUEUE_ALLOC _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VQUEUE_ALLOC)
 #endif
