@@ -139,6 +139,7 @@ struct mock_dev {
 	struct device dev;
 	unsigned long flags;
 	int id;
+	unsigned int id_user;
 };
 
 struct selftest_obj {
@@ -516,6 +517,53 @@ static struct iommu_device *mock_probe_device(struct device *dev)
 
 struct mock_viommu {
 	struct iommufd_viommu core;
+	struct xarray ids;
+};
+
+static void mock_viommu_free(struct iommufd_viommu *viommu)
+{
+	struct mock_viommu *mv = container_of(viommu, struct mock_viommu, core);
+	struct device *dev;
+	unsigned long index;
+
+	xa_for_each(&mv->ids, index, dev)
+		xa_erase(&mv->ids, index);
+	xa_destroy(&mv->ids);
+}
+
+static int mock_viommu_set_dev_id(struct iommufd_viommu *viommu,
+				  struct device *dev, u64 dev_id)
+{
+	struct mock_viommu *mv = container_of(viommu, struct mock_viommu, core);
+	struct mock_dev *mdev = container_of(dev, struct mock_dev, dev);
+	u32 id = (u32)dev_id;
+	int rc;
+
+	if (dev_id > UINT_MAX)
+		return -EINVAL;
+	if (mdev->id_user > 0)
+		return -EBUSY;
+	rc = xa_alloc(&mv->ids, &id, dev, XA_LIMIT(id, id), GFP_KERNEL);
+	if (rc)
+		return rc;
+	mdev->id_user = (unsigned int)dev_id;
+	return 0;
+}
+
+static void mock_viommu_unset_dev_id(struct iommufd_viommu *viommu,
+				     struct device *dev)
+{
+	struct mock_viommu *mv = container_of(viommu, struct mock_viommu, core);
+	struct mock_dev *mdev = container_of(dev, struct mock_dev, dev);
+
+	WARN_ON(dev != xa_erase(&mv->ids, mdev->id_user));
+	mdev->id_user = 0;
+}
+
+static const struct iommufd_viommu_ops mock_viommu_ops = {
+	.free = mock_viommu_free,
+	.set_dev_id = mock_viommu_set_dev_id,
+	.unset_dev_id = mock_viommu_unset_dev_id,
 };
 
 static struct iommufd_viommu *mock_viommu_alloc(struct device *dev,
@@ -527,6 +575,8 @@ static struct iommufd_viommu *mock_viommu_alloc(struct device *dev,
 	mv = iommufd_viommu_alloc(mock_viommu, core);
 	if (!mv)
 		return ERR_PTR(-ENOMEM);
+	mv->core.ops = &mock_viommu_ops;
+	xa_init_flags(&mv->ids, XA_FLAGS_ALLOC1);
 
 	return &mv->core;
 }

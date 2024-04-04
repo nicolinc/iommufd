@@ -271,6 +271,9 @@ TEST_F(iommufd_ioas, viommu)
 	uint32_t dev_id = self->device_id;
 	uint32_t viommu_id = 0;
 	uint32_t hwpt_id = 0;
+	uint32_t device2;
+	uint32_t stdev2;
+	uint32_t hwpt2;
 
 	if (dev_id) {
 		test_err_viommu_alloc(ENOENT, dev_id, hwpt_id, &viommu_id);
@@ -282,10 +285,21 @@ TEST_F(iommufd_ioas, viommu)
 				    IOMMU_HWPT_ALLOC_NEST_PARENT,
 				    &hwpt_id);
 		test_cmd_viommu_alloc(dev_id, hwpt_id, &viommu_id);
+		test_err_viommu_set_dev_id(EINVAL, dev_id, viommu_id, 1ULL << 32);
+		test_cmd_viommu_set_dev_id(dev_id, viommu_id, 0x99);
+		test_err_viommu_set_dev_id(EBUSY, dev_id, viommu_id, 0x99);
+
+		test_cmd_mock_domain(self->ioas_id, &stdev2, &hwpt2, &device2);
+		test_err_viommu_set_dev_id(EBUSY, device2, viommu_id, 0x99);
+		test_cmd_viommu_set_dev_id(device2, viommu_id, 0xaa);
+		test_err_viommu_set_dev_id(EBUSY, device2, viommu_id, 0xaa);
+		test_ioctl_destroy(stdev2);
+
 		test_ioctl_destroy(viommu_id);
 		test_ioctl_destroy(hwpt_id);
 	} else {
 		test_err_viommu_alloc(ENOENT, dev_id, hwpt_id, &viommu_id);
+		test_err_viommu_set_dev_id(ENOENT, dev_id, viommu_id, 99);
 	}
 }
 

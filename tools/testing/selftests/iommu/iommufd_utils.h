@@ -710,3 +710,24 @@ static int _test_cmd_viommu_alloc(int fd, __u32 device_id, __u32 hwpt_id,
 #define test_err_viommu_alloc(_errno, device_id, hwpt_id, viommu_id)     \
 	EXPECT_ERRNO(_errno, _test_cmd_viommu_alloc(self->fd, device_id, \
 						    hwpt_id, 0, viommu_id))
+
+static int _test_cmd_viommu_set_dev_id(int fd, __u32 device_id,
+					__u32 viommu_id, __u64 virtual_id)
+{
+	struct iommu_viommu_set_dev_id cmd = {
+		.size = sizeof(cmd),
+		.dev_id = device_id,
+		.viommu_id = viommu_id,
+		.id = virtual_id,
+	};
+
+	return ioctl(fd, IOMMU_VIOMMU_SET_DEV_ID, &cmd);
+}
+
+#define test_cmd_viommu_set_dev_id(device_id, viommu_id, virtual_id)  \
+	ASSERT_EQ(0, _test_cmd_viommu_set_dev_id(self->fd, device_id, \
+						  viommu_id, virtual_id))
+#define test_err_viommu_set_dev_id(_errno, device_id, viommu_id, virtual_id) \
+	EXPECT_ERRNO(_errno,                                                 \
+		     _test_cmd_viommu_set_dev_id(self->fd, device_id,        \
+						  viommu_id, virtual_id))
