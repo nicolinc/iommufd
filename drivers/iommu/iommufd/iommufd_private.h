@@ -156,6 +156,26 @@ void iommufd_object_abort_and_destroy(struct iommufd_ctx *ictx,
 void iommufd_object_finalize(struct iommufd_ctx *ictx,
 			     struct iommufd_object *obj);
 
+static inline struct iommufd_object *___iommufd_object_alloc(size_t size)
+{
+	struct iommufd_object *obj;
+
+	obj = kzalloc(size, GFP_KERNEL_ACCOUNT);
+	if (!obj)
+		return ERR_PTR(-ENOMEM);
+
+	/* Starts out bias'd by 1 until it is removed from the xarray */
+	refcount_set(&obj->shortterm_users, 1);
+	refcount_set(&obj->users, 1);
+
+	/*
+	 * The allocation of an obj->id needs an ictx, so it has to be done
+	 * after this ___iommufd_object_alloc() callback.
+	 */
+
+	return obj;
+}
+
 enum {
 	REMOVE_WAIT_SHORTTERM = 1,
 };

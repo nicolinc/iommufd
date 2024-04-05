@@ -36,13 +36,10 @@ struct iommufd_object *__iommufd_object_alloc(struct iommufd_ctx *ictx,
 	struct iommufd_object *obj;
 	int rc;
 
-	obj = kzalloc(size, GFP_KERNEL_ACCOUNT);
-	if (!obj)
-		return ERR_PTR(-ENOMEM);
+	obj = ___iommufd_object_alloc(size);
+	if (IS_ERR(obj))
+		return obj;
 	obj->type = type;
-	/* Starts out bias'd by 1 until it is removed from the xarray */
-	refcount_set(&obj->shortterm_users, 1);
-	refcount_set(&obj->users, 1);
 
 	/*
 	 * Reserve an ID in the xarray but do not publish the pointer yet since
