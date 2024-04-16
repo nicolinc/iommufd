@@ -866,11 +866,19 @@ static int arm_smmu_cmdq_issue_cmdlist(struct arm_smmu_device *smmu,
 		llq.prod = queue_inc_prod_n(&llq, n);
 		ret = arm_smmu_cmdq_poll_until_sync(smmu, cmdq, &llq);
 		if (ret) {
+			u64 test[CMDQ_ENT_DWORDS];
+			u32 my_cons;
+			int i;
 			dev_err_ratelimited(smmu->dev,
 					    "CMD_SYNC timeout at 0x%08x [hwprod 0x%08x, hwcons 0x%08x]\n",
 					    llq.prod,
 					    readl_relaxed(cmdq->q.prod_reg),
 					    readl_relaxed(cmdq->q.cons_reg));
+			my_cons = readl_relaxed(cmdq->q.prod_reg) - n - sync;
+			for (i = my_cons; i < my_cons + n + sync; i++) {
+				queue_read(test, Q_ENT(&cmdq->q, i), CMDQ_ENT_DWORDS);
+				dev_err_ratelimited(smmu->dev, "   cmds[%d]=%016llx:%016llx", i, test[1], test[0]);
+			}
 		}
 
 		/*

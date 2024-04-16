@@ -349,9 +349,9 @@ struct tegra241_cmdqv {
 	struct tegra241_vintf **vintfs;
 };
 
-static void tegra241_cmdqv_handle_vintf0_error(struct tegra241_cmdqv *cmdqv)
+static void tegra241_cmdqv_handle_vintf0_error(struct tegra241_cmdqv *cmdqv, u32 idx)
 {
-	struct tegra241_vintf *vintf = cmdqv->vintfs[0];
+	struct tegra241_vintf *vintf = cmdqv->vintfs[idx];
 	int i;
 
 	/* Cache error status to bypass VCMDQs until error is recovered */
@@ -368,10 +368,31 @@ static void tegra241_cmdqv_handle_vintf0_error(struct tegra241_cmdqv *cmdqv)
 
 			lvcmdq_err_map &= ~BIT(lidx);
 
-			__arm_smmu_cmdq_skip_err(cmdqv->dev, &vcmdq->cmdq.q);
+			if (idx == 0)
+				__arm_smmu_cmdq_skip_err(cmdqv->dev, &vcmdq->cmdq.q);
+			else {
+				static const char * const cerror_str[] = {
+					[CMDQ_ERR_CERROR_NONE_IDX]	= "No error",
+					[CMDQ_ERR_CERROR_ILL_IDX]	= "Illegal command",
+					[CMDQ_ERR_CERROR_ABT_IDX]	= "Abort on command fetch",
+					[CMDQ_ERR_CERROR_ATC_INV_IDX]	= "ATC invalidate timeout",
+					[4]	= "Illegal access",
+				};
+				u64 q_base = vcmdq_page1_readq_relaxed(BASE) & VCMDQ_ADDR;
+				u32 prod = vcmdq_page0_readl(PROD);
+				u32 cons = vcmdq_page0_readl(CONS);
+				u32 idx = FIELD_GET(CMDQ_CONS_ERR, cons);
+				u32 offset = (prod - 2) * CMDQ_ENT_DWORDS;
+				u64 *cmd = phys_to_virt(q_base + offset);
+
+				vcmdq_err("CMDQ error (cons 0x%08x): %s\n", cons,
+					idx < ARRAY_SIZE(cerror_str) ?  cerror_str[idx] : "Unknown");
+				vcmdq_err("  cmd = %16llx:%16llx\n", cmd[1], cmd[0]);
+			}
 
 			gerrorn = vcmdq_page0_readl_relaxed(GERRORN);
 			gerror = vcmdq_page0_readl_relaxed(GERROR);
+			vcmdq_err(" gerror=%x, gerrorn=%x\n", gerror, gerrorn);
 
 			vcmdq_page0_writel(gerror, GERRORN);
 		}
@@ -403,7 +424,11 @@ static irqreturn_t tegra241_cmdqv_isr(int irq, void *devid)
 
 	/* Handle VINTF0 and its VCMDQs */
 	if (vintf_errs[0] & 0x1)
-		tegra241_cmdqv_handle_vintf0_error(cmdqv);
+		tegra241_cmdqv_handle_vintf0_error(cmdqv, 0);
+	else {
+		u32 idx = ffs(vintf_errs[0]) - 1;
+		tegra241_cmdqv_handle_vintf0_error(cmdqv, idx);
+	}
 
 	return IRQ_HANDLED;
 }
@@ -511,6 +536,8 @@ static int tegra241_vcmdq_hw_init(struct tegra241_vcmdq *vcmdq)
 		vcmdq_err("CONS=0x%X\n", vcmdq_page0_readl_relaxed(CONS));
 		return ret;
 	}
+	vcmdq_err(" VCMDQ_STATUS=0x%X\n", vcmdq_page0_readl(STATUS));
+	vcmdq_err(" VCMDQ_CONS=0x%X\n", vcmdq_page0_readl(CONS));
 
 	vcmdq_dbg("inited\n");
 	return 0;
@@ -921,6 +948,7 @@ tegra241_cmdqv_vqueue_alloc(struct iommufd_viommu *viommu,
 		return ERR_PTR(-EINVAL);
 	if (arg.vcmdq_id >= cmdqv->num_vcmdqs_per_vintf)
 		return ERR_PTR(-EINVAL);
+	pr_err(" user q_base = %16llx\n", arg.vcmdq_base);
 	q_base = arm_smmu_domain_ipa_to_pa(vintf->s2_domain, arg.vcmdq_base);
 	if (!q_base)
 		return ERR_PTR(-EINVAL);
@@ -1062,6 +1090,7 @@ struct iommufd_viommu *
 tegra241_cmdqv_viommu_alloc(struct tegra241_cmdqv *cmdqv,
 			    struct arm_smmu_domain *smmu_domain)
 {
+	u32 vintf_errs[2], vcmdq_errs[4];
 	struct tegra241_vintf *vintf;
 	int idx, ret;
 	u32 regval;
@@ -1097,6 +1126,18 @@ tegra241_cmdqv_viommu_alloc(struct tegra241_cmdqv *cmdqv,
 	ret = vintf_write_config(regval);
 	if (ret)
 		goto out_ida_free;
+	vintf_err("Enabled: STATUS = 0x%08X\n", vintf_readl(STATUS));
+
+	vintf_errs[0] = cmdqv_readl_relaxed(VINTF_ERR_MAP);
+	vintf_errs[1] = cmdqv_readl_relaxed(VINTF_ERR_MAP + 0x4);
+
+	vcmdq_errs[0] = cmdqv_readl_relaxed(VCMDQ_ERR_MAP(0));
+	vcmdq_errs[1] = cmdqv_readl_relaxed(VCMDQ_ERR_MAP(1));
+	vcmdq_errs[2] = cmdqv_readl_relaxed(VCMDQ_ERR_MAP(2));
+	vcmdq_errs[3] = cmdqv_readl_relaxed(VCMDQ_ERR_MAP(3));
+	cmdqv_warn(" vintf_map: 0x%08X%08X\n", vintf_errs[1], vintf_errs[0]);
+	cmdqv_warn(" vcmdq_map: 0x%08X%08X%08X%08X\n",
+		   vcmdq_errs[3], vcmdq_errs[2], vcmdq_errs[1], vcmdq_errs[0]);
 
 	vintf->vcmdqs = kcalloc(cmdqv->num_vcmdqs_per_vintf,
 				sizeof(*vintf->vcmdqs), GFP_KERNEL);
