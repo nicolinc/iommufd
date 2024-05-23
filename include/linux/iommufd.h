@@ -138,6 +138,8 @@ __iommufd_viommu_alloc(struct iommufd_ctx *ictx, size_t size,
 struct iommufd_vdevice *
 __iommufd_vdevice_alloc(struct iommufd_ctx *ictx, size_t size);
 struct device *vdev_to_dev(struct iommufd_vdevice *vdev);
+struct iommu_domain *
+iommufd_viommu_to_parent_domain(struct iommufd_viommu *viommu);
 #else /* !CONFIG_IOMMUFD */
 static inline struct iommufd_ctx *iommufd_ctx_from_file(struct file *file)
 {
@@ -193,6 +195,12 @@ __iommufd_vdevice_alloc(struct iommufd_ctx *ictx, size_t size)
 }
 
 static inline struct device *vdev_to_dev(struct iommufd_vdevice *vdev)
+{
+	return NULL;
+}
+
+static inline struct iommu_domain *
+iommufd_viommu_to_parent_domain(struct iommufd_viommu *viommu)
 {
 	return NULL;
 }
