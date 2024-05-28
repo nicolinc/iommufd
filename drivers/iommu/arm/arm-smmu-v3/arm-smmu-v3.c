@@ -3227,10 +3227,10 @@ static void arm_smmu_domain_nested_free(struct iommu_domain *domain)
  * Enforce the VMID on the command.
  */
 static int
-arm_smmu_convert_user_cmd(struct arm_smmu_nested_domain *nested_domain,
+arm_smmu_convert_user_cmd(struct arm_smmu_domain *s2_parent,
 			  struct iommu_hwpt_arm_smmuv3_invalidate *cmd)
 {
-	u16 vmid = nested_domain->s2_parent->s2_cfg.vmid;
+	u16 vmid = s2_parent->s2_cfg.vmid;
 
 	cmd->cmd[0] = le64_to_cpu(cmd->cmd[0]);
 	cmd->cmd[1] = le64_to_cpu(cmd->cmd[1]);
@@ -3255,12 +3255,10 @@ arm_smmu_convert_user_cmd(struct arm_smmu_nested_domain *nested_domain,
 	return 0;
 }
 
-static int arm_smmu_cache_invalidate_user(struct iommu_domain *domain,
-					  struct iommu_user_data_array *array)
+static int __arm_smmu_cache_invalidate_user(struct arm_smmu_domain *s2_parent,
+					    struct iommu_user_data_array *array)
 {
-	struct arm_smmu_nested_domain *nested_domain =
-		container_of(domain, struct arm_smmu_nested_domain, domain);
-	struct arm_smmu_device *smmu = nested_domain->s2_parent->smmu;
+	struct arm_smmu_device *smmu = s2_parent->smmu;
 	struct iommu_hwpt_arm_smmuv3_invalidate *last_batch;
 	struct iommu_hwpt_arm_smmuv3_invalidate *cmds;
 	struct iommu_hwpt_arm_smmuv3_invalidate *cur;
@@ -3282,7 +3280,7 @@ static int arm_smmu_cache_invalidate_user(struct iommu_domain *domain,
 
 	last_batch = cmds;
 	while (cur != end) {
-		ret = arm_smmu_convert_user_cmd(nested_domain, cur);
+		ret = arm_smmu_convert_user_cmd(s2_parent, cur);
 		if (ret)
 			goto out;
 
@@ -3303,6 +3301,16 @@ out:
 	array->entry_num = cur - cmds;
 	kfree(cmds);
 	return ret;
+}
+
+static int arm_smmu_cache_invalidate_user(struct iommu_domain *domain,
+					  struct iommu_user_data_array *array)
+{
+	struct arm_smmu_nested_domain *nested_domain =
+		container_of(domain, struct arm_smmu_nested_domain, domain);
+
+	return __arm_smmu_cache_invalidate_user(
+			nested_domain->s2_parent, array);
 }
 
 static struct iommu_domain *
