@@ -44,6 +44,7 @@ struct iommu_dma_cookie;
 struct iommu_fault_param;
 struct iommufd_ctx;
 struct iommufd_viommu;
+struct iommufd_viommu_ops;
 
 #define IOMMU_FAULT_PERM_READ	(1 << 0) /* read */
 #define IOMMU_FAULT_PERM_WRITE	(1 << 1) /* write */
@@ -634,6 +635,8 @@ struct iommu_ops {
  *                         array->entry_num to report the number of handled
  *                         invalidation requests. The driver data structure
  *                         must be defined in include/uapi/linux/iommufd.h
+ * @default_viommu_ops: Driver can choose to use a default core-allocated core-
+ *                      managed viommu object by providing a default_viommu_ops.
  * @viommu_alloc: Allocate an iommufd_viommu associating to a nested parent
  *                @domain as a user space IOMMU instance for HW-accelerated
  *                features from the physical IOMMU behind the @dev. The
@@ -673,6 +676,7 @@ struct iommu_domain_ops {
 	phys_addr_t (*iova_to_phys)(struct iommu_domain *domain,
 				    dma_addr_t iova);
 
+	const struct iommufd_viommu_ops *default_viommu_ops;
 	struct iommufd_viommu *(*viommu_alloc)(struct iommu_domain *domain,
 					       struct device *dev,
 					       struct iommufd_ctx *ictx,

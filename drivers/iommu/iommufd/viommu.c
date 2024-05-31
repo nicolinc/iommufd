@@ -41,12 +41,17 @@ int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
 		goto out_put_hwpt;
 	}
 	domain = hwpt_paging->common.domain;
+	if (!domain->ops) {
+		rc = -EOPNOTSUPP;
+		goto out_put_hwpt;
+	}
 
 	if (cmd->type == IOMMU_VIOMMU_TYPE_DEFAULT) {
 		viommu = __iommufd_viommu_alloc(
-				ucmd->ictx, sizeof(*viommu), NULL);
+				ucmd->ictx, sizeof(*viommu),
+				domain->ops->default_viommu_ops);
 	} else {
-		if (!domain->ops || !domain->ops->viommu_alloc) {
+		if (!domain->ops->viommu_alloc) {
 			rc = -EOPNOTSUPP;
 			goto out_put_hwpt;
 		}
