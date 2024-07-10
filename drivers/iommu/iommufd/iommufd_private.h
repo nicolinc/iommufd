@@ -18,6 +18,8 @@ struct iommu_domain;
 struct iommu_group;
 struct iommu_option;
 struct iommufd_device;
+struct iommufd_eventq;
+struct iommufd_eventq_iopf;
 
 struct iommufd_ctx {
 	struct file *file;
@@ -273,7 +275,7 @@ int iommufd_check_iova_range(struct io_pagetable *iopt,
 struct iommufd_hw_pagetable {
 	struct iommufd_object obj;
 	struct iommu_domain *domain;
-	struct iommufd_fault *fault;
+	struct iommufd_eventq_iopf *fault;
 };
 
 struct iommufd_hwpt_paging {
@@ -431,23 +433,41 @@ void iopt_remove_access(struct io_pagetable *iopt,
 			u32 iopt_access_list_id);
 void iommufd_access_destroy_object(struct iommufd_object *obj);
 
+struct iommufd_eventq_ops {
+	ssize_t (*read)(struct iommufd_eventq *eventq, char __user *buf,
+			size_t count, loff_t *ppos);
+	ssize_t (*write)(struct iommufd_eventq *eventq, const char __user *buf,
+			 size_t count, loff_t *ppos);
+};
+
 /*
- * An iommufd_fault object represents an interface to deliver I/O page faults
- * to the user space. These objects are created/destroyed by the user space and
- * associated with hardware page table objects during page-table allocation.
+ * An iommufd_eventq object represents an interface to deliver IOMMU events
+ * to the user space. These objects are created/destroyed by the user space.
  */
-struct iommufd_fault {
+struct iommufd_eventq {
 	struct iommufd_object obj;
 	struct iommufd_ctx *ictx;
 	struct file *filep;
 
-	/* The lists of outstanding faults protected by below mutex. */
+	const struct iommufd_eventq_ops *ops;
+
+	/* The lists of outstanding events protected by below mutex. */
 	struct mutex mutex;
 	struct list_head deliver;
-	struct xarray response;
 
 	struct wait_queue_head wait_queue;
 };
+
+static inline int iommufd_eventq_notify(struct iommufd_eventq *eventq,
+					struct list_head *new_event)
+{
+	mutex_lock(&eventq->mutex);
+	list_add_tail(new_event, &eventq->deliver);
+	mutex_unlock(&eventq->mutex);
+
+	wake_up_interruptible(&eventq->wait_queue);
+	return 0;
+}
 
 struct iommufd_attach_handle {
 	struct iommu_attach_handle handle;
@@ -457,31 +477,49 @@ struct iommufd_attach_handle {
 /* Convert an iommu attach handle to iommufd handle. */
 #define to_iommufd_handle(hdl)	container_of(hdl, struct iommufd_attach_handle, handle)
 
-static inline struct iommufd_fault *
-iommufd_get_fault(struct iommufd_ucmd *ucmd, u32 id)
+struct iommufd_eventq_iopf {
+	struct iommufd_eventq common;
+	struct xarray response;
+};
+
+static inline struct iommufd_eventq_iopf *
+to_eventq_iopf(struct iommufd_eventq *eventq)
 {
-	return container_of(iommufd_get_object(ucmd->ictx, id,
-					       IOMMUFD_OBJ_FAULT),
-			    struct iommufd_fault, obj);
+	return container_of(eventq, struct iommufd_eventq_iopf, common);
 }
 
-int iommufd_fault_alloc(struct iommufd_ucmd *ucmd);
-void iommufd_fault_destroy(struct iommufd_object *obj);
-int iommufd_fault_iopf_handler(struct iopf_group *group);
+static inline struct iommufd_eventq_iopf *
+iommufd_get_eventq_iopf(struct iommufd_ucmd *ucmd, u32 id)
+{
+	return container_of(iommufd_get_object(ucmd->ictx, id,
+					       IOMMUFD_OBJ_EVENTQ_IOPF),
+			    struct iommufd_eventq_iopf, common.obj);
+}
 
-int iommufd_fault_domain_attach_dev(struct iommufd_hw_pagetable *hwpt,
-				    struct iommufd_device *idev);
-void iommufd_fault_domain_detach_dev(struct iommufd_hw_pagetable *hwpt,
-				     struct iommufd_device *idev);
-int iommufd_fault_domain_replace_dev(struct iommufd_device *idev,
-				     struct iommufd_hw_pagetable *hwpt,
-				     struct iommufd_hw_pagetable *old);
+int iommufd_eventq_iopf_alloc(struct iommufd_ucmd *ucmd);
+void iommufd_eventq_iopf_destroy(struct iommufd_object *obj);
+
+static inline int iommufd_eventq_iopf_handler(struct iopf_group *group)
+{
+	struct iommufd_hw_pagetable *hwpt =
+		group->attach_handle->domain->fault_data;
+
+	return iommufd_eventq_notify(&hwpt->fault->common, &group->node);
+}
+
+int iommufd_eventq_iopf_domain_attach_dev(struct iommufd_hw_pagetable *hwpt,
+					  struct iommufd_device *idev);
+void iommufd_eventq_iopf_domain_detach_dev(struct iommufd_hw_pagetable *hwpt,
+					   struct iommufd_device *idev);
+int iommufd_eventq_iopf_domain_replace_dev(struct iommufd_device *idev,
+					   struct iommufd_hw_pagetable *hwpt,
+					   struct iommufd_hw_pagetable *old);
 
 static inline int iommufd_hwpt_attach_device(struct iommufd_hw_pagetable *hwpt,
 					     struct iommufd_device *idev)
 {
 	if (hwpt->fault)
-		return iommufd_fault_domain_attach_dev(hwpt, idev);
+		return iommufd_eventq_iopf_domain_attach_dev(hwpt, idev);
 
 	return iommu_attach_group(hwpt->domain, idev->igroup->group);
 }
@@ -490,7 +528,7 @@ static inline void iommufd_hwpt_detach_device(struct iommufd_hw_pagetable *hwpt,
 					      struct iommufd_device *idev)
 {
 	if (hwpt->fault) {
-		iommufd_fault_domain_detach_dev(hwpt, idev);
+		iommufd_eventq_iopf_domain_detach_dev(hwpt, idev);
 		return;
 	}
 
@@ -502,7 +540,7 @@ static inline int iommufd_hwpt_replace_device(struct iommufd_device *idev,
 					      struct iommufd_hw_pagetable *old)
 {
 	if (old->fault || hwpt->fault)
-		return iommufd_fault_domain_replace_dev(idev, hwpt, old);
+		return iommufd_eventq_iopf_domain_replace_dev(idev, hwpt, old);
 
 	return iommu_group_replace_domain(idev->igroup->group, hwpt->domain);
 }
