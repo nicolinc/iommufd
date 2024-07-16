@@ -3289,9 +3289,9 @@ arm_smmu_domain_alloc_nesting(struct device *dev, u32 flags,
 			      struct iommu_domain *parent,
 			      const struct iommu_user_data *user_data)
 {
-	const u32 REQUIRED_FEATURES = ARM_SMMU_FEAT_NESTING |
-				      ARM_SMMU_FEAT_S2FWB;
+	u32 REQUIRED_FEATURES = ARM_SMMU_FEAT_NESTING | ARM_SMMU_FEAT_S2FWB;
 	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
 	struct arm_smmu_nested_domain *nested_domain;
 	struct arm_smmu_domain *smmu_parent;
 	struct iommu_hwpt_arm_smmuv3 arg;
@@ -3299,6 +3299,9 @@ arm_smmu_domain_alloc_nesting(struct device *dev, u32 flags,
 	unsigned int cfg;
 	int ret;
 
+	/* CANWBS capability allows to ensure cache coherency without S2FWB */
+	if (fwspec->flags & IOMMU_FWSPEC_PCI_RC_CANWBS)
+		REQUIRED_FEATURES &= ~ARM_SMMU_FEAT_S2FWB;
 	if ((master->smmu->features & REQUIRED_FEATURES) != REQUIRED_FEATURES)
 		return ERR_PTR(-EOPNOTSUPP);
 
