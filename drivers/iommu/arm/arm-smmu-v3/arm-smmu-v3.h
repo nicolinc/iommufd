@@ -787,6 +787,7 @@ struct arm_smmu_domain {
 	/* List of struct arm_smmu_master_domain */
 	struct list_head		devices;
 	spinlock_t			devices_lock;
+	u8				enforce_cache_coherency;
 
 	struct mmu_notifier		mmu_notifier;
 };
