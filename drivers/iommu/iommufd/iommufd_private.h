@@ -321,7 +321,26 @@ static inline bool hwpt_is_paging(struct iommufd_hw_pagetable *hwpt)
 static inline struct iommufd_hwpt_paging *
 to_hwpt_paging(struct iommufd_hw_pagetable *hwpt)
 {
-	return container_of(hwpt, struct iommufd_hwpt_paging, common);
+	switch (hwpt->obj.type) {
+	case IOMMUFD_OBJ_HWPT_PAGING:
+		return container_of(hwpt, struct iommufd_hwpt_paging, common);
+	case IOMMUFD_OBJ_HWPT_NESTED:
+		return container_of(hwpt, struct iommufd_hwpt_nested, common)->parent;
+	default:
+		return NULL;
+	}
+}
+
+static inline bool
+iommufd_hw_pagetable_compare_ioas(struct iommufd_hw_pagetable *old_hwpt,
+				  struct iommufd_hw_pagetable *new_hwpt)
+{
+	struct iommufd_hwpt_paging *old_hwpt_paging = to_hwpt_paging(old_hwpt);
+	struct iommufd_hwpt_paging *new_hwpt_paging = to_hwpt_paging(new_hwpt);
+
+	if (!old_hwpt_paging || !new_hwpt_paging)
+		return false;
+	return old_hwpt_paging->ioas != new_hwpt_paging->ioas;
 }
 
 static inline struct iommufd_hwpt_paging *
