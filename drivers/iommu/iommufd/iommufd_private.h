@@ -519,12 +519,100 @@ static inline int iommufd_hwpt_replace_device(struct iommufd_device *idev,
 	return iommu_group_replace_domain(idev->igroup->group, hwpt->domain);
 }
 
+/* An iommufd_vevent represents a vIOMMU event in an iommufd_veventq */
+struct iommufd_vevent {
+	struct iommufd_vevent_header header;
+	struct list_head node; /* for iommufd_eventq::deliver */
+	bool on_list;
+	ssize_t data_len;
+	u64 event_data[] __counted_by(data_len);
+};
+
+#define vevent_for_overflow(vevent) \
+	(vevent->header.flags & IOMMU_VEVENTQ_FLAG_OVERFLOW)
+
+/*
+ * An iommufd_veventq object represents an interface to deliver vIOMMU events to
+ * the user space. It is created/destroyed by the user space and associated with
+ * vIOMMU object(s) during the allocations.
+ */
+struct iommufd_veventq {
+	struct iommufd_eventq common;
+	struct iommufd_viommu *viommu;
+	struct list_head node; /* for iommufd_viommu::veventqs */
+	struct iommufd_vevent overflow; /* pre-allocated overflow node */
+
+	unsigned int type;
+	unsigned int depth;
+
+	atomic_t num_events;
+	atomic_t sequence;
+};
+
+static inline struct iommufd_veventq *
+eventq_to_veventq(struct iommufd_eventq *eventq)
+{
+	return container_of(eventq, struct iommufd_veventq, common);
+}
+
+static inline struct iommufd_veventq *
+iommufd_get_veventq(struct iommufd_ucmd *ucmd, u32 id)
+{
+	return container_of(iommufd_get_object(ucmd->ictx, id,
+					       IOMMUFD_OBJ_VEVENTQ),
+			    struct iommufd_veventq, common.obj);
+}
+
+int iommufd_veventq_alloc(struct iommufd_ucmd *ucmd);
+void iommufd_veventq_destroy(struct iommufd_object *obj);
+void iommufd_veventq_abort(struct iommufd_object *obj);
+
+static inline void iommufd_vevent_handler(struct iommufd_veventq *veventq,
+					  struct iommufd_vevent *vevent)
+{
+	struct iommufd_eventq *eventq = &veventq->common;
+
+	/*
+	 * Remove the overflow node and add the new node at the same time. Note
+	 * it is possible that vevent == &veventq->overflow for sequence update
+	 */
+	spin_lock(&eventq->lock);
+	if (veventq->overflow.on_list) {
+		list_del(&veventq->overflow.node);
+		veventq->overflow.on_list = false;
+	}
+	list_add_tail(&vevent->node, &eventq->deliver);
+	vevent->on_list = true;
+	vevent->header.sequence = atomic_read(&veventq->sequence);
+	if (atomic_read(&veventq->sequence) == INT_MAX)
+		atomic_set(&veventq->sequence, 0);
+	else
+		atomic_inc(&veventq->sequence);
+	spin_unlock(&eventq->lock);
+
+	wake_up_interruptible(&eventq->wait_queue);
+}
+
 static inline struct iommufd_viommu *
 iommufd_get_viommu(struct iommufd_ucmd *ucmd, u32 id)
 {
 	return container_of(iommufd_get_object(ucmd->ictx, id,
 					       IOMMUFD_OBJ_VIOMMU),
 			    struct iommufd_viommu, obj);
+}
+
+static inline struct iommufd_veventq *
+iommufd_viommu_find_veventq(struct iommufd_viommu *viommu, u32 type)
+{
+	struct iommufd_veventq *veventq, *next;
+
+	lockdep_assert_held(&viommu->veventqs_rwsem);
+
+	list_for_each_entry_safe(veventq, next, &viommu->veventqs, node) {
+		if (veventq->type == type)
+			return veventq;
+	}
+	return NULL;
 }
 
 int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd);
