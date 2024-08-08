@@ -545,12 +545,64 @@ static inline int iommufd_hwpt_replace_device(struct iommufd_device *idev,
 	return iommu_group_replace_domain(idev->igroup->group, hwpt->domain);
 }
 
+struct iommufd_eventq_virq {
+	struct iommufd_eventq common;
+	struct iommufd_viommu *viommu;
+	struct workqueue_struct *irq_wq;
+	struct list_head node;
+
+	unsigned int type;
+};
+
+static inline struct iommufd_eventq_virq *
+to_eventq_virq(struct iommufd_eventq *eventq)
+{
+	return container_of(eventq, struct iommufd_eventq_virq, common);
+}
+
+static inline struct iommufd_eventq_virq *
+iommufd_get_eventq_virq(struct iommufd_ucmd *ucmd, u32 id)
+{
+	return container_of(iommufd_get_object(ucmd->ictx, id,
+					       IOMMUFD_OBJ_EVENTQ_VIRQ),
+			    struct iommufd_eventq_virq, common.obj);
+}
+
+int iommufd_eventq_virq_alloc(struct iommufd_ucmd *ucmd);
+void iommufd_eventq_virq_destroy(struct iommufd_object *obj);
+void iommufd_eventq_virq_abort(struct iommufd_object *obj);
+
+struct iommufd_virq {
+	struct iommufd_eventq_virq *eventq_virq;
+	struct list_head node;
+	ssize_t irq_len;
+};
+
+static inline int iommufd_eventq_virq_handler(struct iommufd_virq *virq)
+{
+	return iommufd_eventq_notify(&virq->eventq_virq->common, &virq->node);
+}
+
 static inline struct iommufd_viommu *
 iommufd_get_viommu(struct iommufd_ucmd *ucmd, u32 id)
 {
 	return container_of(iommufd_get_object(ucmd->ictx, id,
 					       IOMMUFD_OBJ_VIOMMU),
 			    struct iommufd_viommu, obj);
+}
+
+static inline struct iommufd_eventq_virq *
+iommufd_viommu_find_eventq_virq(struct iommufd_viommu *viommu, u32 type)
+{
+	struct iommufd_eventq_virq *eventq_virq, *next;
+
+	lockdep_assert_held(&viommu->virqs_rwsem);
+
+	list_for_each_entry_safe(eventq_virq, next, &viommu->virqs, node) {
+		if (eventq_virq->type == type)
+			return eventq_virq;
+	}
+	return NULL;
 }
 
 int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd);

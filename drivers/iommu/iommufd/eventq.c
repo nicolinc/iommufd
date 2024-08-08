@@ -341,6 +341,76 @@ static const struct iommufd_eventq_ops iommufd_eventq_iopf_ops = {
 	.write = &iommufd_eventq_iopf_fops_write,
 };
 
+/* IOMMUFD_OBJ_EVENTQ_VIRQ Functions */
+
+void iommufd_eventq_virq_abort(struct iommufd_object *obj)
+{
+	struct iommufd_eventq *eventq =
+		container_of(obj, struct iommufd_eventq, obj);
+	struct iommufd_eventq_virq *eventq_virq = to_eventq_virq(eventq);
+	struct iommufd_viommu *viommu = eventq_virq->viommu;
+	struct iommufd_virq *virq, *next;
+
+	lockdep_assert_held_write(&viommu->virqs_rwsem);
+
+	list_for_each_entry_safe(virq, next, &eventq->deliver, node) {
+		list_del(&virq->node);
+		kfree(virq);
+	}
+
+	if (eventq_virq->irq_wq)
+		destroy_workqueue(eventq_virq->irq_wq);
+	refcount_dec(&viommu->obj.users);
+	mutex_destroy(&eventq->mutex);
+	list_del(&eventq_virq->node);
+}
+
+void iommufd_eventq_virq_destroy(struct iommufd_object *obj)
+{
+	struct iommufd_eventq_virq *eventq_virq =
+		to_eventq_virq(container_of(obj, struct iommufd_eventq, obj));
+
+	down_write(&eventq_virq->viommu->virqs_rwsem);
+	iommufd_eventq_virq_abort(obj);
+	up_write(&eventq_virq->viommu->virqs_rwsem);
+}
+
+static ssize_t iommufd_eventq_virq_fops_read(struct iommufd_eventq *eventq,
+					     char __user *buf, size_t count,
+					     loff_t *ppos)
+{
+	size_t done = 0;
+	int rc = 0;
+
+	if (*ppos)
+		return -ESPIPE;
+
+	mutex_lock(&eventq->mutex);
+	while (!list_empty(&eventq->deliver) && count > done) {
+		struct iommufd_virq *virq = list_first_entry(
+			&eventq->deliver, struct iommufd_virq, node);
+		void *virq_data = (void *)virq + sizeof(*virq);
+
+		if (virq->irq_len > count - done)
+			break;
+
+		if (copy_to_user(buf + done, virq_data, virq->irq_len)) {
+			rc = -EFAULT;
+			break;
+		}
+		done += virq->irq_len;
+		list_del(&virq->node);
+		kfree(virq);
+	}
+	mutex_unlock(&eventq->mutex);
+
+	return done == 0 ? rc : done;
+}
+
+static const struct iommufd_eventq_ops iommufd_eventq_virq_ops = {
+	.read = &iommufd_eventq_virq_fops_read,
+};
+
 /* Common Event Queue Functions */
 
 static ssize_t iommufd_eventq_fops_read(struct file *filep, char __user *buf,
@@ -468,5 +538,72 @@ out_put_fdno:
 out_abort:
 	iommufd_object_abort_and_destroy(ucmd->ictx, &eventq_iopf->common.obj);
 
+	return rc;
+}
+
+int iommufd_eventq_virq_alloc(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_virq_alloc *cmd = ucmd->cmd;
+	struct iommufd_eventq_virq *eventq_virq;
+	struct iommufd_viommu *viommu;
+	int fdno;
+	int rc;
+
+	if (cmd->flags || cmd->type == IOMMU_VIRQ_TYPE_NONE)
+		return -EOPNOTSUPP;
+
+	viommu = iommufd_get_viommu(ucmd, cmd->viommu_id);
+	if (IS_ERR(viommu))
+		return PTR_ERR(viommu);
+	down_write(&viommu->virqs_rwsem);
+
+	if (iommufd_viommu_find_eventq_virq(viommu, cmd->type)) {
+		rc = -EEXIST;
+		goto out_unlock_virqs;
+	}
+
+	eventq_virq = __iommufd_object_alloc(
+		ucmd->ictx, eventq_virq, IOMMUFD_OBJ_EVENTQ_VIRQ, common.obj);
+	if (IS_ERR(eventq_virq)) {
+		rc = PTR_ERR(eventq_virq);
+		goto out_unlock_virqs;
+	}
+
+	eventq_virq->viommu = viommu;
+	eventq_virq->type = cmd->type;
+	refcount_inc(&viommu->obj.users);
+	list_add_tail(&eventq_virq->node, &viommu->virqs);
+
+	eventq_virq->irq_wq = alloc_workqueue("viommu_irq/%d", WQ_UNBOUND, 0,
+					      eventq_virq->common.obj.id);
+	if (!eventq_virq->irq_wq) {
+		rc = -ENOMEM;
+		goto out_abort;
+	}
+
+	rc = iommufd_eventq_init(&eventq_virq->common, "[iommufd-viommu-irq]",
+				 ucmd->ictx, &fdno, &iommufd_eventq_virq_ops);
+	if (rc)
+		goto out_abort;
+
+	cmd->out_virq_id = eventq_virq->common.obj.id;
+	cmd->out_virq_fd = fdno;
+	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+	if (rc)
+		goto out_put_fdno;
+
+	iommufd_object_finalize(ucmd->ictx, &eventq_virq->common.obj);
+	fd_install(fdno, eventq_virq->common.filep);
+	goto out_unlock_virqs;
+out_put_fdno:
+	put_unused_fd(fdno);
+	fput(eventq_virq->common.filep);
+	refcount_dec(&eventq_virq->common.obj.users);
+	iommufd_ctx_put(eventq_virq->common.ictx);
+out_abort:
+	iommufd_object_abort_and_destroy(ucmd->ictx, &eventq_virq->common.obj);
+out_unlock_virqs:
+	up_write(&viommu->virqs_rwsem);
+	iommufd_put_object(ucmd->ictx, &viommu->obj);
 	return rc;
 }
