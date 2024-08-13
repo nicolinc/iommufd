@@ -1779,33 +1779,6 @@ static int arm_smmu_handle_evt(struct arm_smmu_device *smmu, u64 *evt)
 		return -EOPNOTSUPP;
 	}
 
-	if (!(evt[1] & EVTQ_1_STALL))
-		return -EOPNOTSUPP;
-
-	if (evt[1] & EVTQ_1_RnW)
-		perm |= IOMMU_FAULT_PERM_READ;
-	else
-		perm |= IOMMU_FAULT_PERM_WRITE;
-
-	if (evt[1] & EVTQ_1_InD)
-		perm |= IOMMU_FAULT_PERM_EXEC;
-
-	if (evt[1] & EVTQ_1_PnU)
-		perm |= IOMMU_FAULT_PERM_PRIV;
-
-	flt->type = IOMMU_FAULT_PAGE_REQ;
-	flt->prm = (struct iommu_fault_page_request) {
-		.flags = IOMMU_FAULT_PAGE_REQUEST_LAST_PAGE,
-		.grpid = FIELD_GET(EVTQ_1_STAG, evt[1]),
-		.perm = perm,
-		.addr = FIELD_GET(EVTQ_2_ADDR, evt[2]),
-	};
-
-	if (ssid_valid) {
-		flt->prm.flags |= IOMMU_FAULT_PAGE_REQUEST_PASID_VALID;
-		flt->prm.pasid = FIELD_GET(EVTQ_0_SSID, evt[0]);
-	}
-
 	mutex_lock(&smmu->streams_mutex);
 	master = arm_smmu_find_master(smmu, sid);
 	if (!master) {
@@ -1813,7 +1786,40 @@ static int arm_smmu_handle_evt(struct arm_smmu_device *smmu, u64 *evt)
 		goto out_unlock;
 	}
 
-	ret = iommu_report_device_fault(master->dev, &fault_evt);
+	down_read(&master->vmaster_rwsem);
+	if (evt[1] & EVTQ_1_STALL) {
+		if (evt[1] & EVTQ_1_RnW)
+			perm |= IOMMU_FAULT_PERM_READ;
+		else
+			perm |= IOMMU_FAULT_PERM_WRITE;
+
+		if (evt[1] & EVTQ_1_InD)
+			perm |= IOMMU_FAULT_PERM_EXEC;
+
+		if (evt[1] & EVTQ_1_PnU)
+			perm |= IOMMU_FAULT_PERM_PRIV;
+
+		flt->type = IOMMU_FAULT_PAGE_REQ;
+		flt->prm = (struct iommu_fault_page_request){
+			.flags = IOMMU_FAULT_PAGE_REQUEST_LAST_PAGE,
+			.grpid = FIELD_GET(EVTQ_1_STAG, evt[1]),
+			.perm = perm,
+			.addr = FIELD_GET(EVTQ_2_ADDR, evt[2]),
+		};
+
+		if (ssid_valid) {
+			flt->prm.flags |= IOMMU_FAULT_PAGE_REQUEST_PASID_VALID;
+			flt->prm.pasid = FIELD_GET(EVTQ_0_SSID, evt[0]);
+		}
+
+		ret = iommu_report_device_fault(master->dev, &fault_evt);
+	} else if (master->vmaster && !(evt[1] & EVTQ_1_S2)) {
+		ret = arm_vmaster_report_event(master->vmaster, evt);
+	} else {
+		/* Unhandled events should be pinned */
+		ret = -EFAULT;
+	}
+	up_read(&master->vmaster_rwsem);
 out_unlock:
 	mutex_unlock(&smmu->streams_mutex);
 	return ret;
