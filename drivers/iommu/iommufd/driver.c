@@ -66,5 +66,44 @@ unsigned long iommufd_viommu_get_vdev_id(struct iommufd_viommu *viommu,
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_viommu_get_vdev_id, IOMMUFD);
 
+int iommufd_viommu_report_irq(struct iommufd_viommu *viommu, unsigned int type,
+			      void *irq_ptr, size_t irq_len)
+{
+	struct iommufd_eventq_virq *eventq_virq;
+	struct iommufd_virq *virq;
+	void *irq_data;
+	int rc = 0;
+
+	might_sleep();
+
+	if (!viommu)
+		return -ENODEV;
+
+	down_read(&viommu->virqs_rwsem);
+
+	eventq_virq = iommufd_viommu_find_eventq_virq(viommu, type);
+	if (!eventq_virq) {
+		rc = -EOPNOTSUPP;
+		goto out_unlock_vdev_ids;
+	}
+
+	virq = kzalloc(sizeof(*virq) + irq_len, GFP_KERNEL);
+	if (!virq) {
+		rc = -ENOMEM;
+		goto out_unlock_vdev_ids;
+	}
+	irq_data = (void *)virq + sizeof(*virq);
+	memcpy(irq_data, irq_ptr, irq_len);
+
+	virq->eventq_virq = eventq_virq;
+	virq->irq_len = irq_len;
+
+	iommufd_eventq_virq_handler(virq);
+out_unlock_vdev_ids:
+	up_read(&viommu->virqs_rwsem);
+	return rc;
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_viommu_report_irq, IOMMUFD);
+
 MODULE_DESCRIPTION("iommufd code shared with builtin modules");
 MODULE_LICENSE("GPL");
