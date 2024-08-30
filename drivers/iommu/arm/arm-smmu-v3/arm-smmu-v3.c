@@ -2162,7 +2162,16 @@ int arm_smmu_atc_inv_domain(struct arm_smmu_domain *smmu_domain,
 		if (!master->ats_enabled)
 			continue;
 
-		arm_smmu_atc_inv_to_cmd(master_domain->ssid, iova, size, &cmd);
+		if (master_domain->nested_ats_flush) {
+			/*
+			 * If a S2 used as a nesting parent is changed we have
+			 * no option but to completely flush the ATC.
+			 */
+			arm_smmu_atc_inv_to_cmd(IOMMU_NO_PASID, 0, 0, &cmd);
+		} else {
+			arm_smmu_atc_inv_to_cmd(master_domain->ssid, iova, size,
+						&cmd);
+		}
 
 		for (i = 0; i < master->num_streams; i++) {
 			cmd.atc.sid = master->streams[i].id;
@@ -2714,7 +2723,8 @@ static void arm_smmu_disable_pasid(struct arm_smmu_master *master)
 
 static struct arm_smmu_master_domain *
 arm_smmu_find_master_domain(struct arm_smmu_domain *smmu_domain,
-			    struct arm_smmu_master *master, ioasid_t ssid)
+			    struct arm_smmu_master *master, ioasid_t ssid,
+			    bool nested_ats_flush)
 {
 	struct arm_smmu_master_domain *master_domain;
 
@@ -2723,7 +2733,8 @@ arm_smmu_find_master_domain(struct arm_smmu_domain *smmu_domain,
 	list_for_each_entry(master_domain, &smmu_domain->devices,
 			    devices_elm) {
 		if (master_domain->master == master &&
-		    master_domain->ssid == ssid)
+		    master_domain->ssid == ssid &&
+		    master_domain->nested_ats_flush == nested_ats_flush)
 			return master_domain;
 	}
 	return NULL;
@@ -2754,14 +2765,18 @@ static void arm_smmu_remove_master_domain(struct arm_smmu_master *master,
 {
 	struct arm_smmu_domain *smmu_domain = to_smmu_domain_devices(domain);
 	struct arm_smmu_master_domain *master_domain;
+	bool nested_ats_flush = false;
 	unsigned long flags;
 
 	if (!smmu_domain)
 		return;
 
+	if (domain->type == IOMMU_DOMAIN_NESTED)
+		nested_ats_flush = to_smmu_nested_domain(domain)->enable_ats;
+
 	spin_lock_irqsave(&smmu_domain->devices_lock, flags);
-	master_domain = arm_smmu_find_master_domain(
-		smmu_domain, master, ssid);
+	master_domain = arm_smmu_find_master_domain(smmu_domain, master, ssid,
+						    nested_ats_flush);
 	if (master_domain) {
 		list_del(&master_domain->devices_elm);
 		kfree(master_domain);
@@ -2839,6 +2854,9 @@ static int arm_smmu_attach_prepare(struct arm_smmu_attach_state *state,
 			return -ENOMEM;
 		master_domain->master = master;
 		master_domain->ssid = state->ssid;
+		if (new_domain->type == IOMMU_DOMAIN_NESTED)
+			master_domain->nested_ats_flush =
+				to_smmu_nested_domain(new_domain)->enable_ats;
 
 		/*
 		 * During prepare we want the current smmu_domain and new
@@ -3220,8 +3238,6 @@ static int arm_smmu_attach_dev_nested(struct iommu_domain *domain,
 		.master = master,
 		.old_domain = iommu_get_domain_for_dev(dev),
 		.ssid = IOMMU_NO_PASID,
-		/* Currently invalidation of ATC is not supported */
-		.disable_ats = true,
 	};
 	struct arm_smmu_ste ste;
 	int ret;
@@ -3232,6 +3248,15 @@ static int arm_smmu_attach_dev_nested(struct iommu_domain *domain,
 		return -EBUSY;
 
 	mutex_lock(&arm_smmu_asid_lock);
+	/*
+	 * The VM has to control the actual ATS state at the PCI device because
+	 * we forward the invalidations directly from the VM. If the VM doesn't
+	 * think ATS is on it will not generate ATC flushes and the ATC will
+	 * become incoherent. Since we can't access the actual virtual PCI ATS
+	 * config bit here base this off the EATS value in the STE. If the EATS
+	 * is set then the VM must generate ATC flushes.
+	 */
+	state.disable_ats = !nested_domain->enable_ats;
 	ret = arm_smmu_attach_prepare(&state, domain);
 	if (ret) {
 		mutex_unlock(&arm_smmu_asid_lock);
@@ -3345,8 +3370,10 @@ static const struct iommu_domain_ops arm_smmu_nested_ops = {
 	.cache_invalidate_user	= arm_smmu_cache_invalidate_user,
 };
 
-static int arm_smmu_validate_vste(struct iommu_hwpt_arm_smmuv3 *arg)
+static int arm_smmu_validate_vste(struct iommu_hwpt_arm_smmuv3 *arg,
+				  bool *enable_ats)
 {
+	unsigned int eats;
 	unsigned int cfg;
 
 	if (!(arg->ste[0] & STRTAB_STE_0_V)) {
@@ -3368,6 +3395,14 @@ static int arm_smmu_validate_vste(struct iommu_hwpt_arm_smmuv3 *arg)
 	if (cfg != STRTAB_STE_0_CFG_ABORT && cfg != STRTAB_STE_0_CFG_BYPASS &&
 	    cfg != STRTAB_STE_0_CFG_S1_TRANS)
 		return -EIO;
+
+	/* Only Full ATS or ATS UR is supported */
+	eats = FIELD_GET(STRTAB_STE_1_EATS, le64_to_cpu(arg->ste[1]));
+	if (eats != STRTAB_STE_1_EATS_ABT && eats != STRTAB_STE_1_EATS_TRANS)
+		return -EIO;
+
+	if (cfg == STRTAB_STE_0_CFG_S1_TRANS)
+		*enable_ats = (eats == STRTAB_STE_1_EATS_TRANS);
 	return 0;
 }
 
@@ -3380,6 +3415,7 @@ arm_smmu_domain_alloc_nesting(struct device *dev, u32 flags,
 	struct arm_smmu_nested_domain *nested_domain;
 	struct arm_smmu_domain *smmu_parent;
 	struct iommu_hwpt_arm_smmuv3 arg;
+	bool enable_ats = false;
 	int ret;
 
 	if (flags || !(master->smmu->features & ARM_SMMU_FEAT_NESTING))
@@ -3414,7 +3450,7 @@ arm_smmu_domain_alloc_nesting(struct device *dev, u32 flags,
 	if (ret)
 		return ERR_PTR(ret);
 
-	ret = arm_smmu_validate_vste(&arg);
+	ret = arm_smmu_validate_vste(&arg, &enable_ats);
 	if (ret)
 		return ERR_PTR(ret);
 
@@ -3425,6 +3461,7 @@ arm_smmu_domain_alloc_nesting(struct device *dev, u32 flags,
 	nested_domain->domain.type = IOMMU_DOMAIN_NESTED;
 	nested_domain->domain.ops = &arm_smmu_nested_ops;
 	nested_domain->s2_parent = smmu_parent;
+	nested_domain->enable_ats = enable_ats;
 	nested_domain->ste[0] = arg.ste[0];
 	nested_domain->ste[1] = arg.ste[1] & ~cpu_to_le64(STRTAB_STE_1_EATS);
 
