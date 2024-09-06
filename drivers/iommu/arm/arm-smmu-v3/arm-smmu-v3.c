@@ -2505,8 +2505,8 @@ arm_smmu_get_step_for_sid(struct arm_smmu_device *smmu, u32 sid)
 	}
 }
 
-static void arm_smmu_install_ste_for_dev(struct arm_smmu_master *master,
-					 const struct arm_smmu_ste *target)
+void arm_smmu_install_ste_for_dev(struct arm_smmu_master *master,
+				  const struct arm_smmu_ste *target)
 {
 	int i, j;
 	struct arm_smmu_device *smmu = master->smmu;
@@ -2671,16 +2671,6 @@ static void arm_smmu_remove_master_domain(struct arm_smmu_master *master,
 	spin_unlock_irqrestore(&smmu_domain->devices_lock, flags);
 }
 
-struct arm_smmu_attach_state {
-	/* Inputs */
-	struct iommu_domain *old_domain;
-	struct arm_smmu_master *master;
-	bool cd_needs_ats;
-	ioasid_t ssid;
-	/* Resulting state */
-	bool ats_enabled;
-};
-
 /*
  * Start the sequence to attach a domain to a master. The sequence contains three
  * steps:
@@ -2701,8 +2691,8 @@ struct arm_smmu_attach_state {
  * new_domain can be a non-paging domain. In this case ATS will not be enabled,
  * and invalidations won't be tracked.
  */
-static int arm_smmu_attach_prepare(struct arm_smmu_attach_state *state,
-				   struct iommu_domain *new_domain)
+int arm_smmu_attach_prepare(struct arm_smmu_attach_state *state,
+			    struct iommu_domain *new_domain)
 {
 	struct arm_smmu_master *master = state->master;
 	struct arm_smmu_master_domain *master_domain;
@@ -2784,7 +2774,7 @@ static int arm_smmu_attach_prepare(struct arm_smmu_attach_state *state,
  * completes synchronizing the PCI device's ATC and finishes manipulating the
  * smmu_domain->devices list.
  */
-static void arm_smmu_attach_commit(struct arm_smmu_attach_state *state)
+void arm_smmu_attach_commit(struct arm_smmu_attach_state *state)
 {
 	struct arm_smmu_master *master = state->master;
 
