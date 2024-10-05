@@ -69,3 +69,10 @@ __iommufd_vdevice_alloc(struct iommufd_ctx *ictx, size_t size)
 	return container_of(obj, struct iommufd_vdevice, obj);
 }
 EXPORT_SYMBOL_NS_GPL(__iommufd_vdevice_alloc, IOMMUFD);
+
+/* Caller should lock via viommu->vdevs_rwsem with proper permission */
+struct device *vdev_to_dev(struct iommufd_vdevice *vdev)
+{
+	return vdev ? vdev->idev->dev : NULL;
+}
+EXPORT_SYMBOL_NS_GPL(vdev_to_dev, IOMMUFD);
