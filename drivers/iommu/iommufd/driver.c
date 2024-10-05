@@ -54,3 +54,10 @@ struct iommufd_vdevice *_iommufd_vdevice_alloc(struct iommufd_ctx *ictx,
 			    struct iommufd_vdevice, obj);
 }
 EXPORT_SYMBOL_NS_GPL(_iommufd_vdevice_alloc, IOMMUFD);
+
+/* Caller should xa_lock(&viommu->vdevs) to protect the return value */
+struct device *vdev_to_dev(struct iommufd_vdevice *vdev)
+{
+	return vdev ? vdev->idev->dev : NULL;
+}
+EXPORT_SYMBOL_NS_GPL(vdev_to_dev, IOMMUFD);
