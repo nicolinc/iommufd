@@ -300,7 +300,9 @@ iommufd_hwpt_nested_alloc_for_viommu(struct iommufd_viommu *viommu,
 	}
 	hwpt->domain->owner = viommu->iommu_dev->ops;
 
-	if (WARN_ON_ONCE(hwpt->domain->type != IOMMU_DOMAIN_NESTED)) {
+	if (WARN_ON_ONCE(hwpt->domain->type != IOMMU_DOMAIN_NESTED ||
+			 (!viommu->ops->cache_invalidate &&
+			  !hwpt->domain->ops->cache_invalidate_user))) {
 		rc = -EINVAL;
 		goto out_abort;
 	}
