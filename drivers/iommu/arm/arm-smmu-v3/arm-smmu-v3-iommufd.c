@@ -36,14 +36,15 @@ arm_smmu_get_msi_mapping_domain(struct iommu_domain *domain)
 	struct arm_smmu_nested_domain *nested_domain =
 		container_of(domain, struct arm_smmu_nested_domain, domain);
 
-	return &nested_domain->s2_parent->domain;
+	return &nested_domain->vsmmu->s2_parent->domain;
 }
 
 static void arm_smmu_make_nested_cd_table_ste(
 	struct arm_smmu_ste *target, struct arm_smmu_master *master,
 	struct arm_smmu_nested_domain *nested_domain, bool ats_enabled)
 {
-	arm_smmu_make_s2_domain_ste(target, master, nested_domain->s2_parent,
+	arm_smmu_make_s2_domain_ste(target, master,
+				    nested_domain->vsmmu->s2_parent,
 				    ats_enabled);
 
 	target->data[0] = cpu_to_le64(STRTAB_STE_0_V |
@@ -84,7 +85,8 @@ static void arm_smmu_make_nested_domain_ste(
 		break;
 	case STRTAB_STE_0_CFG_BYPASS:
 		arm_smmu_make_s2_domain_ste(
-			target, master, nested_domain->s2_parent, ats_enabled);
+			target, master, nested_domain->vsmmu->s2_parent,
+			ats_enabled);
 		break;
 	case STRTAB_STE_0_CFG_ABORT:
 	default:
@@ -109,7 +111,7 @@ static int arm_smmu_attach_dev_nested(struct iommu_domain *domain,
 	struct arm_smmu_ste ste;
 	int ret;
 
-	if (nested_domain->s2_parent->smmu != master->smmu)
+	if (nested_domain->vsmmu->smmu != master->smmu)
 		return -EINVAL;
 	if (arm_smmu_ssids_in_use(&master->cd_table))
 		return -EBUSY;
@@ -164,8 +166,10 @@ static int arm_smmu_validate_vste(struct iommu_hwpt_arm_smmuv3 *arg)
 struct iommu_domain *
 arm_smmu_domain_alloc_nesting(struct device *dev, u32 flags,
 			      struct iommu_domain *parent,
+			      struct iommufd_viommu *viommu,
 			      const struct iommu_user_data *user_data)
 {
+	struct arm_vsmmu *vsmmu = container_of(viommu, struct arm_vsmmu, core);
 	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
 	struct arm_smmu_nested_domain *nested_domain;
 	struct arm_smmu_domain *smmu_parent;
@@ -181,6 +185,10 @@ arm_smmu_domain_alloc_nesting(struct device *dev, u32 flags,
 	 */
 	if (!arm_smmu_master_canwbs(master) &&
 	    !(master->smmu->features & ARM_SMMU_FEAT_S2FWB))
+		return ERR_PTR(-EOPNOTSUPP);
+
+	/* Driver only supports nesting with the vIOMMU infrastructure */
+	if (!viommu)
 		return ERR_PTR(-EOPNOTSUPP);
 
 	/*
@@ -206,9 +214,33 @@ arm_smmu_domain_alloc_nesting(struct device *dev, u32 flags,
 
 	nested_domain->domain.type = IOMMU_DOMAIN_NESTED;
 	nested_domain->domain.ops = &arm_smmu_nested_ops;
-	nested_domain->s2_parent = smmu_parent;
+	nested_domain->vsmmu = vsmmu;
 	nested_domain->ste[0] = arg.ste[0];
 	nested_domain->ste[1] = arg.ste[1] & ~cpu_to_le64(STRTAB_STE_1_EATS);
 
 	return &nested_domain->domain;
+}
+
+struct iommufd_viommu *
+arm_vsmmu_alloc(struct iommu_device *iommu_dev, struct iommu_domain *parent,
+		struct iommufd_ctx *ictx, unsigned int viommu_type)
+{
+	struct arm_smmu_device *smmu =
+		container_of(iommu_dev, struct arm_smmu_device, iommu);
+	struct arm_smmu_domain *s2_parent = to_smmu_domain(parent);
+	struct arm_vsmmu *vsmmu;
+
+	if (viommu_type != IOMMU_VIOMMU_TYPE_ARM_SMMUV3)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	vsmmu = iommufd_viommu_alloc(ictx, arm_vsmmu, core, NULL);
+	if (IS_ERR(vsmmu))
+		return ERR_CAST(vsmmu);
+
+	vsmmu->smmu = smmu;
+	vsmmu->s2_parent = s2_parent;
+	/* FIXME Move VMID allocation from the S2 domain allocation over here */
+	vsmmu->vmid = s2_parent->s2_cfg.vmid;
+
+	return &vsmmu->core;
 }
