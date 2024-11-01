@@ -63,6 +63,14 @@ Following IOMMUFD objects are exposed to userspace:
   space usually has mappings from guest-level I/O virtual addresses to guest-
   level physical addresses.
 
+- IOMMUFD_OBJ_EVENTQ_IOPF, representing a software queue for an HWPT_NESTED
+  reporting IO Page Fault using the IOMMU HW's PRI (Page Request Interface).
+  This queue object provides user space an FD to poll the page fault events
+  and also to respond to those events. An EVENTQ_IOPF object must be created
+  first to get a fault_id that could be then used to allocate an HWPT_NESTED
+  via the IOMMU_HWPT_ALLOC command setting IOMMU_HWPT_FAULT_ID_VALID set in
+  its flags field.
+
 - IOMMUFD_OBJ_VIOMMU, representing a slice of the physical IOMMU instance,
   passed to or shared with a VM. It may be some HW-accelerated virtualization
   features and some SW resources used by the VM. For examples:
@@ -106,6 +114,15 @@ Following IOMMUFD objects are exposed to userspace:
   to forward all the device information in a VM, when it connects a device to a
   vIOMMU, which is a separate ioctl call from attaching the same device to an
   HWPT_PAGING that the vIOMMU holds.
+
+- IOMMUFD_OBJ_EVENTQ_VIRQ, representing a software queue for IOMMUFD_OBJ_VIOMMU
+  reporting its non-affiliated events, such as translation faults occurred to a
+  nested stage-1 and HW-specific events/irqs e.g. events to invalidation queues
+  that are assigned to VMs via vIOMMUs. This queue object provides user space an
+  FD to poll the vIOMMU events. A vIOMMU object must be created first to get its
+  viommu_id that could be then used to allocate an EVENTQ_VIRQ. Each vIOMMU can
+  support multiple types of EVENTQ_VIRQs, but is confined to one EVENTQ_VIRQ per
+  vIRQ type.
 
 All user-visible objects are destroyed via the IOMMU_DESTROY uAPI.
 
@@ -249,8 +266,10 @@ User visible objects are backed by following datastructures:
 - iommufd_device for IOMMUFD_OBJ_DEVICE.
 - iommufd_hwpt_paging for IOMMUFD_OBJ_HWPT_PAGING.
 - iommufd_hwpt_nested for IOMMUFD_OBJ_HWPT_NESTED.
+- iommufd_eventq_iopf for IOMMUFD_OBJ_EVENTQ_IOPF.
 - iommufd_viommu for IOMMUFD_OBJ_VIOMMU.
 - iommufd_vdevice for IOMMUFD_OBJ_VDEVICE.
+- iommufd_eventq_virq for IOMMUFD_OBJ_EVENTQ_VIRQ.
 
 Several terminologies when looking at these datastructures:
 
