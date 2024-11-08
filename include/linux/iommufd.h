@@ -101,6 +101,14 @@ struct iommufd_viommu {
 	unsigned int type;
 };
 
+struct iommufd_vdevice {
+	struct iommufd_object obj;
+	struct iommufd_ctx *ictx;
+	struct iommufd_viommu *viommu;
+	struct device *dev;
+	u64 id; /* per-vIOMMU virtual ID */
+};
+
 /**
  * struct iommufd_viommu_ops - vIOMMU specific operations
  * @destroy: Clean up all driver-specific parts of an iommufd_viommu. The memory
@@ -118,6 +126,12 @@ struct iommufd_viommu {
  *                    The data structure of the array entry must be defined in
  *                    include/uapi/linux/iommufd.h
  * @supports_veventq: Whether the vIOMMU supports a given vEVENTQ type
+ * @vdevice_alloc: Allocate a vDEVICE object and init its driver-level structure
+ *                 or HW procedure. Note that the core-level structure is filled
+ *                 by the iommufd core after calling this op
+ * @vdevice_destroy: Clean up all driver-specific parts of an iommufd_vdevice. The
+ *                   memory of the vDEVICE will be free-ed by iommufd core after
+ *                   calling this op
  */
 struct iommufd_viommu_ops {
 	void (*destroy)(struct iommufd_viommu *viommu);
@@ -127,6 +141,9 @@ struct iommufd_viommu_ops {
 	int (*cache_invalidate)(struct iommufd_viommu *viommu,
 				struct iommu_user_data_array *array);
 	bool (*supports_veventq)(unsigned int type);
+	struct iommufd_vdevice *(*vdevice_alloc)(struct iommufd_viommu *viommu,
+						 struct device *dev, u64 id);
+	void (*vdevice_destroy)(struct iommufd_vdevice *vdev);
 };
 
 #if IS_ENABLED(CONFIG_IOMMUFD)
@@ -247,6 +264,21 @@ static inline int iommufd_viommu_report_event(struct iommufd_viommu *viommu,
 			ictx, sizeof(drv_struct), IOMMUFD_OBJ_VIOMMU);         \
 		if (!IS_ERR(ret))                                              \
 			ret->member.ops = viommu_ops;                          \
+		ret;                                                           \
+	})
+
+#define iommufd_vdevice_alloc(viommu, drv_struct, member)                      \
+	({                                                                     \
+		drv_struct *ret;                                               \
+									       \
+		static_assert(__same_type(struct iommufd_viommu, *viommu));    \
+		static_assert(__same_type(struct iommufd_vdevice,              \
+					  ((drv_struct *)NULL)->member));      \
+		static_assert(offsetof(drv_struct, member.obj) == 0);          \
+		ret = (drv_struct *)_iommufd_object_alloc(                     \
+			viommu->ictx, sizeof(drv_struct), IOMMUFD_OBJ_VDEVICE);\
+		if (!IS_ERR(ret))                                              \
+			ret->member.viommu = viommu;                           \
 		ret;                                                           \
 	})
 
