@@ -1042,10 +1042,12 @@ struct iommu_ioas_change_process {
  * enum iommu_virq_type - Virtual IRQ Type
  * @IOMMU_VIRQ_TYPE_DEFAULT: Reserved for future use
  * @IOMMU_VIRQ_TYPE_ARM_SMMUV3: ARM SMMUv3 Virtual Event
+ * @IOMMU_VIRQ_TYPE_TEGRA241_CMDQV: NVIDIA Tegra241 CMDQV Extension IRQ
  */
 enum iommu_virq_type {
 	IOMMU_VIRQ_TYPE_DEFAULT = 0,
 	IOMMU_VIRQ_TYPE_ARM_SMMUV3 = 1,
+	IOMMU_VIRQ_TYPE_TEGRA241_CMDQV = 2,
 };
 
 /**
@@ -1059,6 +1061,19 @@ enum iommu_virq_type {
  */
 struct iommu_virq_arm_smmuv3 {
 	__aligned_le64 evt[4];
+};
+
+/**
+ * struct iommu_virq_tegra241_cmdqv - Tegra241 CMDQV Virtual IRQ
+ *                                    (IOMMU_VIRQ_TYPE_TEGRA241_CMDQV)
+ * @lvcmdq_err_map: 128-bit logical vcmdq error map, little-endian.
+ *                  (Refer to register LVCMDQ_ERR_MAPs per VINTF )
+ *
+ * The 128-bit register values from HW exclusively reflect the error bits for a
+ * Virtual Interface represented by a vIOMMU object. Read and report directly.
+ */
+struct iommu_virq_tegra241_cmdqv {
+	__aligned_le64 lvcmdq_err_map[2];
 };
 
 /**
