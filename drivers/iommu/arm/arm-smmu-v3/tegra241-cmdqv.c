@@ -292,6 +292,20 @@ static inline int vcmdq_write_config(struct tegra241_vcmdq *vcmdq, u32 regval)
 
 /* ISR Functions */
 
+static void tegra241_vintf_user_handle_error(struct tegra241_vintf *vintf)
+{
+	struct iommufd_viommu *viommu = &vintf->vsmmu.core;
+	struct iommu_vevent_tegra241_cmdqv vevent_data;
+	int i;
+
+	for (i = 0; i < LVCMDQ_ERR_MAP_NUM_64; i++)
+		vevent_data.lvcmdq_err_map[i] =
+			readq_relaxed(REG_VINTF(vintf, LVCMDQ_ERR_MAP_64(i)));
+
+	iommufd_viommu_report_event(viommu, IOMMU_VEVENTQ_TYPE_TEGRA241_CMDQV,
+				    &vevent_data, sizeof(vevent_data));
+}
+
 static void tegra241_vintf0_handle_error(struct tegra241_vintf *vintf)
 {
 	int i;
@@ -335,6 +349,14 @@ static irqreturn_t tegra241_cmdqv_isr(int irq, void *devid)
 	if (vintf_map & BIT_ULL(0)) {
 		tegra241_vintf0_handle_error(cmdqv->vintfs[0]);
 		vintf_map &= ~BIT_ULL(0);
+	}
+
+	/* Handle other user VINTFs and their LVCMDQs */
+	while (vintf_map) {
+		unsigned long idx = __ffs64(vintf_map);
+
+		tegra241_vintf_user_handle_error(cmdqv->vintfs[idx]);
+		vintf_map &= ~BIT_ULL(idx);
 	}
 
 	return IRQ_HANDLED;
@@ -1136,6 +1158,12 @@ static void tegra241_cmdqv_vdevice_destroy(struct iommufd_vdevice *vdev)
 	/* IOMMUFD core frees the memory of slot and vdev */
 }
 
+static bool tegra241_cmdqv_supports_veventq(unsigned int type)
+{
+	return type == IOMMU_VEVENTQ_TYPE_ARM_SMMUV3 ||
+	       type == IOMMU_VEVENTQ_TYPE_TEGRA241_CMDQV;
+}
+
 static struct iommufd_viommu_ops tegra241_cmdqv_viommu_ops = {
 	.destroy = tegra241_cmdqv_viommu_destroy,
 	.alloc_domain_nested = arm_vsmmu_alloc_domain_nested,
@@ -1144,6 +1172,7 @@ static struct iommufd_viommu_ops tegra241_cmdqv_viommu_ops = {
 	.vdevice_destroy = tegra241_cmdqv_vdevice_destroy,
 	.vcmdq_alloc = tegra241_cmdqv_vcmdq_alloc,
 	.vcmdq_free = tegra241_cmdqv_vcmdq_free,
+	.supports_veventq = tegra241_cmdqv_supports_veventq,
 };
 
 static struct arm_vsmmu *
