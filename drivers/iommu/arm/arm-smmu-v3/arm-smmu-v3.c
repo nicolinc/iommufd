@@ -2345,6 +2345,11 @@ static bool arm_smmu_enforce_cache_coherency(struct iommu_domain *domain)
 	return ret;
 }
 
+static bool arm_smmu_enforce_sw_msi(struct iommu_domain *domain)
+{
+	return true;
+}
+
 struct arm_smmu_domain *arm_smmu_domain_alloc(void)
 {
 	struct arm_smmu_domain *smmu_domain;
@@ -3570,6 +3575,7 @@ static struct iommu_ops arm_smmu_ops = {
 	.default_domain_ops = &(const struct iommu_domain_ops) {
 		.attach_dev		= arm_smmu_attach_dev,
 		.enforce_cache_coherency = arm_smmu_enforce_cache_coherency,
+		.enforce_sw_msi		= arm_smmu_enforce_sw_msi,
 		.set_dev_pasid		= arm_smmu_s1_set_dev_pasid,
 		.map_pages		= arm_smmu_map_pages,
 		.unmap_pages		= arm_smmu_unmap_pages,

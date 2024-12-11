@@ -425,6 +425,10 @@ int iommu_get_msi_cookie(struct iommu_domain *domain, dma_addr_t base)
 	if (domain->type != IOMMU_DOMAIN_UNMANAGED)
 		return -EINVAL;
 
+	if (!domain->ops->enforce_sw_msi ||
+	    !domain->ops->enforce_sw_msi(domain))
+		return -EINVAL;
+
 	if (domain->iova_cookie)
 		return -EEXIST;
 
