@@ -288,6 +288,8 @@ static int iommufd_option(struct iommufd_ucmd *ucmd)
 		rc = iommufd_option_rlimit_mode(cmd, ucmd->ictx);
 		break;
 	case IOMMU_OPTION_HUGE_PAGES:
+	case IOMMU_OPTION_SW_MSI_START:
+	case IOMMU_OPTION_SW_MSI_SIZE:
 		rc = iommufd_ioas_option(ucmd);
 		break;
 	default:

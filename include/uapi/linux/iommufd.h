@@ -294,7 +294,9 @@ struct iommu_ioas_unmap {
 
 /**
  * enum iommufd_option - ioctl(IOMMU_OPTION_RLIMIT_MODE) and
- *                       ioctl(IOMMU_OPTION_HUGE_PAGES)
+ *                       ioctl(IOMMU_OPTION_HUGE_PAGES) and
+ *                       ioctl(IOMMU_OPTION_SW_MSI_START) and
+ *                       ioctl(IOMMU_OPTION_SW_MSI_SIZE)
  * @IOMMU_OPTION_RLIMIT_MODE:
  *    Change how RLIMIT_MEMLOCK accounting works. The caller must have privilege
  *    to invoke this. Value 0 (default) is user based accouting, 1 uses process
@@ -304,10 +306,20 @@ struct iommu_ioas_unmap {
  *    iommu mappings. Value 0 disables combining, everything is mapped to
  *    PAGE_SIZE. This can be useful for benchmarking.  This is a per-IOAS
  *    option, the object_id must be the IOAS ID.
+ * @IOMMU_OPTION_SW_MSI_START:
+ *    Change the base address of the IOMMU mapping region for MSI doorbell(s).
+ *    This is a per-IOAS option, the object_id must be the IOAS ID.
+ * @IOMMU_OPTION_SW_MSI_SIZE:
+ *    Change the size of the IOMMU mapping region for MSI doorbell(s). This is
+ *    a per-IOAS option, the object_id must be the IOAS ID.
  */
 enum iommufd_option {
 	IOMMU_OPTION_RLIMIT_MODE = 0,
 	IOMMU_OPTION_HUGE_PAGES = 1,
+#define IOMMUFD_SW_MSI_START_DEFAULT 0x08000000
+	IOMMU_OPTION_SW_MSI_START = 2,
+#define IOMMUFD_SW_MSI_SIZE_DEFAULT 0x00100000
+	IOMMU_OPTION_SW_MSI_SIZE = 3,
 };
 
 /**

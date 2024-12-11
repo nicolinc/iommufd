@@ -890,6 +890,9 @@ void iopt_init_table(struct io_pagetable *iopt)
 	 * restriction.
 	 */
 	iopt->iova_alignment = 1;
+
+	iopt->sw_msi_start = IOMMUFD_SW_MSI_START_DEFAULT;
+	iopt->sw_msi_size = IOMMUFD_SW_MSI_SIZE_DEFAULT;
 }
 
 void iopt_destroy_table(struct io_pagetable *iopt)
@@ -1068,6 +1071,7 @@ int iopt_table_add_domain(struct io_pagetable *iopt,
 			  struct iommu_domain *domain)
 {
 	const struct iommu_domain_geometry *geometry = &domain->geometry;
+	const struct iommu_domain_ops *ops = domain->ops;
 	struct iommu_domain *iter_domain;
 	unsigned int new_iova_alignment;
 	unsigned long index;
@@ -1114,6 +1118,13 @@ int iopt_table_add_domain(struct io_pagetable *iopt,
 	if (geometry->aperture_end != ULONG_MAX) {
 		rc = iopt_reserve_iova(iopt, geometry->aperture_end + 1,
 				       ULONG_MAX, domain);
+		if (rc)
+			goto out_reserved;
+	}
+	if (ops->enforce_sw_msi && ops->enforce_sw_msi(domain) &&
+	    iopt->sw_msi_start && iopt->sw_msi_size) {
+		rc = iopt_reserve_iova(iopt, iopt->sw_msi_start,
+				       iopt->sw_msi_size, domain);
 		if (rc)
 			goto out_reserved;
 	}

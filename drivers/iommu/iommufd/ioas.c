@@ -639,6 +639,32 @@ static int iommufd_ioas_option_huge_pages(struct iommu_option *cmd,
 	return -EOPNOTSUPP;
 }
 
+static int iommufd_ioas_option_sw_msi_start(struct iommu_option *cmd,
+					    struct iommufd_ioas *ioas)
+{
+	if (cmd->op == IOMMU_OPTION_OP_GET) {
+		cmd->val64 = ioas->iopt.sw_msi_start;
+		return 0;
+	}
+	if (cmd->op == IOMMU_OPTION_OP_SET) {
+		ioas->iopt.sw_msi_start = cmd->val64;
+	}
+	return -EOPNOTSUPP;
+}
+
+static int iommufd_ioas_option_sw_msi_size(struct iommu_option *cmd,
+					   struct iommufd_ioas *ioas)
+{
+	if (cmd->op == IOMMU_OPTION_OP_GET) {
+		cmd->val64 = ioas->iopt.sw_msi_size;
+		return 0;
+	}
+	if (cmd->op == IOMMU_OPTION_OP_SET) {
+		ioas->iopt.sw_msi_size = cmd->val64;
+	}
+	return -EOPNOTSUPP;
+}
+
 int iommufd_ioas_option(struct iommufd_ucmd *ucmd)
 {
 	struct iommu_option *cmd = ucmd->cmd;
@@ -655,6 +681,12 @@ int iommufd_ioas_option(struct iommufd_ucmd *ucmd)
 	switch (cmd->option_id) {
 	case IOMMU_OPTION_HUGE_PAGES:
 		rc = iommufd_ioas_option_huge_pages(cmd, ioas);
+		break;
+	case IOMMU_OPTION_SW_MSI_START:
+		rc = iommufd_ioas_option_sw_msi_start(cmd, ioas);
+		break;
+	case IOMMU_OPTION_SW_MSI_SIZE:
+		rc = iommufd_ioas_option_sw_msi_size(cmd, ioas);
 		break;
 	default:
 		rc = -EOPNOTSUPP;

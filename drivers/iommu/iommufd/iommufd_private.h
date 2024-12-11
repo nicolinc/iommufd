@@ -76,6 +76,10 @@ struct io_pagetable {
 	struct rb_root_cached reserved_itree;
 	u8 disable_large_pages;
 	unsigned long iova_alignment;
+
+	/* For IOMMU that requires an SW_MSI region to map MSI doorbell(s) */
+	phys_addr_t sw_msi_start;
+	size_t sw_msi_size;
 };
 
 void iopt_init_table(struct io_pagetable *iopt);
