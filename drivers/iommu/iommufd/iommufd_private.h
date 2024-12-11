@@ -423,6 +423,9 @@ struct iommufd_device {
 	/* protect iopf_enabled counter */
 	struct mutex iopf_lock;
 	unsigned int iopf_enabled;
+	/* User-programmed SW_MSI region, to override igroup->sw_msi_start */
+	phys_addr_t sw_msi_start;
+	size_t sw_msi_size;
 };
 
 static inline struct iommufd_device *
@@ -435,6 +438,7 @@ iommufd_get_device(struct iommufd_ucmd *ucmd, u32 id)
 
 void iommufd_device_destroy(struct iommufd_object *obj);
 int iommufd_get_hw_info(struct iommufd_ucmd *ucmd);
+int iommufd_device_option(struct iommufd_ucmd *ucmd);
 
 struct iommufd_access {
 	struct iommufd_object obj;

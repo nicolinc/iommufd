@@ -449,6 +449,9 @@ iommufd_device_attach_reserved_iova(struct iommufd_device *idev,
 
 	lockdep_assert_held(&idev->igroup->lock);
 
+	/* Override it with a user-programmed SW_MSI region */
+	if (idev->sw_msi_size && idev->sw_msi_start != PHYS_ADDR_MAX)
+		idev->igroup->sw_msi_start = idev->sw_msi_start;
 	rc = iopt_table_enforce_dev_resv_regions(&hwpt_paging->ioas->iopt,
 						 idev->dev,
 						 &idev->igroup->sw_msi_start);
@@ -1449,6 +1452,78 @@ int iommufd_get_hw_info(struct iommufd_ucmd *ucmd)
 out_free:
 	kfree(data);
 out_put:
+	iommufd_put_object(ucmd->ictx, &idev->obj);
+	return rc;
+}
+
+static int iommufd_device_option_sw_msi_start(struct iommu_option *cmd,
+					      struct iommufd_device *idev)
+{
+	lockdep_assert_held(&idev->igroup->lock);
+
+	if (cmd->op == IOMMU_OPTION_OP_GET) {
+		cmd->val64 = idev->sw_msi_start;
+		return 0;
+	}
+	if (cmd->op == IOMMU_OPTION_OP_SET) {
+		idev->sw_msi_start = cmd->val64;
+		return 0;
+	}
+	return -EOPNOTSUPP;
+}
+
+static int iommufd_device_option_sw_msi_size(struct iommu_option *cmd,
+					     struct iommufd_device *idev)
+{
+	lockdep_assert_held(&idev->igroup->lock);
+
+	if (cmd->op == IOMMU_OPTION_OP_GET) {
+		cmd->val64 = idev->sw_msi_size;
+		return 0;
+	}
+	if (cmd->op == IOMMU_OPTION_OP_SET) {
+		idev->sw_msi_size = cmd->val64;
+		return 0;
+	}
+	return -EOPNOTSUPP;
+}
+
+int iommufd_device_option(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_option *cmd = ucmd->cmd;
+	struct iommufd_device *idev;
+	int rc = 0;
+
+	if (cmd->__reserved)
+		return -EOPNOTSUPP;
+
+	idev = iommufd_get_device(ucmd, cmd->object_id);
+	if (IS_ERR(idev))
+		return PTR_ERR(idev);
+	mutex_lock(&idev->igroup->lock);
+
+	/*
+	 * Once the device is attached to an hwpt, the SW_MSI region is enforced
+	 * to the attached hwpt, so no point in allowing user space to change it
+	 */
+	if (cmd->op == IOMMU_OPTION_OP_SET && idev->igroup->hwpt) {
+		rc = -EBUSY;
+		goto out_unlock;
+	}
+
+	switch (cmd->option_id) {
+	case IOMMU_OPTION_SW_MSI_START:
+		rc = iommufd_device_option_sw_msi_start(cmd, idev);
+		break;
+	case IOMMU_OPTION_SW_MSI_SIZE:
+		rc = iommufd_device_option_sw_msi_size(cmd, idev);
+		break;
+	default:
+		rc = -EOPNOTSUPP;
+	}
+
+out_unlock:
+	mutex_unlock(&idev->igroup->lock);
 	iommufd_put_object(ucmd->ictx, &idev->obj);
 	return rc;
 }
