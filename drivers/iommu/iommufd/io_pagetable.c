@@ -1434,13 +1434,10 @@ void iopt_remove_access(struct io_pagetable *iopt,
 
 /* Narrow the valid_iova_itree to include reserved ranges from a device. */
 int iopt_table_enforce_dev_resv_regions(struct io_pagetable *iopt,
-					struct device *dev,
-					phys_addr_t *sw_msi_start)
+					struct device *dev)
 {
 	struct iommu_resv_region *resv;
 	LIST_HEAD(resv_regions);
-	unsigned int num_hw_msi = 0;
-	unsigned int num_sw_msi = 0;
 	int rc;
 
 	if (iommufd_should_fail())
@@ -1451,26 +1448,14 @@ int iopt_table_enforce_dev_resv_regions(struct io_pagetable *iopt,
 	iommu_get_resv_regions(dev, &resv_regions);
 
 	list_for_each_entry(resv, &resv_regions, list) {
-		if (resv->type == IOMMU_RESV_DIRECT_RELAXABLE)
+		if (resv->type == IOMMU_RESV_DIRECT_RELAXABLE ||
+		    resv->type == IOMMU_RESV_SW_MSI)
 			continue;
-
-		if (sw_msi_start && resv->type == IOMMU_RESV_MSI)
-			num_hw_msi++;
-		if (sw_msi_start && resv->type == IOMMU_RESV_SW_MSI) {
-			*sw_msi_start = resv->start;
-			num_sw_msi++;
-		}
 
 		rc = iopt_reserve_iova(iopt, resv->start,
 				       resv->length - 1 + resv->start, dev);
 		if (rc)
 			goto out_reserved;
-	}
-
-	/* Drivers must offer sane combinations of regions */
-	if (WARN_ON(num_sw_msi && num_hw_msi) || WARN_ON(num_sw_msi > 1)) {
-		rc = -EINVAL;
-		goto out_reserved;
 	}
 
 	rc = 0;
