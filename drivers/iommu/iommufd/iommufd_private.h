@@ -404,7 +404,6 @@ struct iommufd_group {
 	struct iommufd_hw_pagetable *hwpt;
 	struct list_head device_list;
 	struct iommufd_sw_msi_maps required_sw_msi;
-	phys_addr_t sw_msi_start;
 };
 
 /*
@@ -423,6 +422,7 @@ struct iommufd_device {
 	/* protect iopf_enabled counter */
 	struct mutex iopf_lock;
 	unsigned int iopf_enabled;
+	phys_addr_t sw_msi_start;
 };
 
 static inline struct iommufd_device *
