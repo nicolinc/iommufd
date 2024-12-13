@@ -334,6 +334,57 @@ TEST_F(change_process, basic)
 	ASSERT_EQ(child, waitpid(child, NULL, 0));
 }
 
+FIXTURE(iommufd_sw_msi)
+{
+	int fd;
+	uint32_t ioas_id;
+	uint32_t stdev_id[2];
+	uint32_t idev_id[2];
+};
+
+FIXTURE_SETUP(iommufd_sw_msi)
+{
+	self->fd = open("/dev/iommu", O_RDWR);
+	ASSERT_NE(-1, self->fd);
+
+	test_ioctl_ioas_alloc(&self->ioas_id);
+	test_cmd_mock_domain(self->ioas_id, &self->stdev_id[0], NULL,
+			     &self->idev_id[0]);
+	test_cmd_mock_domain_flags(self->ioas_id, MOCK_FLAGS_DEVICE_NO_ATTACH,
+				   &self->stdev_id[1], NULL, &self->idev_id[1]);
+}
+
+FIXTURE_TEARDOWN(iommufd_sw_msi)
+{
+	test_ioctl_destroy(self->stdev_id[0]);
+	test_ioctl_destroy(self->stdev_id[1]);
+	teardown_iommufd(self->fd, _metadata);
+}
+
+TEST_F(iommufd_sw_msi, basic)
+{
+	struct iommu_option cmd = {
+		.size = sizeof(cmd),
+		.op = IOMMU_OPTION_OP_SET,
+	};
+	/* Negative case: cannot SET_OPTION if device is attached */
+	cmd.object_id = self->idev_id[0];
+	cmd.option_id = IOMMU_OPTION_SW_MSI_START;
+	cmd.val64 = 0xffffffff;
+	EXPECT_ERRNO(EBUSY, ioctl(self->fd, IOMMU_OPTION, &cmd));
+	cmd.option_id = IOMMU_OPTION_SW_MSI_SIZE;
+	cmd.val64 = 2;
+	EXPECT_ERRNO(EBUSY, ioctl(self->fd, IOMMU_OPTION, &cmd));
+
+	cmd.object_id = self->idev_id[1];
+	cmd.option_id = IOMMU_OPTION_SW_MSI_START;
+	cmd.val64 = 0xffffffff;
+	ASSERT_EQ(0, ioctl(self->fd, IOMMU_OPTION, &cmd));
+	cmd.option_id = IOMMU_OPTION_SW_MSI_SIZE;
+	cmd.val64 = 2;
+	ASSERT_EQ(0, ioctl(self->fd, IOMMU_OPTION, &cmd));
+}
+
 FIXTURE(iommufd_ioas)
 {
 	int fd;

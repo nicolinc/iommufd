@@ -850,11 +850,13 @@ static void mock_dev_release(struct device *dev)
 
 static struct mock_dev *mock_dev_create(unsigned long dev_flags)
 {
+	const u32 SUPPORTED_FLAGS = MOCK_FLAGS_DEVICE_NO_DIRTY |
+				    MOCK_FLAGS_DEVICE_HUGE_IOVA |
+				    MOCK_FLAGS_DEVICE_NO_ATTACH;
 	struct mock_dev *mdev;
 	int rc, i;
 
-	if (dev_flags &
-	    ~(MOCK_FLAGS_DEVICE_NO_DIRTY | MOCK_FLAGS_DEVICE_HUGE_IOVA))
+	if (dev_flags & ~SUPPORTED_FLAGS)
 		return ERR_PTR(-EINVAL);
 
 	mdev = kzalloc(sizeof(*mdev), GFP_KERNEL);
@@ -932,9 +934,13 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 	}
 	sobj->idev.idev = idev;
 
-	rc = iommufd_device_attach(idev, &pt_id);
-	if (rc)
-		goto out_unbind;
+	if (dev_flags & MOCK_FLAGS_DEVICE_NO_ATTACH) {
+		pt_id = 0;
+	} else {
+		rc = iommufd_device_attach(idev, &pt_id);
+		if (rc)
+			goto out_unbind;
+	}
 
 	/* Userspace must destroy the device_id to destroy the object */
 	cmd->mock_domain.out_hwpt_id = pt_id;
@@ -947,7 +953,8 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 	return 0;
 
 out_detach:
-	iommufd_device_detach(idev);
+	if (!(dev_flags & MOCK_FLAGS_DEVICE_NO_ATTACH))
+		iommufd_device_detach(idev);
 out_unbind:
 	iommufd_device_unbind(idev);
 out_mdev:
@@ -1614,7 +1621,8 @@ void iommufd_selftest_destroy(struct iommufd_object *obj)
 
 	switch (sobj->type) {
 	case TYPE_IDEV:
-		iommufd_device_detach(sobj->idev.idev);
+		if (!(sobj->idev.mock_dev->flags & MOCK_FLAGS_DEVICE_NO_ATTACH))
+			iommufd_device_detach(sobj->idev.idev);
 		iommufd_device_unbind(sobj->idev.idev);
 		mock_dev_destroy(sobj->idev.mock_dev);
 		break;
