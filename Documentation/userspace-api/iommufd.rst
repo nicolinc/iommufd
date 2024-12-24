@@ -123,6 +123,16 @@ Following IOMMUFD objects are exposed to userspace:
   used to allocate a VIRQ. Each vIOMMU can support multiple types of VIRQs, but
   is confined to one VIRQ per vIRQ type.
 
+- IOMMUFD_OBJ_VQUEUE, representing a hardware queue as a subset of a vIOMMU's
+  virtualization feature for a VM to directly execute guest-issued commands to
+  invalidate HW cache entries holding the mappings or translations of a guest-
+  owned stage-1 page table. Along with this queue object, iommufd provides the
+  user space a new mmap interface that the VMM can mmap a physical MMIO region
+  from the host physical addres space to a guest physical addres space. To use
+  this mmap interface, the VMM must define an IOMMU specific driver structure
+  to ask for a pair of VMA info (vm_pgoff/size) to do mmap after a vQUEUE gets
+  allocated.
+
 All user-visible objects are destroyed via the IOMMU_DESTROY uAPI.
 
 The diagrams below show relationships between user-visible objects and kernel
@@ -269,6 +279,7 @@ User visible objects are backed by following datastructures:
 - iommufd_viommu for IOMMUFD_OBJ_VIOMMU.
 - iommufd_vdevice for IOMMUFD_OBJ_VDEVICE.
 - iommufd_virq for IOMMUFD_OBJ_VIRQ.
+- iommufd_vqueue for IOMMUFD_OBJ_VQUEUE.
 
 Several terminologies when looking at these datastructures:
 
