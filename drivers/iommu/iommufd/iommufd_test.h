@@ -202,12 +202,16 @@ struct iommu_hwpt_invalidate_selftest {
  *                                (IOMMU_VIOMMU_TYPE_SELFTEST)
  * @in_data: Input random data from user space
  * @out_data: Output data (matching @in_data) to user space
+ * @out_mmap_base: Physical address of a test page for mmap
+ * @out_mmap_size: Page size of a test page for mmap
  *
  * Simply set @out_data=@in_data for a loopback test
  */
 struct iommu_viommu_selftest {
 	__u32 in_data;
 	__u32 out_data;
+	__aligned_u64 out_mmap_base;
+	__aligned_u64 out_mmap_size;
 };
 
 /* Should not be equal to any defined value in enum iommu_viommu_invalidate_data_type */
