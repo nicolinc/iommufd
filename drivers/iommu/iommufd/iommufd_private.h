@@ -425,6 +425,8 @@ struct iommufd_device {
 	unsigned int iopf_enabled;
 	phys_addr_t sw_msi_start;
 	size_t sw_msi_size;
+	dma_addr_t *msi_iovas;
+	unsigned int num_msi_iovas;
 };
 
 static inline struct iommufd_device *
