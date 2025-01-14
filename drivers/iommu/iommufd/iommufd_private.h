@@ -443,13 +443,39 @@ struct iommufd_fault {
 	struct iommufd_ctx *ictx;
 	struct file *filep;
 
-	/* The lists of outstanding faults protected by below mutex. */
-	struct mutex mutex;
+	/* The lists of outstanding faults protected by below lock. */
+	spinlock_t lock;
 	struct list_head deliver;
 	struct xarray response;
 
 	struct wait_queue_head wait_queue;
 };
+
+/* Return the first item out of the fault->deliver list */
+static inline struct iopf_group *
+iommufd_fault_deliver_get_next_item(struct iommufd_fault *fault)
+{
+	struct list_head *list = &fault->deliver;
+	struct iopf_group *group = NULL;
+
+	spin_lock(&fault->lock);
+	if (!list_empty(list)) {
+		group = list_first_entry(list, struct iopf_group, node);
+		list_del(&group->node);
+	}
+	spin_unlock(&fault->lock);
+	return group;
+}
+
+/* Restore the item to the head in fault->deliver */
+static inline void
+iommufd_fault_deliver_restore_item(struct iommufd_fault *fault,
+				   struct iopf_group *item)
+{
+	spin_lock(&fault->lock);
+	list_add(&fault->deliver, &item->node);
+	spin_unlock(&fault->lock);
+}
 
 struct iommufd_attach_handle {
 	struct iommu_attach_handle handle;
