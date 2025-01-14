@@ -228,6 +228,7 @@ void iommufd_fault_destroy(struct iommufd_object *obj)
 		iopf_group_response(group, IOMMU_PAGE_RESP_INVALID);
 		iopf_free_group(group);
 	}
+	xa_destroy(&fault->response);
 }
 
 static void iommufd_compose_fault_message(struct iommu_fault *fault,
