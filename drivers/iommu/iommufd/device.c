@@ -517,6 +517,8 @@ static void iommufd_hwpt_detach_device(struct iommufd_hw_pagetable *hwpt,
 		iommufd_fault_iopf_disable(idev);
 	}
 	kfree(handle);
+	idev->sw_msi_start = PHYS_ADDR_MAX;
+	idev->sw_msi_size = 0;
 }
 
 static int iommufd_hwpt_replace_device(struct iommufd_device *idev,

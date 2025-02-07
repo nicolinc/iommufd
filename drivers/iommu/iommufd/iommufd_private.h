@@ -279,6 +279,7 @@ int iommufd_ioas_change_process(struct iommufd_ucmd *ucmd);
 int iommufd_ioas_copy(struct iommufd_ucmd *ucmd);
 int iommufd_ioas_unmap(struct iommufd_ucmd *ucmd);
 int iommufd_ioas_option(struct iommufd_ucmd *ucmd);
+int iommufd_option_sw_msi(struct iommufd_ucmd *ucmd);
 int iommufd_option_rlimit_mode(struct iommu_option *cmd,
 			       struct iommufd_ctx *ictx);
 
@@ -423,6 +424,7 @@ struct iommufd_device {
 	struct mutex iopf_lock;
 	unsigned int iopf_enabled;
 	phys_addr_t sw_msi_start;
+	size_t sw_msi_size;
 };
 
 static inline struct iommufd_device *
