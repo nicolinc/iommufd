@@ -213,4 +213,7 @@ struct iommu_viommu_invalidate_selftest {
 	__u32 cache_id;
 };
 
+#define IOMMU_TEST_RESV_BASE 0x80000000UL
+#define IOMMU_TEST_RESV_LENGTH 0x10000000UL
+
 #endif
