@@ -18,6 +18,7 @@
 #include <linux/interrupt.h>
 #include <linux/io-pgtable.h>
 #include <linux/iopoll.h>
+#include <linux/min_heap.h>
 #include <linux/module.h>
 #include <linux/msi.h>
 #include <linux/of.h>
@@ -26,6 +27,7 @@
 #include <linux/pci.h>
 #include <linux/pci-ats.h>
 #include <linux/platform_device.h>
+#include <linux/sort.h>
 #include <linux/string_choices.h>
 #include <kunit/visibility.h>
 #include <uapi/linux/iommufd.h>
@@ -4866,3 +4868,177 @@ MODULE_DESCRIPTION("IOMMU API for ARM architected SMMUv3 implementations");
 MODULE_AUTHOR("Will Deacon <will@kernel.org>");
 MODULE_ALIAS("platform:arm-smmu-v3");
 MODULE_LICENSE("GPL v2");
+
+struct arm_smmu_inv_op {
+	struct arm_smmu_device *smmu;
+	/*
+	 * opcode=CMDQ_OP_TLBI_NH_VA, any_id=asid
+	 * opcode=CMDQ_OP_TLBI_EL2_VA, any_id=asid
+	 * opcode=CMDQ_OP_TLBI_S2_IPA, any_id=vmid
+	 * opcode=CMDQ_OP_TLBI_NH_ALL, any_id=vmid
+	 * opcode=CMDQ_OP_TLBI_S12_VMALL, any_id=vmid
+	 * opcode=CMDQ_OP_TLBI_NH_ASID, any_id=asid
+	 * opcode=CMDQ_OP_TLBI_EL2_ASID, any_id=asid
+	 * opcode=CMDQ_OP_ATC_INV, any_id=sid
+	 */
+	u8 opcode;
+	/* Marked in del() */
+	u8 todel;
+	union {
+		u32 asid;
+		u32 vmid;
+		u32 sid;
+		u32 any_id;
+	};
+	refcount_t users;
+};
+
+/*
+ * The invalidation list is a RCU data structure, once one of the add/del
+ * functions creates the list it is immutable and will be eventually RCU freed.
+ * Concurrent invalidation threads will push all the invalidations described on
+ * this list into the SMMU command queue for each invalidation event. It is
+ * designed like this to optimize the invalidation fast path by avoiding any
+ * locks.
+ *
+ * Some races to keep in mind:
+ * 1) The command queues and smmu instance are now RCU protected since there is
+ *    no serialization between domain removal and any invalidation thread.
+ *    Driver removal must use synchronize_rcu().
+ * 2) Concurrent IOPTE change with domain attachment must ensure that the new
+ *    attachment does not become out of sync. This means invalidations must
+ *    start being issued before the STE/CD is visible to HW, and new IOPTEs must
+ *    be visible to HW before any STE/CD is written.
+ * 3) PCI device hot unplug may leave ATS invalidations hanging. Perhaps it is
+ *    OK if these time out as in a hostile unplug, or perhaps a device remove
+ *    should synchronize_rcu() if ATS was enabled.
+ */
+struct arm_smmu_inv_op_list {
+	unsigned int num_ops;
+	struct rcu_head head;
+	struct arm_smmu_inv_op ops[];
+};
+
+static bool same_op_new(const struct arm_smmu_inv_op *old,
+			const struct arm_smmu_inv_op *new)
+{
+	if (old->smmu != new->smmu || old->opcode != new->opcode)
+		return false;
+
+	/*
+	 * For these types the new entries don't have values, we use any
+	 * existing value in the array instead.
+	 */
+	if (old->opcode == CMDQ_OP_TLBI_NH_ASID ||
+	    old->opcode == CMDQ_OP_TLBI_S12_VMALL)
+		return true;
+
+	/* Otherwise the id has to exact match too*/
+	return old->any_id == new->any_id;
+}
+
+static struct arm_smmu_inv_op_list *
+arm_smmu_inv_op_list_add(const struct arm_smmu_inv_op_list *old,
+			 struct arm_smmu_inv_op *ops_toadd, size_t num_adds)
+{
+	unsigned int need = old->num_ops + num_adds;
+	struct arm_smmu_inv_op_list *new;
+	unsigned int i, j;
+	u32 copy_new = 0;
+
+	if (WARN_ON(num_adds) > sizeof(copy_new) * 8)
+		return ERR_PTR(-EINVAL);
+
+	for (i = 0; i != old->num_ops; i++) {
+		for (j = 0; j != num_adds; j++) {
+			if (!same_op_new(&old->ops[i], &ops_toadd[j]))
+				continue;
+			/* Store the location of this existing op in any_id */
+			ops_toadd[j].any_id = i;
+			copy_new |= BIT(j);
+			need--;
+		}
+	}
+
+	new = kcalloc(need, struct_size(new, ops, need), GFP_KERNEL);
+	if (!new)
+		return ERR_PTR(-ENOMEM);
+
+	new->num_ops = old->num_ops;
+	memcpy(new->ops, old->ops, old->num_ops * sizeof(old->ops[0]));
+
+	for (j = 0; j != num_adds; j++) {
+		if (copy_new & BIT(j)) {
+			new->ops[new->num_ops] = ops_toadd[j];
+			/* FIXME Allocate ID since one was not found This seems
+			 * like the tricky part as the ID has to go back to the
+			 * caller and various error paths will have to free it.
+			 */
+			ops_toadd[new->num_ops].any_id =
+				new->ops[new->num_ops].any_id;
+			new->num_ops++;
+		} else {
+			unsigned int existing_idx = ops_toadd[j].any_id;
+
+			refcount_inc(&new->ops[existing_idx].users);
+			ops_toadd[existing_idx].any_id =
+				new->ops[existing_idx].any_id;
+		}
+	}
+
+#if 0
+	/*
+	 * Sorting the list is optional but it should give better efficiency by
+	 * grouping same smmu instance and someday grouping by parallelism.
+	 */
+	sort_nonatomic(new->ops, new->num_ops, sizeof(new_ops[0]), cmp, SWAP_BYTES);
+#endif
+	return new;
+}
+
+static bool same_op_del(const struct arm_smmu_inv_op *a,
+			const struct arm_smmu_inv_op *b)
+{
+	return a->smmu == b->smmu && a->opcode == b->opcode &&
+	       a->any_id == b->any_id;
+}
+
+static struct arm_smmu_inv_op_list *
+arm_smmu_inv_op_list_del(struct arm_smmu_inv_op_list *old,
+			 struct arm_smmu_inv_op *ops_todel, size_t num_dels)
+{
+	struct arm_smmu_inv_op_list *new;
+	unsigned int need = old->num_ops;
+	unsigned int i, j;
+
+	for (i = 0; i != old->num_ops; i++) {
+		/*
+		 * The old list is locked at this point so we can use todel
+		 * exclusively.
+		 */
+		old->ops[i].todel = false;
+		for (j = 0; j != num_dels; j++) {
+			if (!same_op_del(&old->ops[i], &ops_todel[j]))
+				continue;
+			old->ops[i].todel = true;
+			if (refcount_read(&old->ops[i].users) == 1)
+				need--;
+		}
+	}
+
+	new = kcalloc(need, struct_size(new, ops, need), GFP_KERNEL);
+	if (!new)
+		return ERR_PTR(-ENOMEM);
+
+	for (i = 0; i != old->num_ops; i++) {
+		if (old->ops[i].todel)
+			continue;
+		new->ops[new->num_ops] = old->ops[i];
+		refcount_dec(&new->ops[new->num_ops].users);
+		new->num_ops++;
+		/* FIXME free IDs */
+	}
+
+	/* Still sorted */
+	return new;
+}
