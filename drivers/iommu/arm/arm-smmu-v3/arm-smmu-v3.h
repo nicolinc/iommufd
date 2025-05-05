@@ -1096,4 +1096,60 @@ static inline int arm_vmaster_report_event(struct arm_smmu_vmaster *vmaster,
 }
 #endif /* CONFIG_ARM_SMMU_V3_IOMMUFD */
 
+struct arm_smmu_inv_op {
+	struct arm_smmu_device *smmu;
+	/*
+	 * opcode=CMDQ_OP_TLBI_NH_VA, any_id=asid
+	 * opcode=CMDQ_OP_TLBI_EL2_VA, any_id=asid
+	 * opcode=CMDQ_OP_TLBI_S2_IPA, any_id=vmid
+	 * opcode=CMDQ_OP_TLBI_NH_ALL, any_id=vmid
+	 * opcode=CMDQ_OP_TLBI_S12_VMALL, any_id=vmid
+	 * opcode=CMDQ_OP_TLBI_NH_ASID, any_id=asid
+	 * opcode=CMDQ_OP_TLBI_EL2_ASID, any_id=asid
+	 * opcode=CMDQ_OP_ATC_INV, any_id=sid
+	 */
+	u8 opcode;
+	/* Marked in del() */
+	u8 todel;
+	union {
+		u32 asid;
+		u32 vmid;
+		u32 sid;
+		u32 any_id;
+	};
+	refcount_t users;
+};
+
+/*
+ * The invalidation list is a RCU data structure, once one of the add/del
+ * functions creates the list it is immutable and will be eventually RCU freed.
+ * Concurrent invalidation threads will push all the invalidations described on
+ * this list into the SMMU command queue for each invalidation event. It is
+ * designed like this to optimize the invalidation fast path by avoiding any
+ * locks.
+ *
+ * Some races to keep in mind:
+ * 1) The command queues and smmu instance are now RCU protected since there is
+ *    no serialization between domain removal and any invalidation thread.
+ *    Driver removal must use synchronize_rcu().
+ * 2) Concurrent IOPTE change with domain attachment must ensure that the new
+ *    attachment does not become out of sync. This means invalidations must
+ *    start being issued before the STE/CD is visible to HW, and new IOPTEs must
+ *    be visible to HW before any STE/CD is written.
+ * 3) PCI device hot unplug may leave ATS invalidations hanging. Perhaps it is
+ *    OK if these time out as in a hostile unplug, or perhaps a device remove
+ *    should synchronize_rcu() if ATS was enabled.
+ */
+struct arm_smmu_inv_op_list {
+	unsigned int num_ops;
+	struct rcu_head head;
+	struct arm_smmu_inv_op ops[];
+};
+
+struct arm_smmu_inv_op_list *
+arm_smmu_inv_op_list_add(const struct arm_smmu_inv_op_list *old,
+			 struct arm_smmu_inv_op *ops_toadd, size_t num_adds);
+struct arm_smmu_inv_op_list *
+arm_smmu_inv_op_list_del(struct arm_smmu_inv_op_list *old,
+			 struct arm_smmu_inv_op *ops_todel, size_t num_dels);
 #endif /* _ARM_SMMU_V3_H */

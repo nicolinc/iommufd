@@ -567,6 +567,31 @@ static void arm_smmu_v3_write_cd_test_sva_release(struct kunit *test)
 						      NUM_EXPECTED_SYNCS(2));
 }
 
+static void arm_smmu_v3_inv_op_list_test(struct kunit *test)
+{
+	struct arm_smmu_inv_op_list *test_list, *new_list1, *new_list2;
+	struct arm_smmu_inv_op ops1[] = {
+		{ .opcode = CMDQ_OP_TLBI_S12_VMALL, .vmid = 1, },
+		{ .opcode = CMDQ_OP_TLBI_S12_VMALL, .vmid = 2, },
+	};
+	struct arm_smmu_inv_op ops2[] = {
+		{ .opcode = CMDQ_OP_TLBI_EL2_ASID, .asid = 1, },
+		{ .opcode = CMDQ_OP_TLBI_EL2_ASID, .asid = 2, },
+	};
+
+	test_list = kzalloc(struct_size(test_list, ops, 0), GFP_KERNEL);
+
+	KUNIT_EXPECT_EQ(test, test_list->num_ops, 0);
+	new_list1 = arm_smmu_inv_op_list_add(test_list, ops1, ARRAY_SIZE(ops1));
+	KUNIT_EXPECT_EQ(test, new_list1->num_ops, 2);
+	new_list2 = arm_smmu_inv_op_list_add(new_list1, ops2, ARRAY_SIZE(ops2));
+	KUNIT_EXPECT_EQ(test, new_list2->num_ops, 4);
+#if 0
+	KUNIT_EXPECT_EQ(test, test_writer.num_syncs, num_syncs_expected);
+	KUNIT_EXPECT_MEMEQ(test, target->data, cur_copy.data, sizeof(cur_copy));
+#endif
+}
+
 static struct kunit_case arm_smmu_v3_test_cases[] = {
 	KUNIT_CASE(arm_smmu_v3_write_ste_test_bypass_to_abort),
 	KUNIT_CASE(arm_smmu_v3_write_ste_test_abort_to_bypass),
@@ -590,6 +615,7 @@ static struct kunit_case arm_smmu_v3_test_cases[] = {
 	KUNIT_CASE(arm_smmu_v3_write_ste_test_s2_to_s1_stall),
 	KUNIT_CASE(arm_smmu_v3_write_cd_test_sva_clear),
 	KUNIT_CASE(arm_smmu_v3_write_cd_test_sva_release),
+	KUNIT_CASE(arm_smmu_v3_inv_op_list_test),
 	{},
 };
 

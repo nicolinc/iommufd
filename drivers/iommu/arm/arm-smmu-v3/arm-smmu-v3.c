@@ -4869,55 +4869,6 @@ MODULE_AUTHOR("Will Deacon <will@kernel.org>");
 MODULE_ALIAS("platform:arm-smmu-v3");
 MODULE_LICENSE("GPL v2");
 
-struct arm_smmu_inv_op {
-	struct arm_smmu_device *smmu;
-	/*
-	 * opcode=CMDQ_OP_TLBI_NH_VA, any_id=asid
-	 * opcode=CMDQ_OP_TLBI_EL2_VA, any_id=asid
-	 * opcode=CMDQ_OP_TLBI_S2_IPA, any_id=vmid
-	 * opcode=CMDQ_OP_TLBI_NH_ALL, any_id=vmid
-	 * opcode=CMDQ_OP_TLBI_S12_VMALL, any_id=vmid
-	 * opcode=CMDQ_OP_TLBI_NH_ASID, any_id=asid
-	 * opcode=CMDQ_OP_TLBI_EL2_ASID, any_id=asid
-	 * opcode=CMDQ_OP_ATC_INV, any_id=sid
-	 */
-	u8 opcode;
-	/* Marked in del() */
-	u8 todel;
-	union {
-		u32 asid;
-		u32 vmid;
-		u32 sid;
-		u32 any_id;
-	};
-	refcount_t users;
-};
-
-/*
- * The invalidation list is a RCU data structure, once one of the add/del
- * functions creates the list it is immutable and will be eventually RCU freed.
- * Concurrent invalidation threads will push all the invalidations described on
- * this list into the SMMU command queue for each invalidation event. It is
- * designed like this to optimize the invalidation fast path by avoiding any
- * locks.
- *
- * Some races to keep in mind:
- * 1) The command queues and smmu instance are now RCU protected since there is
- *    no serialization between domain removal and any invalidation thread.
- *    Driver removal must use synchronize_rcu().
- * 2) Concurrent IOPTE change with domain attachment must ensure that the new
- *    attachment does not become out of sync. This means invalidations must
- *    start being issued before the STE/CD is visible to HW, and new IOPTEs must
- *    be visible to HW before any STE/CD is written.
- * 3) PCI device hot unplug may leave ATS invalidations hanging. Perhaps it is
- *    OK if these time out as in a hostile unplug, or perhaps a device remove
- *    should synchronize_rcu() if ATS was enabled.
- */
-struct arm_smmu_inv_op_list {
-	unsigned int num_ops;
-	struct rcu_head head;
-	struct arm_smmu_inv_op ops[];
-};
 
 static bool same_op_new(const struct arm_smmu_inv_op *old,
 			const struct arm_smmu_inv_op *new)
@@ -4937,7 +4888,7 @@ static bool same_op_new(const struct arm_smmu_inv_op *old,
 	return old->any_id == new->any_id;
 }
 
-static struct arm_smmu_inv_op_list *
+struct arm_smmu_inv_op_list *
 arm_smmu_inv_op_list_add(const struct arm_smmu_inv_op_list *old,
 			 struct arm_smmu_inv_op *ops_toadd, size_t num_adds)
 {
@@ -4995,6 +4946,7 @@ arm_smmu_inv_op_list_add(const struct arm_smmu_inv_op_list *old,
 #endif
 	return new;
 }
+EXPORT_SYMBOL_IF_KUNIT(arm_smmu_inv_op_list_add);
 
 static bool same_op_del(const struct arm_smmu_inv_op *a,
 			const struct arm_smmu_inv_op *b)
@@ -5003,7 +4955,7 @@ static bool same_op_del(const struct arm_smmu_inv_op *a,
 	       a->any_id == b->any_id;
 }
 
-static struct arm_smmu_inv_op_list *
+struct arm_smmu_inv_op_list *
 arm_smmu_inv_op_list_del(struct arm_smmu_inv_op_list *old,
 			 struct arm_smmu_inv_op *ops_todel, size_t num_dels)
 {
@@ -5042,3 +4994,4 @@ arm_smmu_inv_op_list_del(struct arm_smmu_inv_op_list *old,
 	/* Still sorted */
 	return new;
 }
+EXPORT_SYMBOL_IF_KUNIT(arm_smmu_inv_op_list_del);
