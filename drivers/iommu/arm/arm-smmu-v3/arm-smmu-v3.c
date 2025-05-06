@@ -4897,21 +4897,22 @@ arm_smmu_inv_op_list_add(const struct arm_smmu_inv_op_list *old,
 	unsigned int i, j;
 	u32 copy_new = 0;
 
-	if (WARN_ON(num_adds) > sizeof(copy_new) * 8)
+	if (WARN_ON(num_adds > sizeof(copy_new) * 8))
 		return ERR_PTR(-EINVAL);
 
+	copy_new = GENMASK(num_adds - 1, 0);
 	for (i = 0; i != old->num_ops; i++) {
 		for (j = 0; j != num_adds; j++) {
 			if (!same_op_new(&old->ops[i], &ops_toadd[j]))
 				continue;
 			/* Store the location of this existing op in any_id */
 			ops_toadd[j].any_id = i;
-			copy_new |= BIT(j);
+			copy_new &= ~BIT(j);
 			need--;
 		}
 	}
 
-	new = kcalloc(need, struct_size(new, ops, need), GFP_KERNEL);
+	new = kzalloc(struct_size(new, ops, need), GFP_KERNEL);
 	if (!new)
 		return ERR_PTR(-ENOMEM);
 
@@ -4927,6 +4928,7 @@ arm_smmu_inv_op_list_add(const struct arm_smmu_inv_op_list *old,
 			 */
 			ops_toadd[new->num_ops].any_id =
 				new->ops[new->num_ops].any_id;
+			refcount_set(&new->ops[new->num_ops].users, 1);
 			new->num_ops++;
 		} else {
 			unsigned int existing_idx = ops_toadd[j].any_id;
@@ -4972,13 +4974,14 @@ arm_smmu_inv_op_list_del(struct arm_smmu_inv_op_list *old,
 		for (j = 0; j != num_dels; j++) {
 			if (!same_op_del(&old->ops[i], &ops_todel[j]))
 				continue;
+			if (refcount_dec_not_one(&old->ops[i].users))
+				continue;
 			old->ops[i].todel = true;
-			if (refcount_read(&old->ops[i].users) == 1)
-				need--;
+			need--;
 		}
 	}
 
-	new = kcalloc(need, struct_size(new, ops, need), GFP_KERNEL);
+	new = kzalloc(struct_size(new, ops, need), GFP_KERNEL);
 	if (!new)
 		return ERR_PTR(-ENOMEM);
 
@@ -4986,7 +4989,6 @@ arm_smmu_inv_op_list_del(struct arm_smmu_inv_op_list *old,
 		if (old->ops[i].todel)
 			continue;
 		new->ops[new->num_ops] = old->ops[i];
-		refcount_dec(&new->ops[new->num_ops].users);
 		new->num_ops++;
 		/* FIXME free IDs */
 	}
