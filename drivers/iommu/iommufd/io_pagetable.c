@@ -719,6 +719,12 @@ again:
 			goto out_unlock_iova;
 		}
 
+		/* The area is locked by some object(s) */
+		if (area->num_locks) {
+			rc = -EBUSY;
+			goto out_unlock_iova;
+		}
+
 		if (area_first < start || area_last > last) {
 			rc = -ENOENT;
 			goto out_unlock_iova;
