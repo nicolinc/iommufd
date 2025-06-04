@@ -1048,7 +1048,7 @@ static int iommufd_access_change_ioas(struct iommufd_access *access,
 	}
 
 	if (cur_ioas) {
-		if (access->ops->unmap) {
+		if (access->ops && access->ops->unmap) {
 			mutex_unlock(&access->ioas_lock);
 			access->ops->unmap(access->data, 0, ULONG_MAX);
 			mutex_lock(&access->ioas_lock);
@@ -1204,16 +1204,21 @@ EXPORT_SYMBOL_NS_GPL(iommufd_access_replace, "IOMMUFD");
  * run in the future. Due to this a driver must not create locking that prevents
  * unmap to complete while iommufd_access_destroy() is running.
  */
-void iommufd_access_notify_unmap(struct io_pagetable *iopt, unsigned long iova,
-				 unsigned long length)
+int iommufd_access_notify_unmap(struct io_pagetable *iopt, unsigned long iova,
+				unsigned long length)
 {
 	struct iommufd_ioas *ioas =
 		container_of(iopt, struct iommufd_ioas, iopt);
 	struct iommufd_access *access;
 	unsigned long index;
+	int ret = 0;
 
 	xa_lock(&ioas->iopt.access_list);
 	xa_for_each(&ioas->iopt.access_list, index, access) {
+		if (!access->ops || !access->ops->unmap) {
+			ret = -EBUSY;
+			goto unlock;
+		}
 		if (!iommufd_lock_obj(&access->obj))
 			continue;
 		xa_unlock(&ioas->iopt.access_list);
@@ -1223,7 +1228,9 @@ void iommufd_access_notify_unmap(struct io_pagetable *iopt, unsigned long iova,
 		iommufd_put_object(access->ictx, &access->obj);
 		xa_lock(&ioas->iopt.access_list);
 	}
+unlock:
 	xa_unlock(&ioas->iopt.access_list);
+	return ret;
 }
 
 /**
@@ -1321,7 +1328,7 @@ int iommufd_access_pin_pages(struct iommufd_access *access, unsigned long iova,
 
 	/* Driver's ops don't support pin_pages */
 	if (IS_ENABLED(CONFIG_IOMMUFD_TEST) &&
-	    WARN_ON(access->iova_alignment != PAGE_SIZE || !access->ops->unmap))
+	    WARN_ON(access->iova_alignment != PAGE_SIZE))
 		return -EINVAL;
 
 	if (!length)
