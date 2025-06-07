@@ -484,6 +484,14 @@ void iopt_remove_access(struct io_pagetable *iopt,
 			struct iommufd_access *access, u32 iopt_access_list_id);
 void iommufd_access_destroy_object(struct iommufd_object *obj);
 
+/* iommufd_access for internal use */
+struct iommufd_access *iommufd_access_create_internal(struct iommufd_ctx *ictx);
+#define iommufd_access_destroy_internal(ictx, access) \
+	iommufd_object_destroy_user(ictx, &(access)->obj)
+int iommufd_access_attach_internal(struct iommufd_access *access,
+				   struct iommufd_ioas *ioas);
+#define iommufd_access_detach_internal(access) iommufd_access_detach(access)
+
 struct iommufd_eventq {
 	struct iommufd_object obj;
 	struct iommufd_ctx *ictx;
