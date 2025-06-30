@@ -649,6 +649,82 @@ struct arm_smmu_cmdq_batch {
 	int				num;
 };
 
+enum arm_smmu_inv_type {
+	INV_TYPE_S1_ASID,
+	INV_TYPE_S2_VMID,
+	INV_TYPE_S2_VMID_S1_CLEAR,
+	INV_TYPE_ATS,
+	INV_TYPE_ATS_FULL,
+};
+
+struct arm_smmu_inv {
+	/* invalidation items */
+	struct arm_smmu_device *smmu;
+	u8 type;
+	u8 size_opcode;
+	u8 nsize_opcode;
+	u32 id; /* ASID or VMID or SID */
+	union {
+		size_t pgsize; /* ARM_SMMU_FEAT_RANGE_INV */
+		u32 ssid; /* INV_TYPE_ATS */
+	};
+
+	/* infrastructure items */
+	refcount_t users; /* users=0 to mark as a trash */
+	bool todel : 1; /* set for a pending deletion */
+};
+
+/**
+ * struct arm_smmu_invs - Per-domain invalidation array
+ * @num_invs: number of invalidations in @invs
+ * @rwlock: Optional rwlock to fench arm_smmu_invs_dec()
+ * @rcu: rcu head for kfree_rcu()
+ * @inv: flexible invalidation array
+ *
+ * The arm_smmu_invs is an RCU data structure. During a ->attach_dev callback,
+ * arm_smmu_invs_add() and arm_smmu_invs_del() will be used to allocate a new
+ * copy of an old array for addition and deletion.
+ *
+ * The arm_smmu_invs_dec() is a special function to mutate a given array, by
+ * internally reducing the users counts of some given entries. This exists to
+ * support a no-fail routine like attaching to an IOMMU_DOMAIN_BLOCKED. Use it
+ * carefully as it can impact performance from the extra rwlock.
+ *
+ * Concurrent invalidation thread will push all the invalidations described on
+ * the array into the command queue for each invalidation event. It is designed
+ * like this to optimize the invalidation fast path by avoiding locks.
+ *
+ * A domain can be shared across SMMU instances. When an instance gets removed
+ * it would delete all the entries that belong to that SMMU instance. Then, a
+ * synchronize_rcu() would have to be called to sync the array, to prevent any
+ * concurrent invalidation thread accessing the old array from issuing commands
+ * to the command queue of a removed SMMU instance.
+ */
+struct arm_smmu_invs {
+	size_t num_invs;
+	rwlock_t rwlock;
+	struct rcu_head rcu;
+	struct arm_smmu_inv inv[];
+};
+
+static inline struct arm_smmu_invs *arm_smmu_invs_alloc(size_t num_invs)
+{
+	struct arm_smmu_invs *new_invs;
+
+	new_invs = kzalloc(struct_size(new_invs, inv, num_invs), GFP_KERNEL);
+	if (!new_invs)
+		return ERR_PTR(-ENOMEM);
+	rwlock_init(&new_invs->rwlock);
+	return new_invs;
+}
+
+struct arm_smmu_invs *arm_smmu_invs_add(struct arm_smmu_invs *old_invs,
+					struct arm_smmu_invs *add_invs);
+struct arm_smmu_invs *arm_smmu_invs_del(struct arm_smmu_invs *old_invs,
+					struct arm_smmu_invs *del_invs);
+size_t arm_smmu_invs_dec(struct arm_smmu_invs *invs,
+			 struct arm_smmu_invs *dec_invs);
+
 struct arm_smmu_evtq {
 	struct arm_smmu_queue		q;
 	struct iopf_queue		*iopf;
@@ -875,6 +951,8 @@ struct arm_smmu_domain {
 
 	struct iommu_domain		domain;
 
+	struct arm_smmu_invs		*invs;
+
 	/* List of struct arm_smmu_master_domain */
 	struct list_head		devices;
 	spinlock_t			devices_lock;
@@ -956,6 +1034,7 @@ struct arm_smmu_domain *arm_smmu_domain_alloc(void);
 
 static inline void arm_smmu_domain_free(struct arm_smmu_domain *smmu_domain)
 {
+	kfree_rcu(smmu_domain->invs, rcu);
 	kfree(smmu_domain);
 }
 
