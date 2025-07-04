@@ -1084,6 +1084,12 @@ struct arm_smmu_attach_state {
 	ioasid_t ssid;
 	/* Resulting state */
 	struct arm_smmu_vmaster *vmaster;
+	struct arm_smmu_invs **old_domain_invs;
+	struct arm_smmu_invs *old_domain_oinvs;
+	struct arm_smmu_invs *old_domain_ninvs;
+	struct arm_smmu_invs **new_domain_invs;
+	struct arm_smmu_invs *new_domain_oinvs;
+	struct arm_smmu_invs *new_domain_ninvs;
 	bool ats_enabled;
 };
 

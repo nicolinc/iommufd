@@ -3082,6 +3082,76 @@ static void arm_smmu_disable_iopf(struct arm_smmu_master *master,
 		iopf_queue_remove_device(master->smmu->evtq.iopf, master->dev);
 }
 
+typedef struct arm_smmu_invs *(*invs_fn)(struct arm_smmu_invs *old_invs,
+					 struct arm_smmu_invs *invs);
+
+static struct arm_smmu_invs *arm_smmu_build_invs(
+	struct arm_smmu_invs *old_invs, struct arm_smmu_domain *smmu_domain,
+	struct arm_smmu_master *master, bool ats, ioasid_t ssid, invs_fn fn)
+{
+	const bool e2h = master->smmu->features & ARM_SMMU_FEAT_E2H;
+	const bool nesting = smmu_domain->nest_parent;
+	struct arm_smmu_inv *cur = master->invs->inv;
+	size_t num_invs = 1;
+	size_t i;
+
+	switch (smmu_domain->stage) {
+	case ARM_SMMU_DOMAIN_SVA:
+	case ARM_SMMU_DOMAIN_S1:
+		cur->smmu = master->smmu;
+		cur->type = INV_TYPE_S1_ASID;
+		cur->id = smmu_domain->cd.asid;
+		cur->size_opcode = e2h ? CMDQ_OP_TLBI_EL2_VA :
+					 CMDQ_OP_TLBI_NH_VA;
+		cur->nsize_opcode = e2h ? CMDQ_OP_TLBI_EL2_ASID :
+					  CMDQ_OP_TLBI_NH_ASID;
+		break;
+	case ARM_SMMU_DOMAIN_S2:
+		cur->smmu = master->smmu;
+		cur->type = INV_TYPE_S2_VMID;
+		cur->id = smmu_domain->s2_cfg.vmid;
+		cur->size_opcode = CMDQ_OP_TLBI_S2_IPA;
+		cur->nsize_opcode = CMDQ_OP_TLBI_S12_VMALL;
+		break;
+	default:
+		WARN_ON(true);
+		return old_invs;
+	}
+
+	/* Range-based invalidation requires the leaf pgsize for calculation */
+	if (master->smmu->features & ARM_SMMU_FEAT_RANGE_INV)
+		cur->pgsize = __ffs(smmu_domain->domain.pgsize_bitmap);
+
+	/* All the nested S1 ASIDs have to be flushed when S2 parent changes */
+	if (nesting) {
+		cur = &master->invs->inv[num_invs++];
+		cur->smmu = master->smmu;
+		cur->type = INV_TYPE_S2_VMID_S1_CLEAR;
+		cur->id = smmu_domain->s2_cfg.vmid;
+		cur->size_opcode = CMDQ_OP_TLBI_NH_ALL;
+		cur->nsize_opcode = CMDQ_OP_TLBI_NH_ALL;
+	}
+
+	if (ats) {
+		for (i = 0, cur++; i < master->num_streams; i++) {
+			cur->smmu = master->smmu;
+			/*
+			 * If an S2 used as a nesting parent is changed we have
+			 * no option but to completely flush the ATC.
+			 */
+			cur->type = nesting ? INV_TYPE_ATS_FULL : INV_TYPE_ATS;
+			cur->id = master->streams[i].id;
+			cur->ssid = ssid;
+			cur->size_opcode = CMDQ_OP_ATC_INV;
+			cur->nsize_opcode = CMDQ_OP_ATC_INV;
+		}
+		num_invs += master->num_streams;
+	}
+
+	master->invs->num_invs = num_invs;
+	return fn(old_invs, master->invs);
+}
+
 static void arm_smmu_remove_master_domain(struct arm_smmu_master *master,
 					  struct iommu_domain *domain,
 					  ioasid_t ssid)
@@ -3109,6 +3179,144 @@ static void arm_smmu_remove_master_domain(struct arm_smmu_master *master,
 
 	arm_smmu_disable_iopf(master, master_domain);
 	kfree(master_domain);
+}
+
+static int arm_smmu_attach_prepare_invs(struct arm_smmu_attach_state *state,
+					struct arm_smmu_domain *new_smmu_domain)
+{
+	struct arm_smmu_domain *old_smmu_domain =
+		to_smmu_domain_devices(state->old_domain);
+	struct arm_smmu_master *master = state->master;
+	bool blocking = false;
+
+	/* A re-attach case doesn't need to update invs array */
+	if (new_smmu_domain == old_smmu_domain)
+		return 0;
+
+	if (new_smmu_domain) {
+		state->new_domain_oinvs = rcu_dereference_protected(
+			new_smmu_domain->invs,
+			lockdep_is_held(&arm_smmu_asid_lock));
+		state->new_domain_ninvs = arm_smmu_build_invs(
+			state->new_domain_oinvs, new_smmu_domain, master,
+			state->ats_enabled, state->ssid, arm_smmu_invs_add);
+		if (IS_ERR(state->new_domain_ninvs))
+			return PTR_ERR(state->new_domain_ninvs);
+		state->new_domain_invs = &new_smmu_domain->invs;
+		blocking = new_smmu_domain->domain.type == IOMMU_DOMAIN_BLOCKED;
+	}
+
+	if (old_smmu_domain) {
+		state->old_domain_oinvs = rcu_dereference_protected(
+			old_smmu_domain->invs,
+			lockdep_is_held(&arm_smmu_asid_lock));
+		state->old_domain_ninvs = arm_smmu_build_invs(
+			state->old_domain_oinvs, old_smmu_domain, master,
+			master->ats_enabled, state->ssid, arm_smmu_invs_del);
+		if (IS_ERR(state->old_domain_ninvs)) {
+			/* An attachment to the blocked_domain must not fail */
+			if (blocking) {
+				state->old_domain_ninvs = NULL;
+			} else {
+				kfree(state->new_domain_ninvs);
+				return PTR_ERR(state->old_domain_ninvs);
+			}
+		}
+		state->old_domain_invs = &old_smmu_domain->invs;
+		/* master->invs is retaining the del_invs for the old domain */
+	}
+
+	return 0;
+}
+
+/* Must be installed before arm_smmu_install_ste_for_dev() */
+static void
+arm_smmu_install_new_domain_invs(struct arm_smmu_attach_state *state)
+{
+	if (!state->new_domain_invs)
+		return;
+
+	rcu_assign_pointer(*state->new_domain_invs, state->new_domain_ninvs);
+	/*
+	 * Committed to updating the STE, using the new invalidation array, and
+	 * acquiring any racing IOPTE updates.
+	 */
+	smp_mb();
+	kfree_rcu(state->new_domain_oinvs, rcu);
+}
+
+/* Should be installed after arm_smmu_install_ste_for_dev() */
+static void
+arm_smmu_install_old_domain_invs(struct arm_smmu_attach_state *state)
+{
+	struct arm_smmu_invs *old_domain_oinvs = state->old_domain_oinvs;
+	struct arm_smmu_invs *old_domain_ninvs = state->old_domain_ninvs;
+	struct arm_smmu_master *master = state->master;
+	unsigned long flags;
+	size_t num_invs;
+
+	if (!state->old_domain_invs)
+		return;
+
+	/* Activate the no-fail protocol upon an allocation failure */
+	if (!old_domain_ninvs) {
+		/*
+		 * Notes:
+		 *  - The array will be edited in place while holding its rwlock
+		 *    which has a tradeoff that any concurrent invalidation will
+		 *    fail at read_trylock() until arm_smmu_invs_dec() returns.
+		 *  - arm_smmu_invs_dec() doesn't update the array's num_invs as
+		 *    if only decrease users counters. So, get num_invs from the
+		 *    returned value.
+		 *  - The master->invs retains the del_invs for the old domain.
+		 */
+		num_invs = arm_smmu_invs_dec(old_domain_oinvs, master->invs);
+	} else {
+		rcu_assign_pointer(*state->old_domain_invs, old_domain_ninvs);
+		/*
+		 * Fake an empty old array that a concurrent invalidation thread
+		 * races at. It either lets the reader quickly respin for a new
+		 * array with fewer num_invs (avoiding deleted invalidations) or
+		 * blocks the writer till the reader flushes the array (avoiding
+		 * ATC invalidation timeouts for ATS invalidations being sent to
+		 * a resetting PCI device).
+		 */
+		write_lock_irqsave(&old_domain_oinvs->rwlock, flags);
+		old_domain_oinvs->num_invs = 0;
+		write_unlock_irqrestore(&old_domain_oinvs->rwlock, flags);
+
+		kfree_rcu(old_domain_oinvs, rcu);
+		num_invs = state->old_domain_ninvs->num_invs;
+	}
+
+	/*
+	 * The domain invs array was filled when the first device attaches to it
+	 * and emptied when the last device detaches. So, the invs array doesn't
+	 * syncrhonize with iommu_unmap() calls, which might come after the last
+	 * detach and end up with a NOP. This would result in missing a critical
+	 * TLB maintanance. Thus, when the last device is detached (indicated by
+	 * an empty invs array), flush all TLBs using the removed ASID or VMID.
+	 */
+	if (!num_invs) {
+		struct arm_smmu_inv *inv = &master->invs->inv[0];
+		struct arm_smmu_cmdq_ent cmd = {
+			.opcode = inv->nsize_opcode,
+		};
+
+		switch (inv->type) {
+		case INV_TYPE_S1_ASID:
+			cmd.tlbi.asid = inv->id;
+			arm_smmu_cmdq_issue_cmd_with_sync(inv->smmu, &cmd);
+			break;
+		case INV_TYPE_S2_VMID:
+			cmd.tlbi.vmid = inv->id;
+			arm_smmu_cmdq_issue_cmd_with_sync(inv->smmu, &cmd);
+			break;
+		default:
+			WARN_ON(true);
+			break;
+		}
+	}
 }
 
 /*
@@ -3168,12 +3376,16 @@ int arm_smmu_attach_prepare(struct arm_smmu_attach_state *state,
 				     arm_smmu_ats_supported(master);
 	}
 
+	ret = arm_smmu_attach_prepare_invs(state, smmu_domain);
+	if (ret)
+		return ret;
+
 	if (smmu_domain) {
 		if (new_domain->type == IOMMU_DOMAIN_NESTED) {
 			ret = arm_smmu_attach_prepare_vmaster(
 				state, to_smmu_nested_domain(new_domain));
 			if (ret)
-				return ret;
+				goto err_unprepare_invs;
 		}
 
 		master_domain = kzalloc(sizeof(*master_domain), GFP_KERNEL);
@@ -3221,6 +3433,8 @@ int arm_smmu_attach_prepare(struct arm_smmu_attach_state *state,
 			atomic_inc(&smmu_domain->nr_ats_masters);
 		list_add(&master_domain->devices_elm, &smmu_domain->devices);
 		spin_unlock_irqrestore(&smmu_domain->devices_lock, flags);
+
+		arm_smmu_install_new_domain_invs(state);
 	}
 
 	if (!state->ats_enabled && master->ats_enabled) {
@@ -3240,6 +3454,9 @@ err_free_master_domain:
 	kfree(master_domain);
 err_free_vmaster:
 	kfree(state->vmaster);
+err_unprepare_invs:
+	kfree(state->old_domain_ninvs);
+	kfree(state->new_domain_ninvs);
 	return ret;
 }
 
@@ -3271,6 +3488,7 @@ void arm_smmu_attach_commit(struct arm_smmu_attach_state *state)
 	}
 
 	arm_smmu_remove_master_domain(master, state->old_domain, state->ssid);
+	arm_smmu_install_old_domain_invs(state);
 	master->ats_enabled = state->ats_enabled;
 }
 
