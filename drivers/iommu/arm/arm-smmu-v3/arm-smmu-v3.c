@@ -3723,12 +3723,20 @@ static int arm_smmu_insert_master(struct arm_smmu_device *smmu,
 	int i;
 	int ret = 0;
 	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(master->dev);
+	size_t num_ats = dev_is_pci(master->dev) ? master->num_streams : 0;
 
 	master->streams = kcalloc(fwspec->num_ids, sizeof(*master->streams),
 				  GFP_KERNEL);
 	if (!master->streams)
 		return -ENOMEM;
 	master->num_streams = fwspec->num_ids;
+
+	/* Max possible num_invs: two for ASID/VMIDs and num_ats for ATC_INVs */
+	master->invs = arm_smmu_invs_alloc(2 + num_ats);
+	if (IS_ERR(master->invs)) {
+		kfree(master->streams);
+		return PTR_ERR(master->invs);
+	}
 
 	mutex_lock(&smmu->streams_mutex);
 	for (i = 0; i < fwspec->num_ids; i++) {
@@ -3767,6 +3775,7 @@ static int arm_smmu_insert_master(struct arm_smmu_device *smmu,
 		for (i--; i >= 0; i--)
 			rb_erase(&master->streams[i].node, &smmu->streams);
 		kfree(master->streams);
+		kfree(master->invs);
 	}
 	mutex_unlock(&smmu->streams_mutex);
 
@@ -3788,6 +3797,7 @@ static void arm_smmu_remove_master(struct arm_smmu_master *master)
 	mutex_unlock(&smmu->streams_mutex);
 
 	kfree(master->streams);
+	kfree(master->invs);
 }
 
 static struct iommu_device *arm_smmu_probe_device(struct device *dev)
