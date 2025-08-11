@@ -115,7 +115,7 @@ enum {
 };
 
 static int __iommu_device_set_domain(struct iommu_group *group,
-				     struct device *dev,
+				     struct group_device *gdev,
 				     struct iommu_domain *new_domain,
 				     struct iommu_domain *old_domain,
 				     unsigned int flags);
@@ -649,7 +649,7 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 						 IOMMU_NO_PASID, NULL);
 		if (ret)
 			goto err_remove_gdev;
-		ret = __iommu_device_set_domain(group, dev, group->domain, NULL,
+		ret = __iommu_device_set_domain(group, gdev, group->domain, NULL,
 						0);
 		if (ret)
 			goto err_remove_gdev;
@@ -2363,11 +2363,12 @@ int iommu_attach_group(struct iommu_domain *domain, struct iommu_group *group)
 EXPORT_SYMBOL_GPL(iommu_attach_group);
 
 static int __iommu_device_set_domain(struct iommu_group *group,
-				     struct device *dev,
+				     struct group_device *gdev,
 				     struct iommu_domain *new_domain,
 				     struct iommu_domain *old_domain,
 				     unsigned int flags)
 {
+	struct device *dev = gdev->dev;
 	int ret;
 
 	/*
@@ -2455,7 +2456,7 @@ static int __iommu_group_set_domain_internal(struct iommu_group *group,
 	 */
 	result = 0;
 	for_each_group_device(group, gdev) {
-		ret = __iommu_device_set_domain(group, gdev->dev, new_domain,
+		ret = __iommu_device_set_domain(group, gdev, new_domain,
 						group->domain, flags);
 		if (ret) {
 			result = ret;
@@ -2491,7 +2492,7 @@ err_revert:
 		 */
 		if (group->domain)
 			WARN_ON(__iommu_device_set_domain(
-				group, gdev->dev, group->domain, new_domain,
+				group, gdev, group->domain, new_domain,
 				IOMMU_SET_DOMAIN_MUST_SUCCEED));
 	}
 	return ret;
