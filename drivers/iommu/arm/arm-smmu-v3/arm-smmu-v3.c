@@ -3291,6 +3291,31 @@ static struct iommu_domain arm_smmu_blocked_domain = {
 	.ops = &arm_smmu_blocked_ops,
 };
 
+static int arm_smmu_attach_dev_release(struct iommu_domain *domain,
+				       struct device *dev)
+{
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+
+	WARN_ON(master->iopf_refcount);
+
+	/* Put the STE back to what arm_smmu_init_strtab() sets */
+	if (dev->iommu->require_direct)
+		arm_smmu_attach_dev_identity(&arm_smmu_identity_domain, dev);
+	else
+		arm_smmu_attach_dev_blocked(&arm_smmu_blocked_domain, dev);
+
+	return 0;
+}
+
+static const struct iommu_domain_ops arm_smmu_release_ops = {
+	.attach_dev = arm_smmu_attach_dev_release,
+};
+
+static struct iommu_domain arm_smmu_release_domain = {
+	.type = IOMMU_DOMAIN_BLOCKED,
+	.ops = &arm_smmu_release_ops,
+};
+
 static struct iommu_domain *
 arm_smmu_domain_alloc_paging_flags(struct device *dev, u32 flags,
 				   const struct iommu_user_data *user_data)
@@ -3580,14 +3605,6 @@ static void arm_smmu_release_device(struct device *dev)
 {
 	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
 
-	WARN_ON(master->iopf_refcount);
-
-	/* Put the STE back to what arm_smmu_init_strtab() sets */
-	if (dev->iommu->require_direct)
-		arm_smmu_attach_dev_identity(&arm_smmu_identity_domain, dev);
-	else
-		arm_smmu_attach_dev_blocked(&arm_smmu_blocked_domain, dev);
-
 	arm_smmu_disable_pasid(master);
 	arm_smmu_remove_master(master);
 	if (arm_smmu_cdtab_allocated(&master->cd_table))
@@ -3678,6 +3695,7 @@ static int arm_smmu_def_domain_type(struct device *dev)
 static const struct iommu_ops arm_smmu_ops = {
 	.identity_domain	= &arm_smmu_identity_domain,
 	.blocked_domain		= &arm_smmu_blocked_domain,
+	.release_domain		= &arm_smmu_release_domain,
 	.capable		= arm_smmu_capable,
 	.hw_info		= arm_smmu_hw_info,
 	.domain_alloc_sva       = arm_smmu_sva_domain_alloc,
