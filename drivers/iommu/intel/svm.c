@@ -145,6 +145,12 @@ static int intel_iommu_sva_supported(struct device *dev)
 	return 0;
 }
 
+static int intel_svm_test_dev(struct iommu_domain *domain, struct device *dev,
+			      ioasid_t pasid, struct iommu_domain *old)
+{
+	return intel_iommu_sva_supported(dev);
+}
+
 static int intel_svm_set_dev_pasid(struct iommu_domain *domain,
 				   struct device *dev, ioasid_t pasid,
 				   struct iommu_domain *old)
@@ -155,10 +161,6 @@ static int intel_svm_set_dev_pasid(struct iommu_domain *domain,
 	struct dev_pasid_info *dev_pasid;
 	unsigned long sflags;
 	int ret = 0;
-
-	ret = intel_iommu_sva_supported(dev);
-	if (ret)
-		return ret;
 
 	dev_pasid = domain_add_dev_pasid(domain, dev, pasid);
 	if (IS_ERR(dev_pasid))
@@ -195,6 +197,7 @@ static void intel_svm_domain_free(struct iommu_domain *domain)
 }
 
 static const struct iommu_domain_ops intel_svm_domain_ops = {
+	.test_dev		= intel_svm_test_dev,
 	.set_dev_pasid		= intel_svm_set_dev_pasid,
 	.free			= intel_svm_domain_free
 };
