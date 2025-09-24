@@ -152,11 +152,6 @@ static int arm_smmu_attach_dev_nested(struct iommu_domain *domain,
 	struct arm_smmu_ste ste;
 	int ret;
 
-	if (nested_domain->vsmmu->smmu != master->smmu)
-		return -EINVAL;
-	if (arm_smmu_ssids_in_use(&master->cd_table))
-		return -EBUSY;
-
 	mutex_lock(&arm_smmu_asid_lock);
 	/*
 	 * The VM has to control the actual ATS state at the PCI device because
@@ -187,6 +182,7 @@ static void arm_smmu_domain_nested_free(struct iommu_domain *domain)
 }
 
 static const struct iommu_domain_ops arm_smmu_nested_ops = {
+	.test_dev = arm_smmu_domain_test_dev,
 	.attach_dev = arm_smmu_attach_dev_nested,
 	.free = arm_smmu_domain_nested_free,
 };
