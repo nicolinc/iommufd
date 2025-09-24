@@ -3537,6 +3537,26 @@ int paging_domain_compatible(struct iommu_domain *domain, struct device *dev)
 	return 0;
 }
 
+static int intel_iommu_test_device(struct iommu_domain *domain,
+				   struct device *dev, ioasid_t pasid,
+				   struct iommu_domain *old)
+{
+	struct device_domain_info *info = dev_iommu_priv_get(dev);
+	struct intel_iommu *iommu = info->iommu;
+
+	if (pasid != IOMMU_NO_PASID) {
+		if (WARN_ON_ONCE(!(domain->type & __IOMMU_DOMAIN_PAGING)))
+			return -EINVAL;
+		if (!pasid_supported(iommu) || dev_is_real_dma_subdevice(dev))
+			return -EOPNOTSUPP;
+		if (domain->dirty_ops)
+			return -EINVAL;
+		if (context_copied(iommu, info->bus, info->devfn))
+			return -EBUSY;
+	}
+	return paging_domain_compatible(domain, dev);
+}
+
 static int intel_iommu_attach_device(struct iommu_domain *domain,
 				     struct device *dev,
 				     struct iommu_domain *old)
@@ -3544,10 +3564,6 @@ static int intel_iommu_attach_device(struct iommu_domain *domain,
 	int ret;
 
 	device_block_translation(dev);
-
-	ret = paging_domain_compatible(domain, dev);
-	if (ret)
-		return ret;
 
 	ret = iopf_for_domain_set(domain, dev);
 	if (ret)
@@ -4151,22 +4167,6 @@ static int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
 	struct dev_pasid_info *dev_pasid;
 	int ret;
 
-	if (WARN_ON_ONCE(!(domain->type & __IOMMU_DOMAIN_PAGING)))
-		return -EINVAL;
-
-	if (!pasid_supported(iommu) || dev_is_real_dma_subdevice(dev))
-		return -EOPNOTSUPP;
-
-	if (domain->dirty_ops)
-		return -EINVAL;
-
-	if (context_copied(iommu, info->bus, info->devfn))
-		return -EBUSY;
-
-	ret = paging_domain_compatible(domain, dev);
-	if (ret)
-		return ret;
-
 	dev_pasid = domain_add_dev_pasid(domain, dev, pasid);
 	if (IS_ERR(dev_pasid))
 		return PTR_ERR(dev_pasid);
@@ -4178,12 +4178,9 @@ static int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
 	if (intel_domain_is_fs_paging(dmar_domain))
 		ret = domain_setup_first_level(iommu, dmar_domain,
 					       dev, pasid, old);
-	else if (intel_domain_is_ss_paging(dmar_domain))
+	else /* paging_domain_compatible() made sure it's ss_paging */
 		ret = domain_setup_second_level(iommu, dmar_domain,
 						dev, pasid, old);
-	else if (WARN_ON(true))
-		ret = -EINVAL;
-
 	if (ret)
 		goto out_unwind_iopf;
 
@@ -4403,6 +4400,21 @@ static int device_setup_pass_through(struct device *dev)
 				      context_setup_pass_through_cb, dev);
 }
 
+static int identity_domain_test_dev(struct iommu_domain *domain,
+				    struct device *dev, ioasid_t pasid,
+				    struct iommu_domain *old)
+{
+	if (pasid != IOMMU_NO_PASID) {
+		struct device_domain_info *info = dev_iommu_priv_get(dev);
+		struct intel_iommu *iommu = info->iommu;
+
+		if (!pasid_supported(iommu) || dev_is_real_dma_subdevice(dev))
+			return -EOPNOTSUPP;
+	}
+
+	return 0;
+}
+
 static int identity_domain_attach_dev(struct iommu_domain *domain,
 				      struct device *dev,
 				      struct iommu_domain *old)
@@ -4440,9 +4452,6 @@ static int identity_domain_set_dev_pasid(struct iommu_domain *domain,
 	struct intel_iommu *iommu = info->iommu;
 	int ret;
 
-	if (!pasid_supported(iommu) || dev_is_real_dma_subdevice(dev))
-		return -EOPNOTSUPP;
-
 	ret = iopf_for_domain_replace(domain, old, dev);
 	if (ret)
 		return ret;
@@ -4460,12 +4469,14 @@ static int identity_domain_set_dev_pasid(struct iommu_domain *domain,
 static struct iommu_domain identity_domain = {
 	.type = IOMMU_DOMAIN_IDENTITY,
 	.ops = &(const struct iommu_domain_ops) {
+		.test_dev	= identity_domain_test_dev,
 		.attach_dev	= identity_domain_attach_dev,
 		.set_dev_pasid	= identity_domain_set_dev_pasid,
 	},
 };
 
 const struct iommu_domain_ops intel_fs_paging_domain_ops = {
+	.test_dev = intel_iommu_test_device,
 	.attach_dev = intel_iommu_attach_device,
 	.set_dev_pasid = intel_iommu_set_dev_pasid,
 	.map_pages = intel_iommu_map_pages,
@@ -4479,6 +4490,7 @@ const struct iommu_domain_ops intel_fs_paging_domain_ops = {
 };
 
 const struct iommu_domain_ops intel_ss_paging_domain_ops = {
+	.test_dev = intel_iommu_test_device,
 	.attach_dev = intel_iommu_attach_device,
 	.set_dev_pasid = intel_iommu_set_dev_pasid,
 	.map_pages = intel_iommu_map_pages,
