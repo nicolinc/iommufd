@@ -99,31 +99,39 @@ static const struct mmu_notifier_ops sva_mn = {
 	.release = sva_mn_release,
 };
 
-int iommu_sva_set_dev_pasid(struct iommu_domain *domain,
-			    struct device *dev, ioasid_t pasid,
-			    struct iommu_domain *old)
+static int iommu_sva_test_dev(struct iommu_domain *domain, struct device *dev,
+			      ioasid_t pasid, struct iommu_domain *old)
 {
-	struct pdom_dev_data *pdom_dev_data;
-	struct protection_domain *sva_pdom = to_pdomain(domain);
 	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
-	unsigned long flags;
-	int ret = -EINVAL;
 
 	if (old)
 		return -EOPNOTSUPP;
 
 	/* PASID zero is used for requests from the I/O device without PASID */
 	if (!is_pasid_valid(dev_data, pasid))
-		return ret;
+		return -EINVAL;
 
 	/* Make sure PASID is enabled */
 	if (!is_pasid_enabled(dev_data))
-		return ret;
+		return -EINVAL;
+
+	return 0;
+}
+
+static int iommu_sva_set_dev_pasid(struct iommu_domain *domain,
+				   struct device *dev, ioasid_t pasid,
+				   struct iommu_domain *old)
+{
+	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
+	struct protection_domain *sva_pdom = to_pdomain(domain);
+	struct pdom_dev_data *pdom_dev_data;
+	unsigned long flags;
+	int ret;
 
 	/* Add PASID to protection domain pasid list */
 	pdom_dev_data = kzalloc(sizeof(*pdom_dev_data), GFP_KERNEL);
 	if (pdom_dev_data == NULL)
-		return ret;
+		return -ENOMEM;
 
 	pdom_dev_data->pasid = pasid;
 	pdom_dev_data->dev_data = dev_data;
@@ -175,6 +183,7 @@ static void iommu_sva_domain_free(struct iommu_domain *domain)
 }
 
 static const struct iommu_domain_ops amd_sva_domain_ops = {
+	.test_dev      = iommu_sva_test_dev,
 	.set_dev_pasid = iommu_sva_set_dev_pasid,
 	.free	       = iommu_sva_domain_free
 };
