@@ -1165,15 +1165,9 @@ static void arm_smmu_master_install_s2crs(struct arm_smmu_master_cfg *cfg,
 	}
 }
 
-static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev,
-			       struct iommu_domain *old)
+static int arm_smmu_test_dev(struct iommu_domain *domain, struct device *dev,
+			     ioasid_t pasid, struct iommu_domain *old)
 {
-	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
-	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
-	struct arm_smmu_master_cfg *cfg;
-	struct arm_smmu_device *smmu;
-	int ret;
-
 	/*
 	 * FIXME: The arch/arm DMA API code tries to attach devices to its own
 	 * domains between of_xlate() and probe_device() - we have no way to cope
@@ -1181,11 +1175,19 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev,
 	 * domains, just say no (but more politely than by dereferencing NULL).
 	 * This should be at least a WARN_ON once that's sorted.
 	 */
-	cfg = dev_iommu_priv_get(dev);
-	if (!cfg)
+	if (!dev_iommu_priv_get(dev))
 		return -ENODEV;
+	return 0;
+}
 
-	smmu = cfg->smmu;
+static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev,
+			       struct iommu_domain *old)
+{
+	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+	struct arm_smmu_master_cfg *cfg = dev_iommu_priv_get(dev);
+	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
+	struct arm_smmu_device *smmu = cfg->smmu;
+	int ret;
 
 	ret = arm_smmu_rpm_get(smmu);
 	if (ret < 0)
@@ -1221,8 +1223,6 @@ static int arm_smmu_attach_dev_type(struct device *dev,
 	struct arm_smmu_device *smmu;
 	int ret;
 
-	if (!cfg)
-		return -ENODEV;
 	smmu = cfg->smmu;
 
 	ret = arm_smmu_rpm_get(smmu);
@@ -1242,6 +1242,7 @@ static int arm_smmu_attach_dev_identity(struct iommu_domain *domain,
 }
 
 static const struct iommu_domain_ops arm_smmu_identity_ops = {
+	.test_dev = arm_smmu_test_dev,
 	.attach_dev = arm_smmu_attach_dev_identity,
 };
 
@@ -1258,6 +1259,7 @@ static int arm_smmu_attach_dev_blocked(struct iommu_domain *domain,
 }
 
 static const struct iommu_domain_ops arm_smmu_blocked_ops = {
+	.test_dev = arm_smmu_test_dev,
 	.attach_dev = arm_smmu_attach_dev_blocked,
 };
 
@@ -1647,6 +1649,7 @@ static const struct iommu_ops arm_smmu_ops = {
 	.def_domain_type	= arm_smmu_def_domain_type,
 	.owner			= THIS_MODULE,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.test_dev		= arm_smmu_test_dev,
 		.attach_dev		= arm_smmu_attach_dev,
 		.map_pages		= arm_smmu_map_pages,
 		.unmap_pages		= arm_smmu_unmap_pages,
