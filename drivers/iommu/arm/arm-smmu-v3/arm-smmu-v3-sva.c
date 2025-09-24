@@ -276,9 +276,6 @@ static int arm_smmu_sva_set_dev_pasid(struct iommu_domain *domain,
 	struct arm_smmu_cd target;
 	int ret;
 
-	if (!(master->smmu->features & ARM_SMMU_FEAT_SVA))
-		return -EOPNOTSUPP;
-
 	/* Prevent arm_smmu_mm_release from being called while we are attaching */
 	if (!mmget_not_zero(domain->mm))
 		return -EINVAL;
@@ -319,6 +316,7 @@ static void arm_smmu_sva_domain_free(struct iommu_domain *domain)
 }
 
 static const struct iommu_domain_ops arm_smmu_sva_domain_ops = {
+	.test_dev		= arm_smmu_domain_test_dev,
 	.set_dev_pasid		= arm_smmu_sva_set_dev_pasid,
 	.free			= arm_smmu_sva_domain_free
 };
