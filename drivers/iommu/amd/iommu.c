@@ -69,6 +69,8 @@ int amd_iommu_max_glx_val = -1;
  */
 DEFINE_IDA(pdom_ids);
 
+static int amd_iommu_test_device(struct iommu_domain *dom, struct device *dev,
+				 ioasid_t pasid, struct iommu_domain *old);
 static int amd_iommu_attach_device(struct iommu_domain *dom, struct device *dev,
 				   struct iommu_domain *old);
 
@@ -2669,6 +2671,7 @@ static struct iommu_domain blocked_domain = {
 static struct protection_domain identity_domain;
 
 static const struct iommu_domain_ops identity_domain_ops = {
+	.test_dev = amd_iommu_test_device,
 	.attach_dev = amd_iommu_attach_device,
 };
 
@@ -2685,12 +2688,26 @@ void amd_iommu_init_identity_domain(void)
 	protection_domain_init(&identity_domain);
 }
 
+static int amd_iommu_test_device(struct iommu_domain *dom, struct device *dev,
+				 ioasid_t pasid, struct iommu_domain *old)
+{
+	struct amd_iommu *iommu = get_amd_iommu_from_dev(dev);
+
+	/*
+	 * Restrict to devices with compatible IOMMU hardware support
+	 * when enforcement of dirty tracking is enabled.
+	 */
+	if (dom->dirty_ops && !amd_iommu_hd_support(iommu))
+		return -EINVAL;
+
+	return 0;
+}
+
 static int amd_iommu_attach_device(struct iommu_domain *dom, struct device *dev,
 				   struct iommu_domain *old)
 {
 	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
 	struct protection_domain *domain = to_pdomain(dom);
-	struct amd_iommu *iommu = get_amd_iommu_from_dev(dev);
 	int ret;
 
 	/*
@@ -2701,13 +2718,6 @@ static int amd_iommu_attach_device(struct iommu_domain *dom, struct device *dev,
 		return 0;
 
 	dev_data->defer_attach = false;
-
-	/*
-	 * Restrict to devices with compatible IOMMU hardware support
-	 * when enforcement of dirty tracking is enabled.
-	 */
-	if (dom->dirty_ops && !amd_iommu_hd_support(iommu))
-		return -EINVAL;
 
 	if (dev_data->domain)
 		detach_device(dev);
@@ -3046,6 +3056,7 @@ const struct iommu_ops amd_iommu_ops = {
 	.def_domain_type = amd_iommu_def_domain_type,
 	.page_response = amd_iommu_page_response,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.test_dev	= amd_iommu_test_device,
 		.attach_dev	= amd_iommu_attach_device,
 		.map_pages	= amd_iommu_map_pages,
 		.unmap_pages	= amd_iommu_unmap_pages,
