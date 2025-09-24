@@ -672,6 +672,37 @@ static int arm_smmu_alloc_context_bank(struct arm_smmu_domain *smmu_domain,
 	return __arm_smmu_alloc_bitmap(smmu->context_map, start, smmu->num_context_banks);
 }
 
+static enum arm_smmu_context_fmt
+arm_smmu_get_context_fmt(struct arm_smmu_domain *smmu_domain)
+{
+	struct arm_smmu_device *smmu = smmu_domain->smmu;
+	struct arm_smmu_cfg *cfg = &smmu_domain->cfg;
+	enum arm_smmu_context_fmt fmt = cfg->fmt;
+
+	/*
+	 * Choosing a suitable context format is even more fiddly. Until we
+	 * grow some way for the caller to express a preference, and/or move
+	 * the decision into the io-pgtable code where it arguably belongs,
+	 * just aim for the closest thing to the rest of the system, and hope
+	 * that the hardware isn't esoteric enough that we can't assume AArch64
+	 * support to be a superset of AArch32 support...
+	 */
+	if (smmu->features & ARM_SMMU_FEAT_FMT_AARCH32_L)
+		fmt = ARM_SMMU_CTX_FMT_AARCH32_L;
+	if (IS_ENABLED(CONFIG_IOMMU_IO_PGTABLE_ARMV7S) &&
+	    !IS_ENABLED(CONFIG_64BIT) && !IS_ENABLED(CONFIG_ARM_LPAE) &&
+	    (smmu->features & ARM_SMMU_FEAT_FMT_AARCH32_S) &&
+	    (smmu_domain->stage == ARM_SMMU_DOMAIN_S1))
+		fmt = ARM_SMMU_CTX_FMT_AARCH32_S;
+	if ((IS_ENABLED(CONFIG_64BIT) || cfg->fmt == ARM_SMMU_CTX_FMT_NONE) &&
+	    (smmu->features & (ARM_SMMU_FEAT_FMT_AARCH64_64K |
+			       ARM_SMMU_FEAT_FMT_AARCH64_16K |
+			       ARM_SMMU_FEAT_FMT_AARCH64_4K)))
+		fmt = ARM_SMMU_CTX_FMT_AARCH64;
+
+	return fmt;
+}
+
 static int arm_smmu_init_domain_context(struct arm_smmu_domain *smmu_domain,
 					struct arm_smmu_device *smmu,
 					struct device *dev)
@@ -712,31 +743,8 @@ static int arm_smmu_init_domain_context(struct arm_smmu_domain *smmu_domain,
 	if (!(smmu->features & ARM_SMMU_FEAT_TRANS_S2))
 		smmu_domain->stage = ARM_SMMU_DOMAIN_S1;
 
-	/*
-	 * Choosing a suitable context format is even more fiddly. Until we
-	 * grow some way for the caller to express a preference, and/or move
-	 * the decision into the io-pgtable code where it arguably belongs,
-	 * just aim for the closest thing to the rest of the system, and hope
-	 * that the hardware isn't esoteric enough that we can't assume AArch64
-	 * support to be a superset of AArch32 support...
-	 */
-	if (smmu->features & ARM_SMMU_FEAT_FMT_AARCH32_L)
-		cfg->fmt = ARM_SMMU_CTX_FMT_AARCH32_L;
-	if (IS_ENABLED(CONFIG_IOMMU_IO_PGTABLE_ARMV7S) &&
-	    !IS_ENABLED(CONFIG_64BIT) && !IS_ENABLED(CONFIG_ARM_LPAE) &&
-	    (smmu->features & ARM_SMMU_FEAT_FMT_AARCH32_S) &&
-	    (smmu_domain->stage == ARM_SMMU_DOMAIN_S1))
-		cfg->fmt = ARM_SMMU_CTX_FMT_AARCH32_S;
-	if ((IS_ENABLED(CONFIG_64BIT) || cfg->fmt == ARM_SMMU_CTX_FMT_NONE) &&
-	    (smmu->features & (ARM_SMMU_FEAT_FMT_AARCH64_64K |
-			       ARM_SMMU_FEAT_FMT_AARCH64_16K |
-			       ARM_SMMU_FEAT_FMT_AARCH64_4K)))
-		cfg->fmt = ARM_SMMU_CTX_FMT_AARCH64;
-
-	if (cfg->fmt == ARM_SMMU_CTX_FMT_NONE) {
-		ret = -EINVAL;
-		goto out_unlock;
-	}
+	cfg->fmt = arm_smmu_get_context_fmt(smmu_domain);
+	WARN_ON(cfg->fmt == ARM_SMMU_CTX_FMT_NONE);
 
 	switch (smmu_domain->stage) {
 	case ARM_SMMU_DOMAIN_S1:
@@ -1165,14 +1173,11 @@ static void arm_smmu_master_install_s2crs(struct arm_smmu_master_cfg *cfg,
 	}
 }
 
-static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev,
-			       struct iommu_domain *old)
+static int arm_smmu_test_dev(struct iommu_domain *domain, struct device *dev,
+			     ioasid_t pasid, struct iommu_domain *old)
 {
-	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
-	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
-	struct arm_smmu_master_cfg *cfg;
-	struct arm_smmu_device *smmu;
-	int ret;
+	struct arm_smmu_master_cfg *cfg = dev_iommu_priv_get(dev);
+	struct arm_smmu_domain *smmu_domain;
 
 	/*
 	 * FIXME: The arch/arm DMA API code tries to attach devices to its own
@@ -1181,11 +1186,40 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev,
 	 * domains, just say no (but more politely than by dereferencing NULL).
 	 * This should be at least a WARN_ON once that's sorted.
 	 */
-	cfg = dev_iommu_priv_get(dev);
 	if (!cfg)
 		return -ENODEV;
 
-	smmu = cfg->smmu;
+	if (domain == arm_smmu_ops.identity_domain ||
+	    domain == arm_smmu_ops.blocked_domain)
+		return 0;
+
+	smmu_domain = to_smmu_domain(domain);
+	scoped_guard(mutex, &smmu_domain->init_mutex) {
+		/* arm_smmu_init_domain_context() will initialize it */
+		if (!smmu_domain->smmu)
+			return 0;
+		/*
+		 * Sanity check the domain. We don't support domains across
+		 * different SMMUs.
+		 */
+		if (smmu_domain->smmu != cfg->smmu)
+			return -EINVAL;
+		if (arm_smmu_get_context_fmt(smmu_domain) ==
+		    ARM_SMMU_CTX_FMT_NONE)
+			return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev,
+			       struct iommu_domain *old)
+{
+	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+	struct arm_smmu_master_cfg *cfg = dev_iommu_priv_get(dev);
+	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
+	struct arm_smmu_device *smmu = cfg->smmu;
+	int ret;
 
 	ret = arm_smmu_rpm_get(smmu);
 	if (ret < 0)
@@ -1195,15 +1229,6 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev,
 	ret = arm_smmu_init_domain_context(smmu_domain, smmu, dev);
 	if (ret < 0)
 		goto rpm_put;
-
-	/*
-	 * Sanity check the domain. We don't support domains across
-	 * different SMMUs.
-	 */
-	if (smmu_domain->smmu != smmu) {
-		ret = -EINVAL;
-		goto rpm_put;
-	}
 
 	/* Looks ok, so add the device to the domain */
 	arm_smmu_master_install_s2crs(cfg, S2CR_TYPE_TRANS,
@@ -1221,8 +1246,6 @@ static int arm_smmu_attach_dev_type(struct device *dev,
 	struct arm_smmu_device *smmu;
 	int ret;
 
-	if (!cfg)
-		return -ENODEV;
 	smmu = cfg->smmu;
 
 	ret = arm_smmu_rpm_get(smmu);
@@ -1242,6 +1265,7 @@ static int arm_smmu_attach_dev_identity(struct iommu_domain *domain,
 }
 
 static const struct iommu_domain_ops arm_smmu_identity_ops = {
+	.test_dev = arm_smmu_test_dev,
 	.attach_dev = arm_smmu_attach_dev_identity,
 };
 
@@ -1258,6 +1282,7 @@ static int arm_smmu_attach_dev_blocked(struct iommu_domain *domain,
 }
 
 static const struct iommu_domain_ops arm_smmu_blocked_ops = {
+	.test_dev = arm_smmu_test_dev,
 	.attach_dev = arm_smmu_attach_dev_blocked,
 };
 
@@ -1647,6 +1672,7 @@ static const struct iommu_ops arm_smmu_ops = {
 	.def_domain_type	= arm_smmu_def_domain_type,
 	.owner			= THIS_MODULE,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.test_dev		= arm_smmu_test_dev,
 		.attach_dev		= arm_smmu_attach_dev,
 		.map_pages		= arm_smmu_map_pages,
 		.unmap_pages		= arm_smmu_unmap_pages,
