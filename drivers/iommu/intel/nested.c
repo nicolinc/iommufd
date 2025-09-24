@@ -18,19 +18,20 @@
 #include "iommu.h"
 #include "pasid.h"
 
-static int intel_nested_attach_dev(struct iommu_domain *domain,
-				   struct device *dev, struct iommu_domain *old)
+static int intel_nested_test_dev(struct iommu_domain *domain,
+				 struct device *dev, ioasid_t pasid,
+				 struct iommu_domain *old)
 {
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
 	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
 	struct intel_iommu *iommu = info->iommu;
-	unsigned long flags;
-	int ret = 0;
+	int ret;
 
-	device_block_translation(dev);
+	if (pasid != IOMMU_NO_PASID)
+		return -EOPNOTSUPP;
 
 	if (iommu->agaw < dmar_domain->s2_domain->agaw) {
-		dev_err_ratelimited(dev, "Adjusted guest address width not compatible\n");
+		dev_dbg_ratelimited(dev, "Adjusted guest address width not compatible\n");
 		return -ENODEV;
 	}
 
@@ -41,9 +42,23 @@ static int intel_nested_attach_dev(struct iommu_domain *domain,
 	 */
 	ret = paging_domain_compatible(&dmar_domain->s2_domain->domain, dev);
 	if (ret) {
-		dev_err_ratelimited(dev, "s2 domain is not compatible\n");
+		dev_dbg_ratelimited(dev, "s2 domain is not compatible\n");
 		return ret;
 	}
+
+	return 0;
+}
+
+static int intel_nested_attach_dev(struct iommu_domain *domain,
+				   struct device *dev, struct iommu_domain *old)
+{
+	struct device_domain_info *info = dev_iommu_priv_get(dev);
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct intel_iommu *iommu = info->iommu;
+	unsigned long flags;
+	int ret = 0;
+
+	device_block_translation(dev);
 
 	ret = domain_attach_iommu(dmar_domain, iommu);
 	if (ret) {
@@ -192,6 +207,7 @@ out_remove_dev_pasid:
 }
 
 static const struct iommu_domain_ops intel_nested_domain_ops = {
+	.test_dev		= intel_nested_test_dev,
 	.attach_dev		= intel_nested_attach_dev,
 	.set_dev_pasid		= intel_nested_set_dev_pasid,
 	.free			= intel_nested_domain_free,
