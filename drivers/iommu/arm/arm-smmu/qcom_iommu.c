@@ -359,17 +359,35 @@ static void qcom_iommu_domain_free(struct iommu_domain *domain)
 	kfree(qcom_domain);
 }
 
+static int qcom_iommu_domain_test_dev(struct iommu_domain *domain,
+				      struct device *dev, ioasid_t pasid,
+				      struct iommu_domain *old)
+{
+	struct qcom_iommu_dev *qcom_iommu = dev_iommu_priv_get(dev);
+	struct qcom_iommu_domain *qcom_domain = to_qcom_iommu_domain(domain);
+
+	if (!qcom_iommu) {
+		dev_dbg(dev, "cannot attach to IOMMU, is it on the same bus?\n");
+		return -ENXIO;
+	}
+
+	scoped_guard(mutex, &qcom_domain->init_mutex) {
+		/*
+		 * Sanity check the domain. We don't support domains across
+		 * different IOMMUs.
+		 */
+		if (qcom_domain->iommu && qcom_domain->iommu != qcom_iommu)
+			return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int qcom_iommu_attach_dev(struct iommu_domain *domain,
 				 struct device *dev, struct iommu_domain *old)
 {
 	struct qcom_iommu_dev *qcom_iommu = dev_iommu_priv_get(dev);
-	struct qcom_iommu_domain *qcom_domain = to_qcom_iommu_domain(domain);
 	int ret;
-
-	if (!qcom_iommu) {
-		dev_err(dev, "cannot attach to IOMMU, is it on the same bus?\n");
-		return -ENXIO;
-	}
 
 	/* Ensure that the domain is finalized */
 	pm_runtime_get_sync(qcom_iommu->dev);
@@ -378,13 +396,17 @@ static int qcom_iommu_attach_dev(struct iommu_domain *domain,
 	if (ret < 0)
 		return ret;
 
-	/*
-	 * Sanity check the domain. We don't support domains across
-	 * different IOMMUs.
-	 */
-	if (qcom_domain->iommu != qcom_iommu)
-		return -EINVAL;
+	return 0;
+}
 
+static int qcom_iommu_identity_test(struct iommu_domain *identity_domain,
+				    struct device *dev, ioasid_t pasid,
+				    struct iommu_domain *old)
+{
+	if (old == identity_domain || !old)
+		return 0;
+	if (WARN_ON(!to_qcom_iommu_domain(old)->iommu))
+		return -EINVAL;
 	return 0;
 }
 
@@ -401,8 +423,6 @@ static int qcom_iommu_identity_attach(struct iommu_domain *identity_domain,
 		return 0;
 
 	qcom_domain = to_qcom_iommu_domain(old);
-	if (WARN_ON(!qcom_domain->iommu))
-		return -EINVAL;
 
 	pm_runtime_get_sync(qcom_iommu->dev);
 	for (i = 0; i < fwspec->num_ids; i++) {
@@ -418,6 +438,7 @@ static int qcom_iommu_identity_attach(struct iommu_domain *identity_domain,
 }
 
 static struct iommu_domain_ops qcom_iommu_identity_ops = {
+	.test_dev = qcom_iommu_identity_test,
 	.attach_dev = qcom_iommu_identity_attach,
 };
 
@@ -599,6 +620,7 @@ static const struct iommu_ops qcom_iommu_ops = {
 	.device_group	= generic_device_group,
 	.of_xlate	= qcom_iommu_of_xlate,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.test_dev	= qcom_iommu_domain_test_dev,
 		.attach_dev	= qcom_iommu_attach_dev,
 		.map_pages	= qcom_iommu_map,
 		.unmap_pages	= qcom_iommu_unmap,
