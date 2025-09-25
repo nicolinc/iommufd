@@ -589,6 +589,30 @@ static void ipmmu_domain_free(struct iommu_domain *io_domain)
 	kfree(domain);
 }
 
+static int ipmmu_domain_test_device(struct iommu_domain *io_domain,
+				    struct device *dev, ioasid_t pasid,
+				    struct iommu_domain *old)
+{
+	struct ipmmu_vmsa_domain *domain = to_vmsa_domain(io_domain);
+	struct ipmmu_vmsa_device *mmu = to_ipmmu(dev);
+
+	if (!mmu) {
+		dev_dbg(dev, "Cannot attach to IPMMU\n");
+		return -ENXIO;
+	}
+
+	scoped_guard(mutex, &domain->mutex) {
+		/*
+		 * Something is wrong, we can't attach two devices using different
+		 * IOMMUs to the same domain.
+		 */
+		if (domain->mmu && domain->mmu != mmu)
+			return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int ipmmu_attach_device(struct iommu_domain *io_domain,
 			       struct device *dev, struct iommu_domain *old)
 {
@@ -597,11 +621,6 @@ static int ipmmu_attach_device(struct iommu_domain *io_domain,
 	struct ipmmu_vmsa_domain *domain = to_vmsa_domain(io_domain);
 	unsigned int i;
 	int ret = 0;
-
-	if (!mmu) {
-		dev_err(dev, "Cannot attach to IPMMU\n");
-		return -ENXIO;
-	}
 
 	mutex_lock(&domain->mutex);
 
@@ -616,13 +635,7 @@ static int ipmmu_attach_device(struct iommu_domain *io_domain,
 			dev_info(dev, "Using IPMMU context %u\n",
 				 domain->context_id);
 		}
-	} else if (domain->mmu != mmu) {
-		/*
-		 * Something is wrong, we can't attach two devices using
-		 * different IOMMUs to the same domain.
-		 */
-		ret = -EINVAL;
-	} else
+	} else /* domain->mmu == mmu */
 		dev_info(dev, "Reusing IPMMU context %u\n", domain->context_id);
 
 	mutex_unlock(&domain->mutex);
@@ -885,6 +898,7 @@ static const struct iommu_ops ipmmu_ops = {
 			? generic_device_group : generic_single_device_group,
 	.of_xlate = ipmmu_of_xlate,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.test_dev	= ipmmu_domain_test_device,
 		.attach_dev	= ipmmu_attach_device,
 		.map_pages	= ipmmu_map,
 		.unmap_pages	= ipmmu_unmap,
