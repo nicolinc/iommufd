@@ -237,6 +237,43 @@ static int update_domain_stash(struct fsl_dma_domain *dma_domain, u32 val)
 	return ret;
 }
 
+static int fsl_pamu_domain_test_device(struct iommu_domain *domain,
+				       struct device *dev, ioasid_t pasid,
+				       struct iommu_domain *old)
+{
+	struct fsl_dma_domain *dma_domain = to_fsl_dma_domain(domain);
+	const u32 *liodn;
+	int len, i;
+
+	/* Use LIODN of the PCI controller while attaching a PCI device. */
+	if (dev_is_pci(dev)) {
+		/*
+		 * make dev point to pci controller device so we can get the
+		 * LIODN programmed by u-boot.
+		 */
+		dev = pci_bus_to_host(to_pci_dev(dev)->bus)->parent;
+	}
+
+	liodn = of_get_property(dev->of_node, "fsl,liodn", &len);
+	if (!liodn) {
+		pr_debug("missing fsl,liodn property at %pOF\n", dev->of_node);
+		return -ENODEV;
+	}
+
+	guard(spin_lock_irqsave)(&dma_domain->domain_lock);
+
+	for (i = 0; i < len / sizeof(u32); i++) {
+		/* Ensure that LIODN value is valid */
+		if (liodn[i] < PAACE_NUMBER_ENTRIES)
+			continue;
+		pr_debug("Invalid liodn %d, attach device failed for %pOF\n",
+			 liodn[i], dev->of_node);
+		return -ENODEV;
+	}
+
+	return 0;
+}
+
 static int fsl_pamu_attach_device(struct iommu_domain *domain,
 				  struct device *dev, struct iommu_domain *old)
 {
@@ -263,21 +300,9 @@ static int fsl_pamu_attach_device(struct iommu_domain *domain,
 	}
 
 	liodn = of_get_property(dev->of_node, "fsl,liodn", &len);
-	if (!liodn) {
-		pr_debug("missing fsl,liodn property at %pOF\n", dev->of_node);
-		return -ENODEV;
-	}
 
 	spin_lock_irqsave(&dma_domain->domain_lock, flags);
 	for (i = 0; i < len / sizeof(u32); i++) {
-		/* Ensure that LIODN value is valid */
-		if (liodn[i] >= PAACE_NUMBER_ENTRIES) {
-			pr_debug("Invalid liodn %d, attach device failed for %pOF\n",
-				 liodn[i], dev->of_node);
-			ret = -ENODEV;
-			break;
-		}
-
 		attach_device(dma_domain, liodn[i], dev);
 		ret = pamu_set_liodn(dma_domain, dev, liodn[i]);
 		if (ret)
@@ -434,6 +459,7 @@ static const struct iommu_ops fsl_pamu_ops = {
 	.probe_device	= fsl_pamu_probe_device,
 	.device_group   = fsl_pamu_device_group,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.test_dev	= fsl_pamu_domain_test_device,
 		.attach_dev	= fsl_pamu_attach_device,
 		.iova_to_phys	= fsl_pamu_iova_to_phys,
 		.free		= fsl_pamu_domain_free,
