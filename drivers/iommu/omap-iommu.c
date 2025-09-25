@@ -1392,9 +1392,6 @@ static int omap_iommu_attach_init(struct device *dev,
 	int i;
 
 	odomain->num_iommus = omap_iommu_count(dev);
-	if (!odomain->num_iommus)
-		return -ENODEV;
-
 	odomain->iommus = kcalloc(odomain->num_iommus, sizeof(*iommu),
 				  GFP_ATOMIC);
 	if (!odomain->iommus)
@@ -1431,6 +1428,31 @@ static void omap_iommu_detach_fini(struct omap_iommu_domain *odomain)
 	odomain->iommus = NULL;
 }
 
+static int omap_iommu_domain_test_dev(struct iommu_domain *domain,
+				      struct device *dev, ioasid_t pasid,
+				      struct iommu_domain *old)
+{
+	struct omap_iommu_arch_data *arch_data = dev_iommu_priv_get(dev);
+	struct omap_iommu_domain *omap_domain = to_omap_domain(domain);
+
+	if (!arch_data || !arch_data->iommu_dev) {
+		dev_dbg(dev, "device doesn't have an associated iommu\n");
+		return -ENODEV;
+	}
+
+	scoped_guard(spinlock, &omap_domain->lock) {
+		/* only a single client device can be attached to a domain */
+		if (omap_domain->dev) {
+			dev_dbg(dev, "iommu domain is already attached\n");
+			return -EINVAL;
+		}
+		if (!omap_iommu_count(dev))
+			return -ENODEV;
+	}
+
+	return 0;
+}
+
 static int omap_iommu_attach_dev(struct iommu_domain *domain,
 				 struct device *dev, struct iommu_domain *old)
 {
@@ -1441,19 +1463,7 @@ static int omap_iommu_attach_dev(struct iommu_domain *domain,
 	int ret = 0;
 	int i;
 
-	if (!arch_data || !arch_data->iommu_dev) {
-		dev_err(dev, "device doesn't have an associated iommu\n");
-		return -ENODEV;
-	}
-
 	spin_lock(&omap_domain->lock);
-
-	/* only a single client device can be attached to a domain */
-	if (omap_domain->dev) {
-		dev_err(dev, "iommu domain is already attached\n");
-		ret = -EINVAL;
-		goto out;
-	}
 
 	ret = omap_iommu_attach_init(dev, omap_domain);
 	if (ret) {
@@ -1724,6 +1734,7 @@ static const struct iommu_ops omap_iommu_ops = {
 	.device_group	= generic_single_device_group,
 	.of_xlate	= omap_iommu_of_xlate,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.test_dev	= omap_iommu_domain_test_dev,
 		.attach_dev	= omap_iommu_attach_dev,
 		.map_pages	= omap_iommu_map,
 		.unmap_pages	= omap_iommu_unmap,
