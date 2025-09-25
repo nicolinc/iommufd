@@ -391,6 +391,32 @@ static struct iommu_device *msm_iommu_probe_device(struct device *dev)
 	return &iommu->iommu;
 }
 
+static int msm_iommu_domain_test_dev(struct iommu_domain *domain,
+				     struct device *dev, ioasid_t pasid,
+				     struct iommu_domain *old)
+{
+	struct msm_iommu_ctx_dev *master;
+	struct msm_iommu_dev *iommu;
+
+	guard(spinlock_irqsave)(&msm_iommu_lock);
+
+	list_for_each_entry(iommu, &qcom_iommu_devices, dev_node) {
+		struct msm_iommu_ctx_dev *master = list_first_entry(
+			&iommu->ctx_list, struct msm_iommu_ctx_dev, list);
+
+		if (master->of_node != dev->of_node)
+			continue;
+		list_for_each_entry(master, &iommu->ctx_list, list) {
+			if (master->num) {
+				dev_dbg(dev, "domain already attached");
+				return -EBUSY;
+			}
+		}
+	}
+
+	return 0;
+}
+
 static int msm_iommu_attach_dev(struct iommu_domain *domain, struct device *dev,
 				struct iommu_domain *old)
 {
@@ -414,11 +440,6 @@ static int msm_iommu_attach_dev(struct iommu_domain *domain, struct device *dev,
 				goto fail;
 
 			list_for_each_entry(master, &iommu->ctx_list, list) {
-				if (master->num) {
-					dev_err(dev, "domain already attached");
-					ret = -EEXIST;
-					goto fail;
-				}
 				master->num =
 					msm_iommu_alloc_ctx(iommu->context_map,
 							    0, iommu->ncb);
@@ -695,6 +716,7 @@ static struct iommu_ops msm_iommu_ops = {
 	.device_group = generic_device_group,
 	.of_xlate = qcom_iommu_of_xlate,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.test_dev	= msm_iommu_domain_test_dev,
 		.attach_dev	= msm_iommu_attach_dev,
 		.map_pages	= msm_iommu_map,
 		.unmap_pages	= msm_iommu_unmap,
