@@ -58,6 +58,7 @@ enum {
 	MOCK_PFN_HUGE_IOVA = _MOCK_PFN_START << 2,
 };
 
+static struct iopf_queue *mock_iommu_iopf_queue;
 static int mock_dev_enable_iopf(struct device *dev, struct iommu_domain *domain);
 static void mock_dev_disable_iopf(struct device *dev, struct iommu_domain *domain);
 
@@ -215,6 +216,37 @@ static inline struct selftest_obj *to_selftest_obj(struct iommufd_object *obj)
 	return container_of(obj, struct selftest_obj, obj);
 }
 
+static int mock_domain_nop_test(struct iommu_domain *domain, struct device *dev,
+				ioasid_t pasid, struct iommu_domain *old)
+{
+	struct mock_dev *mdev = to_mock_dev(dev);
+
+	if (domain->dirty_ops && (mdev->flags & MOCK_FLAGS_DEVICE_NO_DIRTY))
+		return -EINVAL;
+
+	iommu_group_mutex_assert(dev);
+	if (domain->type == IOMMU_DOMAIN_NESTED) {
+		struct mock_viommu *viommu =
+			to_mock_nested(domain)->mock_viommu;
+		unsigned long vdev_id = 0;
+		int rc;
+
+		if (viommu) {
+			rc = iommufd_viommu_get_vdev_id(&viommu->core, dev,
+							&vdev_id);
+			if (rc)
+				return rc;
+		}
+	}
+
+	if (domain && domain->iopf_handler) {
+		if (!mock_iommu_iopf_queue)
+			return -ENODEV;
+	}
+
+	return 0;
+}
+
 static int mock_domain_nop_attach(struct iommu_domain *domain,
 				  struct device *dev, struct iommu_domain *old)
 {
@@ -223,16 +255,13 @@ static int mock_domain_nop_attach(struct iommu_domain *domain,
 	unsigned long vdev_id = 0;
 	int rc;
 
-	if (domain->dirty_ops && (mdev->flags & MOCK_FLAGS_DEVICE_NO_DIRTY))
-		return -EINVAL;
-
 	iommu_group_mutex_assert(dev);
 	if (domain->type == IOMMU_DOMAIN_NESTED) {
 		new_viommu = to_mock_nested(domain)->mock_viommu;
 		if (new_viommu) {
 			rc = iommufd_viommu_get_vdev_id(&new_viommu->core, dev,
 							&vdev_id);
-			if (rc)
+			if (WARN_ON(rc))
 				return rc;
 		}
 	}
@@ -296,6 +325,7 @@ static int mock_domain_set_dev_pasid_nop(struct iommu_domain *domain,
 }
 
 static const struct iommu_domain_ops mock_blocking_ops = {
+	.test_dev = mock_domain_nop_test,
 	.attach_dev = mock_domain_nop_attach,
 	.set_dev_pasid = mock_domain_set_dev_pasid_nop
 };
@@ -630,8 +660,6 @@ static bool mock_domain_capable(struct device *dev, enum iommu_cap cap)
 	return false;
 }
 
-static struct iopf_queue *mock_iommu_iopf_queue;
-
 static struct mock_iommu_device {
 	struct iommu_device iommu_dev;
 	struct completion complete;
@@ -657,9 +685,6 @@ static int mock_dev_enable_iopf(struct device *dev, struct iommu_domain *domain)
 
 	if (!domain || !domain->iopf_handler)
 		return 0;
-
-	if (!mock_iommu_iopf_queue)
-		return -ENODEV;
 
 	if (mdev->iopf_refcount) {
 		mdev->iopf_refcount++;
@@ -958,6 +983,7 @@ static const struct iommu_ops mock_ops = {
 	.default_domain_ops =
 		&(struct iommu_domain_ops){
 			.free = mock_domain_free,
+			.test_dev = mock_domain_nop_test,
 			.attach_dev = mock_domain_nop_attach,
 			.map_pages = mock_domain_map_pages,
 			.unmap_pages = mock_domain_unmap_pages,
@@ -1021,6 +1047,7 @@ out:
 
 static struct iommu_domain_ops domain_nested_ops = {
 	.free = mock_domain_free_nested,
+	.test_dev = mock_domain_nop_test,
 	.attach_dev = mock_domain_nop_attach,
 	.cache_invalidate_user = mock_domain_cache_invalidate_user,
 	.set_dev_pasid = mock_domain_set_dev_pasid_nop,
