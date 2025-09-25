@@ -489,6 +489,18 @@ static void tegra_smmu_as_unprepare(struct tegra_smmu *smmu,
 	mutex_unlock(&smmu->lock);
 }
 
+static int tegra_smmu_domain_test_dev(struct iommu_domain *domain,
+				      struct device *dev, ioasid_t pasid,
+				      struct iommu_domain *old)
+{
+	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
+
+	if (!fwspec || !fwspec->num_ids)
+		return -ENOENT;
+
+	return 0;
+}
+
 static int tegra_smmu_attach_dev(struct iommu_domain *domain,
 				 struct device *dev, struct iommu_domain *old)
 {
@@ -498,9 +510,6 @@ static int tegra_smmu_attach_dev(struct iommu_domain *domain,
 	unsigned int index;
 	int err;
 
-	if (!fwspec)
-		return -ENOENT;
-
 	for (index = 0; index < fwspec->num_ids; index++) {
 		err = tegra_smmu_as_prepare(smmu, as);
 		if (err)
@@ -508,9 +517,6 @@ static int tegra_smmu_attach_dev(struct iommu_domain *domain,
 
 		tegra_smmu_enable(smmu, fwspec->ids[index], as->id);
 	}
-
-	if (index == 0)
-		return -ENODEV;
 
 	return 0;
 
@@ -532,9 +538,6 @@ static int tegra_smmu_identity_attach(struct iommu_domain *identity_domain,
 	struct tegra_smmu *smmu;
 	unsigned int index;
 
-	if (!fwspec)
-		return -ENODEV;
-
 	if (old == identity_domain || !old)
 		return 0;
 
@@ -548,6 +551,7 @@ static int tegra_smmu_identity_attach(struct iommu_domain *identity_domain,
 }
 
 static struct iommu_domain_ops tegra_smmu_identity_ops = {
+	.test_dev = tegra_smmu_domain_test_dev,
 	.attach_dev = tegra_smmu_identity_attach,
 };
 
@@ -1005,6 +1009,7 @@ static const struct iommu_ops tegra_smmu_ops = {
 	.device_group = tegra_smmu_device_group,
 	.of_xlate = tegra_smmu_of_xlate,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.test_dev	= tegra_smmu_domain_test_dev,
 		.attach_dev	= tegra_smmu_attach_dev,
 		.map_pages	= tegra_smmu_map,
 		.unmap_pages	= tegra_smmu_unmap,
