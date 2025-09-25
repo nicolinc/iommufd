@@ -704,6 +704,20 @@ static void mtk_iommu_domain_free(struct iommu_domain *domain)
 	kfree(to_mtk_domain(domain));
 }
 
+static int mtk_iommu_test_device(struct iommu_domain *domain,
+				 struct device *dev, ioasid_t pasid,
+				 struct iommu_domain *old)
+{
+	struct mtk_iommu_data *data = dev_iommu_priv_get(dev);
+	int region_id;
+
+	region_id = mtk_iommu_get_iova_region_id(dev, data->plat_data);
+	if (region_id < 0)
+		return region_id;
+
+	return 0;
+}
+
 static int mtk_iommu_attach_device(struct iommu_domain *domain,
 				   struct device *dev, struct iommu_domain *old)
 {
@@ -716,8 +730,6 @@ static int mtk_iommu_attach_device(struct iommu_domain *domain,
 	int ret, region_id;
 
 	region_id = mtk_iommu_get_iova_region_id(dev, data->plat_data);
-	if (region_id < 0)
-		return region_id;
 
 	bankid = mtk_iommu_get_bank_id(dev, data->plat_data);
 	mutex_lock(&dom->mutex);
@@ -1019,6 +1031,7 @@ static const struct iommu_ops mtk_iommu_ops = {
 	.get_resv_regions = mtk_iommu_get_resv_regions,
 	.owner		= THIS_MODULE,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.test_dev	= mtk_iommu_test_device,
 		.attach_dev	= mtk_iommu_attach_device,
 		.map_pages	= mtk_iommu_map,
 		.unmap_pages	= mtk_iommu_unmap,
