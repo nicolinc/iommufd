@@ -694,6 +694,20 @@ static int blocking_domain_attach_device(struct iommu_domain *domain,
 	return 0;
 }
 
+static int s390_iommu_domain_test_device(struct iommu_domain *domain,
+					 struct device *dev, ioasid_t pasid,
+					 struct iommu_domain *old)
+{
+	struct zpci_dev *zdev = to_zpci_dev(dev);
+
+	if (!zdev)
+		return -ENODEV;
+	if (WARN_ON(domain->geometry.aperture_start > zdev->end_dma ||
+		    domain->geometry.aperture_end < zdev->start_dma))
+		return -EINVAL;
+	return 0;
+}
+
 static int s390_iommu_attach_device(struct iommu_domain *domain,
 				    struct device *dev,
 				    struct iommu_domain *old)
@@ -703,13 +717,6 @@ static int s390_iommu_attach_device(struct iommu_domain *domain,
 	unsigned long flags;
 	u8 status;
 	int cc;
-
-	if (!zdev)
-		return -ENODEV;
-
-	if (WARN_ON(domain->geometry.aperture_start > zdev->end_dma ||
-		domain->geometry.aperture_end < zdev->start_dma))
-		return -EINVAL;
 
 	blocking_domain_attach_device(&blocking_domain, dev, old);
 
@@ -1177,6 +1184,7 @@ static struct iommu_domain blocking_domain = {
 	.device_group = generic_device_group, \
 	.get_resv_regions = s390_iommu_get_resv_regions, \
 	.default_domain_ops = &(const struct iommu_domain_ops) { \
+		.test_dev	= s390_iommu_domain_test_device, \
 		.attach_dev	= s390_iommu_attach_device, \
 		.map_pages	= s390_iommu_map_pages, \
 		.unmap_pages	= s390_iommu_unmap_pages, \
