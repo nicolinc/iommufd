@@ -659,6 +659,19 @@ static int apple_dart_domain_add_streams(struct apple_dart_domain *domain,
 				      true);
 }
 
+static int apple_dart_test_dev_paging(struct iommu_domain *domain,
+				      struct device *dev, ioasid_t pasid,
+				      struct iommu_domain *old)
+{
+	struct apple_dart_master_cfg *cfg = dev_iommu_priv_get(dev);
+	struct apple_dart *dart = cfg->stream_maps[0].dart;
+
+	if (dart->pgsize > PAGE_SIZE)
+		return -EINVAL;
+
+	return 0;
+}
+
 static int apple_dart_attach_dev_paging(struct iommu_domain *domain,
 					struct device *dev,
 					struct iommu_domain *old)
@@ -681,6 +694,17 @@ static int apple_dart_attach_dev_paging(struct iommu_domain *domain,
 	return 0;
 }
 
+static int apple_dart_test_dev_identity(struct iommu_domain *domain,
+					struct device *dev, ioasid_t pasid,
+					struct iommu_domain *old)
+{
+	struct apple_dart_master_cfg *cfg = dev_iommu_priv_get(dev);
+
+	if (!cfg->supports_bypass)
+		return -EINVAL;
+	return 0;
+}
+
 static int apple_dart_attach_dev_identity(struct iommu_domain *domain,
 					  struct device *dev,
 					  struct iommu_domain *old)
@@ -689,15 +713,13 @@ static int apple_dart_attach_dev_identity(struct iommu_domain *domain,
 	struct apple_dart_stream_map *stream_map;
 	int i;
 
-	if (!cfg->supports_bypass)
-		return -EINVAL;
-
 	for_each_stream_map(i, cfg, stream_map)
 		apple_dart_hw_enable_bypass(stream_map);
 	return 0;
 }
 
 static const struct iommu_domain_ops apple_dart_identity_ops = {
+	.test_dev = apple_dart_test_dev_identity,
 	.attach_dev = apple_dart_attach_dev_identity,
 };
 
@@ -996,6 +1018,7 @@ static const struct iommu_ops apple_dart_iommu_ops = {
 	.get_resv_regions = apple_dart_get_resv_regions,
 	.owner = THIS_MODULE,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.test_dev	= apple_dart_test_dev_paging,
 		.attach_dev	= apple_dart_attach_dev_paging,
 		.map_pages	= apple_dart_map_pages,
 		.unmap_pages	= apple_dart_unmap_pages,
