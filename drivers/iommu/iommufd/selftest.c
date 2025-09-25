@@ -215,8 +215,8 @@ static inline struct selftest_obj *to_selftest_obj(struct iommufd_object *obj)
 	return container_of(obj, struct selftest_obj, obj);
 }
 
-static int mock_domain_nop_attach(struct iommu_domain *domain,
-				  struct device *dev, struct iommu_domain *old)
+static int mock_domain_nop_test(struct iommu_domain *domain, struct device *dev,
+				ioasid_t pasid, struct iommu_domain *old)
 {
 	struct mock_dev *mdev = to_mock_dev(dev);
 	struct mock_viommu *new_viommu = NULL;
@@ -225,6 +225,28 @@ static int mock_domain_nop_attach(struct iommu_domain *domain,
 
 	if (domain->dirty_ops && (mdev->flags & MOCK_FLAGS_DEVICE_NO_DIRTY))
 		return -EINVAL;
+
+	iommu_group_mutex_assert(dev);
+	if (domain->type == IOMMU_DOMAIN_NESTED) {
+		new_viommu = to_mock_nested(domain)->mock_viommu;
+		if (new_viommu) {
+			rc = iommufd_viommu_get_vdev_id(&new_viommu->core, dev,
+							&vdev_id);
+			if (rc)
+				return rc;
+		}
+	}
+
+	return 0;
+}
+
+static int mock_domain_nop_attach(struct iommu_domain *domain,
+				  struct device *dev, struct iommu_domain *old)
+{
+	struct mock_dev *mdev = to_mock_dev(dev);
+	struct mock_viommu *new_viommu = NULL;
+	unsigned long vdev_id = 0;
+	int rc;
 
 	iommu_group_mutex_assert(dev);
 	if (domain->type == IOMMU_DOMAIN_NESTED) {
@@ -296,6 +318,7 @@ static int mock_domain_set_dev_pasid_nop(struct iommu_domain *domain,
 }
 
 static const struct iommu_domain_ops mock_blocking_ops = {
+	.test_dev = mock_domain_nop_test,
 	.attach_dev = mock_domain_nop_attach,
 	.set_dev_pasid = mock_domain_set_dev_pasid_nop
 };
@@ -958,6 +981,7 @@ static const struct iommu_ops mock_ops = {
 	.default_domain_ops =
 		&(struct iommu_domain_ops){
 			.free = mock_domain_free,
+			.test_dev = mock_domain_nop_test,
 			.attach_dev = mock_domain_nop_attach,
 			.map_pages = mock_domain_map_pages,
 			.unmap_pages = mock_domain_unmap_pages,
@@ -1021,6 +1045,7 @@ out:
 
 static struct iommu_domain_ops domain_nested_ops = {
 	.free = mock_domain_free_nested,
+	.test_dev = mock_domain_nop_test,
 	.attach_dev = mock_domain_nop_attach,
 	.cache_invalidate_user = mock_domain_cache_invalidate_user,
 	.set_dev_pasid = mock_domain_set_dev_pasid_nop,
