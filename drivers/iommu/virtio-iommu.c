@@ -730,6 +730,18 @@ static struct iommu_domain *viommu_domain_alloc_identity(struct device *dev)
 	return domain;
 }
 
+static int viommu_domain_test_dev(struct iommu_domain *domain,
+				  struct device *dev, ioasid_t pasid,
+				  struct iommu_domain *old)
+{
+	struct viommu_endpoint *vdev = dev_iommu_priv_get(dev);
+	struct viommu_domain *vdomain = to_viommu_domain(domain);
+
+	if (vdomain->viommu != vdev->viommu)
+		return -EINVAL;
+	return 0;
+}
+
 static int viommu_attach_dev(struct iommu_domain *domain, struct device *dev,
 			     struct iommu_domain *old)
 {
@@ -737,9 +749,6 @@ static int viommu_attach_dev(struct iommu_domain *domain, struct device *dev,
 	struct virtio_iommu_req_attach req;
 	struct viommu_endpoint *vdev = dev_iommu_priv_get(dev);
 	struct viommu_domain *vdomain = to_viommu_domain(domain);
-
-	if (vdomain->viommu != vdev->viommu)
-		return -EINVAL;
 
 	/*
 	 * In the virtio-iommu device, when attaching the endpoint to a new
@@ -1099,6 +1108,7 @@ static const struct iommu_ops viommu_ops = {
 	.of_xlate		= viommu_of_xlate,
 	.owner			= THIS_MODULE,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.test_dev		= viommu_domain_test_dev,
 		.attach_dev		= viommu_attach_dev,
 		.map_pages		= viommu_map_pages,
 		.unmap_pages		= viommu_unmap_pages,
