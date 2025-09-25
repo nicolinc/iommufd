@@ -959,19 +959,24 @@ out_disable_clocks:
 	return ret;
 }
 
+static int rk_iommu_identity_test_dev(struct iommu_domain *domain,
+				      struct device *dev, ioasid_t pasid,
+				      struct iommu_domain *old)
+{
+	/* Allow 'virtual devices' (eg drm) to detach from domain */
+	if (!rk_iommu_from_dev(dev))
+		return -ENODEV;
+	return 0;
+}
+
 static int rk_iommu_identity_attach(struct iommu_domain *identity_domain,
 				    struct device *dev,
 				    struct iommu_domain *old)
 {
-	struct rk_iommu *iommu;
+	struct rk_iommu *iommu = rk_iommu_from_dev(dev);
 	struct rk_iommu_domain *rk_domain;
 	unsigned long flags;
 	int ret;
-
-	/* Allow 'virtual devices' (eg drm) to detach from domain */
-	iommu = rk_iommu_from_dev(dev);
-	if (!iommu)
-		return -ENODEV;
 
 	rk_domain = to_rk_domain(iommu->domain);
 
@@ -997,6 +1002,7 @@ static int rk_iommu_identity_attach(struct iommu_domain *identity_domain,
 }
 
 static struct iommu_domain_ops rk_identity_ops = {
+	.test_dev = rk_iommu_identity_test_dev,
 	.attach_dev = rk_iommu_identity_attach,
 };
 
