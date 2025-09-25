@@ -797,16 +797,21 @@ static struct iommu_domain sun50i_iommu_identity_domain = {
 	.ops = &sun50i_iommu_identity_ops,
 };
 
+static int sun50i_iommu_domain_test_device(struct iommu_domain *domain,
+					   struct device *dev, ioasid_t pasid,
+					   struct iommu_domain *old)
+{
+	if (!sun50i_iommu_from_dev(dev))
+		return -ENODEV;
+	return 0;
+}
+
 static int sun50i_iommu_attach_device(struct iommu_domain *domain,
 				      struct device *dev,
 				      struct iommu_domain *old)
 {
 	struct sun50i_iommu_domain *sun50i_domain = to_sun50i_domain(domain);
-	struct sun50i_iommu *iommu;
-
-	iommu = sun50i_iommu_from_dev(dev);
-	if (!iommu)
-		return -ENODEV;
+	struct sun50i_iommu *iommu = sun50i_iommu_from_dev(dev);
 
 	dev_dbg(dev, "Attaching to IOMMU domain\n");
 
@@ -851,6 +856,7 @@ static const struct iommu_ops sun50i_iommu_ops = {
 	.of_xlate	= sun50i_iommu_of_xlate,
 	.probe_device	= sun50i_iommu_probe_device,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.test_dev	= sun50i_iommu_domain_test_device,
 		.attach_dev	= sun50i_iommu_attach_device,
 		.flush_iotlb_all = sun50i_iommu_flush_iotlb_all,
 		.iotlb_sync_map = sun50i_iommu_iotlb_sync_map,
