@@ -3254,6 +3254,24 @@ static void arm_smmu_remove_master_domain(struct arm_smmu_master *master,
 	kfree(master_domain);
 }
 
+static inline void arm_smmu_invs_dbg(struct arm_smmu_master *master,
+				     struct arm_smmu_domain *smmu_domain,
+				     struct arm_smmu_invs *invs, char *name)
+{
+	size_t i;
+
+	dev_dbg(master->dev, "domain@%px (type: %x), invs: %s, num_invs: %ld\n",
+		&smmu_domain->domain, smmu_domain->domain.type, name, invs->num_invs);
+	for (i = 0; i < invs->num_invs; i++) {
+		struct arm_smmu_inv *cur = &invs->inv[i];
+
+		dev_dbg(master->dev,
+			"  entry: inv[%ld], %s, type: %u, id: %u, users: %u\n",
+			i, dev_name(cur->smmu->dev), cur->type, cur->id,
+			refcount_read(&cur->users));
+	}
+}
+
 /*
  * During attachment, the updates of the two domain->invs arrays are sequenced:
  *  1. new domain updates its invs array, merging master->build_invs
@@ -3300,6 +3318,12 @@ static int arm_smmu_attach_prepare_invs(struct arm_smmu_attach_state *state,
 			arm_smmu_invs_merge(invst->old_invs, build_invs);
 		if (IS_ERR(invst->new_invs))
 			return PTR_ERR(invst->new_invs);
+
+		arm_smmu_invs_dbg(master, new_smmu_domain, invst->old_invs,
+				  "new domain's old invs");
+		arm_smmu_invs_dbg(master, new_smmu_domain, build_invs, "merge");
+		arm_smmu_invs_dbg(master, new_smmu_domain, invst->new_invs,
+				  "new domain's new invs");
 	}
 
 	if (old_smmu_domain) {
@@ -3366,7 +3390,10 @@ static void
 arm_smmu_install_old_domain_invs(struct arm_smmu_attach_state *state)
 {
 	struct arm_smmu_inv_state *invst = &state->old_domain_invst;
+	struct arm_smmu_domain *old_smmu_domain =
+		to_smmu_domain_devices(state->old_domain);
 	struct arm_smmu_invs *old_invs = invst->old_invs;
+	struct arm_smmu_master *master = state->master;
 	struct arm_smmu_invs *new_invs;
 
 	lockdep_assert_held(&arm_smmu_asid_lock);
@@ -3374,12 +3401,21 @@ arm_smmu_install_old_domain_invs(struct arm_smmu_attach_state *state)
 	if (!invst->invs_ptr)
 		return;
 
+	arm_smmu_invs_dbg(master, old_smmu_domain, old_invs,
+			  "old domain's old invs");
+	arm_smmu_invs_dbg(master, old_smmu_domain, invst->new_invs, "unref");
 	arm_smmu_invs_unref(old_invs, invst->new_invs,
 			    arm_smmu_inv_flush_iotlb_tag);
 
 	new_invs = arm_smmu_invs_purge(old_invs);
-	if (!new_invs)
+	if (!new_invs) {
+		arm_smmu_invs_dbg(master, old_smmu_domain, old_invs,
+				  "old domain's new invs");
 		return;
+	}
+
+	arm_smmu_invs_dbg(master, old_smmu_domain, new_invs,
+			  "old domain's new invs");
 
 	rcu_assign_pointer(*invst->invs_ptr, new_invs);
 	/*
