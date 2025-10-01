@@ -3260,12 +3260,12 @@ static inline void arm_smmu_invs_dbg(struct arm_smmu_master *master,
 {
 	size_t i;
 
-	dev_dbg(master->dev, "domain@%px (type: %x), invs: %s, num_invs: %ld\n",
+	dev_alert(master->dev, "domain@%px (type: %x), invs: %s, num_invs: %ld\n",
 		&smmu_domain->domain, smmu_domain->domain.type, name, invs->num_invs);
 	for (i = 0; i < invs->num_invs; i++) {
 		struct arm_smmu_inv *cur = &invs->inv[i];
 
-		dev_dbg(master->dev,
+		dev_alert(master->dev,
 			"  entry: inv[%ld], %s, type: %u, id: %u, users: %u\n",
 			i, dev_name(cur->smmu->dev), cur->type, cur->id,
 			refcount_read(&cur->users));
