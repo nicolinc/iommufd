@@ -203,6 +203,7 @@ struct iopt_pages_dmabuf_track {
 struct iopt_pages_dmabuf {
 	struct dma_buf_attachment *attach;
 	struct phys_vec phys;
+	struct sg_table *sgt;
 	unsigned long start;
 	struct list_head tracker;
 };
