@@ -972,6 +972,8 @@ static void iopt_unfill_domain(struct io_pagetable *iopt,
 				area->storage_domain = storage_domain;
 			if (!iopt_dmabuf_revoked(pages))
 				iopt_area_unmap_domain(area, domain);
+			if (iopt_is_dmabuf(pages))
+				iopt_dmabuf_untrack_domain(pages, area, domain);
 			mutex_unlock(&pages->mutex);
 
 			if (!iopt_is_dmabuf(pages))
@@ -992,6 +994,8 @@ static void iopt_unfill_domain(struct io_pagetable *iopt,
 		WARN_ON(area->storage_domain != domain);
 		area->storage_domain = NULL;
 		iopt_area_unfill_domain(area, pages, domain);
+		if (iopt_is_dmabuf(pages))
+			iopt_dmabuf_untrack_domain(pages, area, domain);
 		mutex_unlock(&pages->mutex);
 	}
 }
@@ -1022,8 +1026,15 @@ static int iopt_fill_domain(struct io_pagetable *iopt,
 			continue;
 
 		mutex_lock(&pages->mutex);
+		if (iopt_is_dmabuf(pages)) {
+			rc = iopt_dmabuf_track_domain(pages, area, domain);
+			if (rc)
+				goto out_unfill;
+		}
 		rc = iopt_area_fill_domain(area, domain);
 		if (rc) {
+			if (iopt_is_dmabuf(pages))
+				iopt_dmabuf_untrack_domain(pages, area, domain);
 			mutex_unlock(&pages->mutex);
 			goto out_unfill;
 		}
@@ -1054,6 +1065,8 @@ out_unfill:
 			area->storage_domain = NULL;
 		}
 		iopt_area_unfill_domain(area, pages, domain);
+		if (iopt_is_dmabuf(pages))
+			iopt_dmabuf_untrack_domain(pages, area, domain);
 		mutex_unlock(&pages->mutex);
 	}
 	return rc;
