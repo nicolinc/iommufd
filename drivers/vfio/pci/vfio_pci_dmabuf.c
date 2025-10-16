@@ -20,10 +20,21 @@ struct vfio_pci_dma_buf {
 	u8 revoked : 1;
 };
 
+struct vfio_pci_attach {
+	struct dma_iova_state state;
+	enum {
+		VFIO_ATTACH_NONE,
+		VFIO_ATTACH_HOST_BRIDGE_DMA,
+		VFIO_ATTACH_HOST_BRIDGE_IOVA,
+		VFIO_ATTACH_BUS
+	} kind;
+};
+
 static int vfio_pci_dma_buf_attach(struct dma_buf *dmabuf,
 				   struct dma_buf_attachment *attachment)
 {
 	struct vfio_pci_dma_buf *priv = dmabuf->priv;
+	struct vfio_pci_attach *attach;
 
 	if (!attachment->peer2peer)
 		return -EOPNOTSUPP;
@@ -31,32 +42,38 @@ static int vfio_pci_dma_buf_attach(struct dma_buf *dmabuf,
 	if (priv->revoked)
 		return -ENODEV;
 
+	attach = kzalloc(sizeof(*attach), GFP_KERNEL);
+	if (!attach)
+		return -ENOMEM;
+	attachment->priv = attach;
+
 	switch (pci_p2pdma_map_type(priv->provider, attachment->dev)) {
 	case PCI_P2PDMA_MAP_THRU_HOST_BRIDGE:
-		break;
+		if (dma_iova_try_alloc(attachment->dev, &attach->state, 0,
+				       priv->size))
+			attach->kind = VFIO_ATTACH_HOST_BRIDGE_IOVA;
+		else
+			attach->kind = VFIO_ATTACH_HOST_BRIDGE_DMA;
+		return 0;
 	case PCI_P2PDMA_MAP_BUS_ADDR:
-		/*
-		 * There is no need in IOVA at all for this flow.
-		 * We rely on attachment->priv == NULL as a marker
-		 * for this mode.
-		 */
+		/* There is no need in IOVA at all for this flow. */
+		attach->kind = VFIO_ATTACH_BUS;
 		return 0;
 	default:
-		return -EINVAL;
+		attach->kind = VFIO_ATTACH_NONE;
+		return 0;
 	}
-
-	attachment->priv = kzalloc(sizeof(struct dma_iova_state), GFP_KERNEL);
-	if (!attachment->priv)
-		return -ENOMEM;
-
-	dma_iova_try_alloc(attachment->dev, attachment->priv, 0, priv->size);
 	return 0;
 }
 
 static void vfio_pci_dma_buf_detach(struct dma_buf *dmabuf,
 				    struct dma_buf_attachment *attachment)
 {
-	kfree(attachment->priv);
+	struct vfio_pci_attach *attach = attachment->priv;
+
+	if (attach->kind == VFIO_ATTACH_HOST_BRIDGE_IOVA)
+		dma_iova_free(attachment->dev, &attach->state);
+	kfree(attach);
 }
 
 static struct scatterlist *fill_sg_entry(struct scatterlist *sgl, u64 length,
@@ -83,22 +100,23 @@ static struct scatterlist *fill_sg_entry(struct scatterlist *sgl, u64 length,
 }
 
 static unsigned int calc_sg_nents(struct vfio_pci_dma_buf *priv,
-				  struct dma_iova_state *state)
+				  struct vfio_pci_attach *attach)
 {
 	struct phys_vec *phys_vec = priv->phys_vec;
 	unsigned int nents = 0;
 	u32 i;
 
-	if (!state || !dma_use_iova(state))
+	if (attach->kind != VFIO_ATTACH_HOST_BRIDGE_IOVA) {
 		for (i = 0; i < priv->nr_ranges; i++)
 			nents += DIV_ROUND_UP(phys_vec[i].len, UINT_MAX);
-	else
+	} else {
 		/*
 		 * In IOVA case, there is only one SG entry which spans
 		 * for whole IOVA address space, but we need to make sure
 		 * that it fits sg->length, maybe we need more.
 		 */
 		nents = DIV_ROUND_UP(priv->size, UINT_MAX);
+	}
 
 	return nents;
 }
@@ -108,7 +126,7 @@ vfio_pci_dma_buf_map(struct dma_buf_attachment *attachment,
 		     enum dma_data_direction dir)
 {
 	struct vfio_pci_dma_buf *priv = attachment->dmabuf->priv;
-	struct dma_iova_state *state = attachment->priv;
+	struct vfio_pci_attach *attach = attachment->priv;
 	struct phys_vec *phys_vec = priv->phys_vec;
 	unsigned long attrs = DMA_ATTR_MMIO;
 	unsigned int nents, mapped_len = 0;
@@ -127,7 +145,7 @@ vfio_pci_dma_buf_map(struct dma_buf_attachment *attachment,
 	if (!sgt)
 		return ERR_PTR(-ENOMEM);
 
-	nents = calc_sg_nents(priv, state);
+	nents = calc_sg_nents(priv, attach);
 	ret = sg_alloc_table(sgt, nents, GFP_KERNEL | __GFP_ZERO);
 	if (ret)
 		goto err_kfree_sgt;
@@ -135,35 +153,42 @@ vfio_pci_dma_buf_map(struct dma_buf_attachment *attachment,
 	sgl = sgt->sgl;
 
 	for (i = 0; i < priv->nr_ranges; i++) {
-		if (!state) {
+		switch (attach->kind) {
+		case VFIO_ATTACH_BUS:
 			addr = pci_p2pdma_bus_addr_map(priv->provider,
 						       phys_vec[i].paddr);
-		} else if (dma_use_iova(state)) {
-			ret = dma_iova_link(attachment->dev, state,
+			break;
+		case VFIO_ATTACH_HOST_BRIDGE_IOVA:
+			ret = dma_iova_link(attachment->dev, &attach->state,
 					    phys_vec[i].paddr, 0,
 					    phys_vec[i].len, dir, attrs);
 			if (ret)
 				goto err_unmap_dma;
 
 			mapped_len += phys_vec[i].len;
-		} else {
+			break;
+		case VFIO_ATTACH_HOST_BRIDGE_DMA:
 			addr = dma_map_phys(attachment->dev, phys_vec[i].paddr,
 					    phys_vec[i].len, dir, attrs);
 			ret = dma_mapping_error(attachment->dev, addr);
 			if (ret)
 				goto err_unmap_dma;
+			break;
+		default:
+			ret = -EINVAL;
+			goto err_unmap_dma;
 		}
 
-		if (!state || !dma_use_iova(state))
+		if (attach->kind != VFIO_ATTACH_HOST_BRIDGE_IOVA)
 			sgl = fill_sg_entry(sgl, phys_vec[i].len, addr);
 	}
 
-	if (state && dma_use_iova(state)) {
+	if (attach->kind == VFIO_ATTACH_HOST_BRIDGE_IOVA) {
 		WARN_ON_ONCE(mapped_len != priv->size);
-		ret = dma_iova_sync(attachment->dev, state, 0, mapped_len);
+		ret = dma_iova_sync(attachment->dev, &attach->state, 0, mapped_len);
 		if (ret)
 			goto err_unmap_dma;
-		sgl = fill_sg_entry(sgl, mapped_len, state->addr);
+		sgl = fill_sg_entry(sgl, mapped_len, attach->state.addr);
 	}
 
 	/*
@@ -174,15 +199,22 @@ vfio_pci_dma_buf_map(struct dma_buf_attachment *attachment,
 	return sgt;
 
 err_unmap_dma:
-	if (!i || !state)
-		; /* Do nothing */
-	else if (dma_use_iova(state))
-		dma_iova_destroy(attachment->dev, state, mapped_len, dir,
-				 attrs);
-	else
+	switch (attach->kind) {
+	case VFIO_ATTACH_HOST_BRIDGE_IOVA:
+		if (mapped_len)
+			dma_iova_unlink(attachment->dev, &attach->state, 0,
+					mapped_len, dir, attrs);
+		break;
+	case VFIO_ATTACH_HOST_BRIDGE_DMA:
+		if (!i)
+			break;
 		for_each_sgtable_dma_sg(sgt, sgl, i)
 			dma_unmap_phys(attachment->dev, sg_dma_address(sgl),
-					sg_dma_len(sgl), dir, attrs);
+				       sg_dma_len(sgl), dir, attrs);
+		break;
+	default:
+		break;
+	}
 	sg_free_table(sgt);
 err_kfree_sgt:
 	kfree(sgt);
@@ -194,20 +226,24 @@ static void vfio_pci_dma_buf_unmap(struct dma_buf_attachment *attachment,
 				   enum dma_data_direction dir)
 {
 	struct vfio_pci_dma_buf *priv = attachment->dmabuf->priv;
-	struct dma_iova_state *state = attachment->priv;
+	struct vfio_pci_attach *attach = attachment->priv;
 	unsigned long attrs = DMA_ATTR_MMIO;
 	struct scatterlist *sgl;
 	int i;
 
-	if (!state)
-		; /* Do nothing */
-	else if (dma_use_iova(state))
-		dma_iova_destroy(attachment->dev, state, priv->size, dir,
-				 attrs);
-	else
+	switch (attach->kind) {
+	case VFIO_ATTACH_HOST_BRIDGE_IOVA:
+		dma_iova_destroy(attachment->dev, &attach->state, priv->size,
+				 dir, attrs);
+		break;
+	case VFIO_ATTACH_HOST_BRIDGE_DMA:
 		for_each_sgtable_dma_sg(sgt, sgl, i)
 			dma_unmap_phys(attachment->dev, sg_dma_address(sgl),
 				       sg_dma_len(sgl), dir, attrs);
+		break;
+	default:
+		break;
+	}
 
 	sg_free_table(sgt);
 	kfree(sgt);
