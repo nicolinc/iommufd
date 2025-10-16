@@ -2115,7 +2115,7 @@ int vfio_pci_core_init_dev(struct vfio_device *core_vdev)
 	INIT_LIST_HEAD(&vdev->ioeventfds_list);
 	INIT_LIST_HEAD(&vdev->sriov_pfs_item);
 	ret = pcim_p2pdma_init(vdev->pdev);
-	if (ret != -EOPNOTSUPP)
+	if (ret && ret != -EOPNOTSUPP)
 		return ret;
 	INIT_LIST_HEAD(&vdev->dmabufs);
 	init_rwsem(&vdev->memory_lock);
