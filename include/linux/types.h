@@ -172,7 +172,7 @@ typedef u32 phys_addr_t;
 
 struct phys_vec {
 	phys_addr_t	paddr;
-	u32		len;
+	size_t		len;
 };
 
 typedef phys_addr_t resource_size_t;
