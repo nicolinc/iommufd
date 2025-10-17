@@ -1103,7 +1103,7 @@ static inline bool arm_smmu_master_canwbs(struct arm_smmu_master *master)
  *            to_unref argument to an arm_smmu_invs_unref() call
  */
 struct arm_smmu_inv_state {
-	struct arm_smmu_invs **invs_ptr;
+	struct arm_smmu_invs __rcu **invs_ptr;
 	struct arm_smmu_invs *old_invs;
 	struct arm_smmu_invs *new_invs;
 };
