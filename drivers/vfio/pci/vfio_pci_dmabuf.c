@@ -275,23 +275,41 @@ static const struct dma_buf_ops vfio_pci_dmabuf_ops = {
 	.unmap_dma_buf = vfio_pci_dma_buf_unmap,
 };
 
-static void dma_ranges_to_p2p_phys(struct vfio_pci_dma_buf *priv,
-				   struct vfio_device_feature_dma_buf *dma_buf,
-				   struct vfio_region_dma_range *dma_ranges,
-				   struct p2pdma_provider *provider)
+static int dma_ranges_to_p2p_phys(struct vfio_pci_dma_buf *priv,
+				  struct vfio_device_feature_dma_buf *dma_buf,
+				  struct vfio_region_dma_range *dma_ranges,
+				  struct p2pdma_provider *provider)
 {
 	struct pci_dev *pdev = priv->vdev->pdev;
+	phys_addr_t len = pci_resource_len(pdev, dma_buf->region_index);
 	phys_addr_t pci_start;
+	phys_addr_t pci_last;
 	u32 i;
 
+	if (!len)
+		return -EINVAL;
 	pci_start = pci_resource_start(pdev, dma_buf->region_index);
+	pci_last = pci_start + len - 1;
 	for (i = 0; i < dma_buf->nr_ranges; i++) {
+		phys_addr_t last;
+
+		if (!dma_ranges[i].length)
+			return -EINVAL;
+
+		if (check_add_overflow(pci_start, dma_ranges[i].offset,
+				       &priv->phys_vec[i].paddr) ||
+		    check_add_overflow(priv->phys_vec[i].paddr,
+				       dma_ranges[i].length - 1, &last))
+			return -EOVERFLOW;
+		if (last > pci_last)
+			return -EINVAL;
+
 		priv->phys_vec[i].len = dma_ranges[i].length;
-		priv->phys_vec[i].paddr = pci_start + dma_ranges[i].offset;
 		priv->size += priv->phys_vec[i].len;
 	}
 	priv->nr_ranges = dma_buf->nr_ranges;
 	priv->provider = provider;
+	return 0;
 }
 
 static int validate_dmabuf_input(struct vfio_pci_core_device *vdev,
@@ -299,10 +317,7 @@ static int validate_dmabuf_input(struct vfio_pci_core_device *vdev,
 				 struct vfio_region_dma_range *dma_ranges,
 				 struct p2pdma_provider **provider)
 {
-	struct pci_dev *pdev = vdev->pdev;
-	u32 bar = dma_buf->region_index;
-	resource_size_t bar_size;
-	u64 length = 0, sum;
+	u64 length = 0;
 	u32 i;
 
 	if (dma_buf->flags)
@@ -310,14 +325,13 @@ static int validate_dmabuf_input(struct vfio_pci_core_device *vdev,
 	/*
 	 * For PCI the region_index is the BAR number like  everything else.
 	 */
-	if (bar >= VFIO_PCI_ROM_REGION_INDEX)
+	if (dma_buf->region_index >= VFIO_PCI_ROM_REGION_INDEX)
 		return -ENODEV;
 
-	*provider = pcim_p2pdma_provider(pdev, bar);
+	*provider = pcim_p2pdma_provider(vdev->pdev, dma_buf->region_index);
 	if (!*provider)
 		return -EINVAL;
 
-	bar_size = pci_resource_len(pdev, bar);
 	for (i = 0; i < dma_buf->nr_ranges; i++) {
 		u64 offset = dma_ranges[i].offset;
 		u64 len = dma_ranges[i].length;
@@ -325,14 +339,8 @@ static int validate_dmabuf_input(struct vfio_pci_core_device *vdev,
 		if (!len || !PAGE_ALIGNED(offset) || !PAGE_ALIGNED(len))
 			return -EINVAL;
 
-		if (check_add_overflow(offset, len, &sum) || sum > bar_size)
+		if (check_add_overflow(length, len, &length))
 			return -EINVAL;
-
-		/* Total requested length can't overflow IOVA size */
-		if (check_add_overflow(length, len, &sum))
-			return -EINVAL;
-
-		length = sum;
 	}
 
 	/*
@@ -392,7 +400,11 @@ int vfio_pci_core_feature_dma_buf(struct vfio_pci_core_device *vdev, u32 flags,
 	}
 
 	priv->vdev = vdev;
-	dma_ranges_to_p2p_phys(priv, &get_dma_buf, dma_ranges, provider);
+	ret = dma_ranges_to_p2p_phys(priv, &get_dma_buf, dma_ranges,
+				     provider);
+	if (ret)
+		goto err_free_phys;
+
 	kfree(dma_ranges);
 	dma_ranges = NULL;
 
