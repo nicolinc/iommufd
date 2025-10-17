@@ -1045,7 +1045,7 @@ struct arm_smmu_domain *arm_smmu_domain_alloc(void);
 
 static inline void arm_smmu_domain_free(struct arm_smmu_domain *smmu_domain)
 {
-	kfree_rcu(smmu_domain->invs, rcu);
+	kfree_rcu(rcu_dereference_protected(smmu_domain->invs, true), rcu);
 	kfree(smmu_domain);
 }
 
