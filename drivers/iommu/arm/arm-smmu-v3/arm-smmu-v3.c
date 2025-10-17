@@ -2691,55 +2691,13 @@ static inline bool arm_smmu_invs_end_batch(struct arm_smmu_inv *cur,
 	return false;
 }
 
-void arm_smmu_domain_inv_range(struct arm_smmu_domain *smmu_domain,
-			       unsigned long iova, size_t size,
-			       unsigned int granule, bool leaf)
+static void __arm_smmu_domain_inv_range(struct arm_smmu_invs *invs,
+					unsigned long iova, size_t size,
+					unsigned int granule, bool leaf)
 {
 	struct arm_smmu_cmdq_batch cmds = {};
-	struct arm_smmu_invs *invs;
 	struct arm_smmu_inv *cur;
 	struct arm_smmu_inv *end;
-	bool locked = false;
-
-	/*
-	 * An invalidation request must follow some IOPTE change and then load
-	 * an invalidation array. In the meantime, a domain attachment mutates
-	 * the array and then stores an STE/CD asking SMMU HW to acquire those
-	 * changed IOPTEs. In other word, these two are interdependent and can
-	 * race.
-	 *
-	 * In a race, the RCU design (with its underlying memory barriers) can
-	 * ensure the invalidation array to always get updated before loaded.
-	 *
-	 * smp_mb() is used here, paired with the smp_mb() following the array
-	 * update in a concurrent attach, to ensure:
-	 *  - HW sees the new IOPTEs if it walks after STE installation
-	 *  - Invalidation thread sees the updated array with the new ASID.
-	 *
-	 *  [CPU0]                        | [CPU1]
-	 *                                |
-	 *  change IOPTEs and TLB flush:  |
-	 *  arm_smmu_domain_inv_range() { | arm_smmu_install_new_domain_invs {
-	 *    ...                         |   rcu_assign_pointer(new_invs);
-	 *    smp_mb(); // ensure IOPTEs  |   smp_mb(); // ensure new_invs
-	 *    ...                         |   kfree_rcu(old_invs, rcu);
-	 *    // load invalidation array  | }
-	 *    invs = rcu_dereference();   | arm_smmu_install_ste_for_dev {
-	 *                                |   STE = TTB0 // read new IOPTEs
-	 */
-	smp_mb();
-
-	rcu_read_lock();
-	invs = rcu_dereference(smmu_domain->invs);
-
-	/*
-	 * Avoid locking unless ATS is being used. No ATC invalidation can be
-	 * going on after a domain is detached.
-	 */
-	if (invs->has_ats) {
-		read_lock(&invs->rwlock);
-		locked = true;
-	}
 
 	cur = invs->inv;
 	end = cur + READ_ONCE(invs->num_invs);
@@ -2809,8 +2767,57 @@ void arm_smmu_domain_inv_range(struct arm_smmu_domain *smmu_domain,
 		}
 		cur = next;
 	}
-	if (locked)
+}
+
+void arm_smmu_domain_inv_range(struct arm_smmu_domain *smmu_domain,
+			       unsigned long iova, size_t size,
+			       unsigned int granule, bool leaf)
+{
+	struct arm_smmu_invs *invs;
+
+	/*
+	 * An invalidation request must follow some IOPTE change and then load
+	 * an invalidation array. In the meantime, a domain attachment mutates
+	 * the array and then stores an STE/CD asking SMMU HW to acquire those
+	 * changed IOPTEs. In other word, these two are interdependent and can
+	 * race.
+	 *
+	 * In a race, the RCU design (with its underlying memory barriers) can
+	 * ensure the invalidation array to always get updated before loaded.
+	 *
+	 * smp_mb() is used here, paired with the smp_mb() following the array
+	 * update in a concurrent attach, to ensure:
+	 *  - HW sees the new IOPTEs if it walks after STE installation
+	 *  - Invalidation thread sees the updated array with the new ASID.
+	 *
+	 *  [CPU0]                        | [CPU1]
+	 *                                |
+	 *  change IOPTEs and TLB flush:  |
+	 *  arm_smmu_domain_inv_range() { | arm_smmu_install_new_domain_invs {
+	 *    ...                         |   rcu_assign_pointer(new_invs);
+	 *    smp_mb(); // ensure IOPTEs  |   smp_mb(); // ensure new_invs
+	 *    ...                         |   kfree_rcu(old_invs, rcu);
+	 *    // load invalidation array  | }
+	 *    invs = rcu_dereference();   | arm_smmu_install_ste_for_dev {
+	 *                                |   STE = TTB0 // read new IOPTEs
+	 */
+	smp_mb();
+
+	rcu_read_lock();
+	invs = rcu_dereference(smmu_domain->invs);
+
+	/*
+	 * Avoid locking unless ATS is being used. No ATC invalidation can be
+	 * going on after a domain is detached.
+	 */
+	if (invs->has_ats) {
+		read_lock(&invs->rwlock);
+		__arm_smmu_domain_inv_range(invs, iova, size, granule, leaf);
 		read_unlock(&invs->rwlock);
+	} else {
+		__arm_smmu_domain_inv_range(invs, iova, size, granule, leaf);
+	}
+
 	rcu_read_unlock();
 }
 
