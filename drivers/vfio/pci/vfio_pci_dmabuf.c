@@ -275,47 +275,51 @@ static const struct dma_buf_ops vfio_pci_dmabuf_ops = {
 	.unmap_dma_buf = vfio_pci_dma_buf_unmap,
 };
 
-static int dma_ranges_to_p2p_phys(struct vfio_pci_dma_buf *priv,
-				  struct vfio_device_feature_dma_buf *dma_buf,
+int vfio_pci_core_get_dmabuf_phys(struct vfio_pci_core_device *vdev,
+				  struct p2pdma_provider **provider,
+				  unsigned int region_index,
+				  struct phys_vec *phys_vec,
 				  struct vfio_region_dma_range *dma_ranges,
-				  struct p2pdma_provider *provider)
+				  size_t nr_ranges)
 {
-	struct pci_dev *pdev = priv->vdev->pdev;
-	phys_addr_t len = pci_resource_len(pdev, dma_buf->region_index);
+	struct pci_dev *pdev = vdev->pdev;
+	phys_addr_t len = pci_resource_len(pdev, region_index);
 	phys_addr_t pci_start;
 	phys_addr_t pci_last;
 	u32 i;
 
 	if (!len)
 		return -EINVAL;
-	pci_start = pci_resource_start(pdev, dma_buf->region_index);
+
+	*provider = pcim_p2pdma_provider(pdev, region_index);
+	if (!*provider)
+		return -EINVAL;
+
+	pci_start = pci_resource_start(pdev, region_index);
 	pci_last = pci_start + len - 1;
-	for (i = 0; i < dma_buf->nr_ranges; i++) {
+	for (i = 0; i < nr_ranges; i++) {
 		phys_addr_t last;
 
 		if (!dma_ranges[i].length)
 			return -EINVAL;
 
 		if (check_add_overflow(pci_start, dma_ranges[i].offset,
-				       &priv->phys_vec[i].paddr) ||
-		    check_add_overflow(priv->phys_vec[i].paddr,
+				       &phys_vec[i].paddr) ||
+		    check_add_overflow(phys_vec[i].paddr,
 				       dma_ranges[i].length - 1, &last))
 			return -EOVERFLOW;
 		if (last > pci_last)
 			return -EINVAL;
 
-		priv->phys_vec[i].len = dma_ranges[i].length;
-		priv->size += priv->phys_vec[i].len;
+		phys_vec[i].len = dma_ranges[i].length;
 	}
-	priv->nr_ranges = dma_buf->nr_ranges;
-	priv->provider = provider;
 	return 0;
 }
+EXPORT_SYMBOL_GPL(vfio_pci_core_get_dmabuf_phys);
 
-static int validate_dmabuf_input(struct vfio_pci_core_device *vdev,
-				 struct vfio_device_feature_dma_buf *dma_buf,
+static int validate_dmabuf_input(struct vfio_device_feature_dma_buf *dma_buf,
 				 struct vfio_region_dma_range *dma_ranges,
-				 struct p2pdma_provider **provider)
+				 size_t *lengthp)
 {
 	u64 length = 0;
 	u32 i;
@@ -327,10 +331,6 @@ static int validate_dmabuf_input(struct vfio_pci_core_device *vdev,
 	 */
 	if (dma_buf->region_index >= VFIO_PCI_ROM_REGION_INDEX)
 		return -ENODEV;
-
-	*provider = pcim_p2pdma_provider(vdev->pdev, dma_buf->region_index);
-	if (!*provider)
-		return -EINVAL;
 
 	for (i = 0; i < dma_buf->nr_ranges; i++) {
 		u64 offset = dma_ranges[i].offset;
@@ -353,6 +353,7 @@ static int validate_dmabuf_input(struct vfio_pci_core_device *vdev,
 	if (overflows_type(length, size_t) || length & DMA_IOVA_USE_SWIOTLB)
 		return -EINVAL;
 
+	*lengthp = length;
 	return 0;
 }
 
@@ -363,9 +364,12 @@ int vfio_pci_core_feature_dma_buf(struct vfio_pci_core_device *vdev, u32 flags,
 	struct vfio_device_feature_dma_buf get_dma_buf = {};
 	struct vfio_region_dma_range *dma_ranges;
 	DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
-	struct p2pdma_provider *provider;
 	struct vfio_pci_dma_buf *priv;
+	size_t length;
 	int ret;
+
+	if (!vdev->pci_ops->get_dmabuf_phys)
+		return -EOPNOTSUPP;
 
 	ret = vfio_check_feature(flags, argsz, VFIO_DEVICE_FEATURE_GET,
 				 sizeof(get_dma_buf));
@@ -383,7 +387,7 @@ int vfio_pci_core_feature_dma_buf(struct vfio_pci_core_device *vdev, u32 flags,
 	if (IS_ERR(dma_ranges))
 		return PTR_ERR(dma_ranges);
 
-	ret = validate_dmabuf_input(vdev, &get_dma_buf, dma_ranges, &provider);
+	ret = validate_dmabuf_input(&get_dma_buf, dma_ranges, &length);
 	if (ret)
 		goto err_free_ranges;
 
@@ -400,8 +404,12 @@ int vfio_pci_core_feature_dma_buf(struct vfio_pci_core_device *vdev, u32 flags,
 	}
 
 	priv->vdev = vdev;
-	ret = dma_ranges_to_p2p_phys(priv, &get_dma_buf, dma_ranges,
-				     provider);
+	priv->nr_ranges = get_dma_buf.nr_ranges;
+	priv->size = length;
+	ret = vdev->pci_ops->get_dmabuf_phys(vdev, &priv->provider,
+					     get_dma_buf.region_index,
+					     priv->phys_vec, dma_ranges,
+					     priv->nr_ranges);
 	if (ret)
 		goto err_free_phys;
 

@@ -1521,17 +1521,6 @@ int vfio_pci_core_ioctl_feature(struct vfio_device *device, u32 flags,
 	case VFIO_DEVICE_FEATURE_PCI_VF_TOKEN:
 		return vfio_pci_core_feature_token(vdev, flags, arg, argsz);
 	case VFIO_DEVICE_FEATURE_DMA_BUF:
-		if (device->ops->ioctl != vfio_pci_core_ioctl)
-			/*
-			 * Devices that overwrite general .ioctl() callback
-			 * usually do it to implement their own
-			 * VFIO_DEVICE_GET_REGION_INFO handlerm and they present
-			 * different BAR information from the real PCI.
-			 *
-			 * DMABUF relies on real PCI information.
-			 */
-			return -EOPNOTSUPP;
-
 		return vfio_pci_core_feature_dma_buf(vdev, flags, arg, argsz);
 	default:
 		return -ENOTTY;
@@ -2588,6 +2577,19 @@ void vfio_pci_core_set_params(bool is_nointxmask, bool is_disable_vga,
 	disable_idle_d3 = is_disable_idle_d3;
 }
 EXPORT_SYMBOL_GPL(vfio_pci_core_set_params);
+
+#if !IS_ENABLED(CONFIG_VFIO_PCI_DMABUF)
+int vfio_pci_core_get_dmabuf_phys(struct vfio_pci_core_device *vdev,
+				  struct p2pdma_provider **provider,
+				  unsigned int region_index,
+				  struct phys_vec *phys_vec,
+				  struct vfio_region_dma_range *dma_ranges,
+				  size_t nr_ranges)
+{
+	return -EOPNOTSUPP;
+}
+EXPORT_SYMBOL_GPL(vfio_pci_core_get_dmabuf_phys);
+#endif
 
 static void vfio_pci_core_cleanup(void)
 {
