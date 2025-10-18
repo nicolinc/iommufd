@@ -275,6 +275,35 @@ static const struct dma_buf_ops vfio_pci_dmabuf_ops = {
 	.unmap_dma_buf = vfio_pci_dma_buf_unmap,
 };
 
+int vfio_pci_core_fill_phys_vec(struct phys_vec *phys_vec,
+				struct vfio_region_dma_range *dma_ranges,
+				size_t nr_ranges, phys_addr_t start,
+				phys_addr_t len)
+{
+	phys_addr_t max_addr;
+	unsigned int i;
+
+	max_addr = start + len;
+	for (i = 0; i < nr_ranges; i++) {
+		phys_addr_t end;
+
+		if (!dma_ranges[i].length)
+			return -EINVAL;
+
+		if (check_add_overflow(start, dma_ranges[i].offset,
+				       &phys_vec[i].paddr) ||
+		    check_add_overflow(phys_vec[i].paddr,
+				       dma_ranges[i].length, &end))
+			return -EOVERFLOW;
+		if (end > max_addr)
+			return -EINVAL;
+
+		phys_vec[i].len = dma_ranges[i].length;
+	}
+	return 0;
+}
+EXPORT_SYMBOL_GPL(vfio_pci_core_fill_phys_vec);
+
 int vfio_pci_core_get_dmabuf_phys(struct vfio_pci_core_device *vdev,
 				  struct p2pdma_provider **provider,
 				  unsigned int region_index,
@@ -283,37 +312,15 @@ int vfio_pci_core_get_dmabuf_phys(struct vfio_pci_core_device *vdev,
 				  size_t nr_ranges)
 {
 	struct pci_dev *pdev = vdev->pdev;
-	phys_addr_t len = pci_resource_len(pdev, region_index);
-	phys_addr_t pci_start;
-	phys_addr_t pci_last;
-	u32 i;
-
-	if (!len)
-		return -EINVAL;
 
 	*provider = pcim_p2pdma_provider(pdev, region_index);
 	if (!*provider)
 		return -EINVAL;
 
-	pci_start = pci_resource_start(pdev, region_index);
-	pci_last = pci_start + len - 1;
-	for (i = 0; i < nr_ranges; i++) {
-		phys_addr_t last;
-
-		if (!dma_ranges[i].length)
-			return -EINVAL;
-
-		if (check_add_overflow(pci_start, dma_ranges[i].offset,
-				       &phys_vec[i].paddr) ||
-		    check_add_overflow(phys_vec[i].paddr,
-				       dma_ranges[i].length - 1, &last))
-			return -EOVERFLOW;
-		if (last > pci_last)
-			return -EINVAL;
-
-		phys_vec[i].len = dma_ranges[i].length;
-	}
-	return 0;
+	return vfio_pci_core_fill_phys_vec(
+		phys_vec, dma_ranges, nr_ranges,
+		pci_resource_start(pdev, region_index),
+		pci_resource_len(pdev, region_index));
 }
 EXPORT_SYMBOL_GPL(vfio_pci_core_get_dmabuf_phys);
 

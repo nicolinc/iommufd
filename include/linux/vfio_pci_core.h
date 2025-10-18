@@ -66,6 +66,20 @@ int vfio_pci_core_get_dmabuf_phys(struct vfio_pci_core_device *vdev,
 				  struct vfio_region_dma_range *dma_ranges,
 				  size_t nr_ranges);
 
+#if IS_ENABLED(CONFIG_VFIO_PCI_DMABUF)
+int vfio_pci_core_fill_phys_vec(struct phys_vec *phys_vec,
+				struct vfio_region_dma_range *dma_ranges,
+				size_t nr_ranges, phys_addr_t start,
+				phys_addr_t len);
+#else
+static inline int vfio_pci_core_fill_phys_vec(
+	struct phys_vec *phys_vec, struct vfio_region_dma_range *dma_ranges,
+	size_t nr_ranges, phys_addr_t start, phys_addr_t len)
+{
+	return -EINVAL;
+}
+#endif
+
 struct vfio_pci_core_device {
 	struct vfio_device	vdev;
 	struct pci_dev		*pdev;
