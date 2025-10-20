@@ -295,7 +295,15 @@ EXPORT_SYMBOL_GPL(pcim_p2pdma_init);
  * @pdev: The PCI device to enable P2PDMA for
  * @bar: BAR index to get provider
  *
- * This function gets peer-to-peer DMA provider for a PCI device.
+ * This function gets peer-to-peer DMA provider for a PCI device. The lifetime
+ * of the provider (and of course the MMIO) is bound to the lifetime of the
+ * driver. A driver calling this function must ensure that all references to the
+ * provider, and any DMA mappings created for any MMIO, are all cleaned up
+ * before the driver remove() completes.
+ *
+ * Since P2P is almost always shared with a second driver this means some system
+ * to notify, invalidate and revoke the MMIO's DMA must be in place to use this
+ * function. For example a revoke can be built using DMABUF.
  */
 struct p2pdma_provider *pcim_p2pdma_provider(struct pci_dev *pdev, int bar)
 {
