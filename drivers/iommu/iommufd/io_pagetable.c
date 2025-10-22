@@ -1000,10 +1000,11 @@ static void iopt_unfill_domain(struct io_pagetable *iopt,
 				WARN_ON(!area->storage_domain);
 			if (area->storage_domain == domain)
 				area->storage_domain = storage_domain;
-			if (!iopt_dmabuf_revoked(pages))
-				iopt_area_unmap_domain(area, domain);
-			if (iopt_is_dmabuf(pages))
+			if (iopt_is_dmabuf(pages)) {
+				if (!iopt_dmabuf_revoked(pages))
+					iopt_area_unmap_domain(area, domain);
 				iopt_dmabuf_untrack_domain(pages, area, domain);
+			}
 			mutex_unlock(&pages->mutex);
 
 			if (!iopt_is_dmabuf(pages))
