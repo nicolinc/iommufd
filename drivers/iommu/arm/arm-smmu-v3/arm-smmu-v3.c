@@ -3321,11 +3321,16 @@ arm_smmu_master_build_invs(struct arm_smmu_master *master, bool ats_enabled,
 	if (master->smmu->features & ARM_SMMU_FEAT_RANGE_INV)
 		pgsize = __ffs(smmu_domain->domain.pgsize_bitmap);
 
+	/*
+	 * Each SMMU has only one iotlb tag in the array, so leave the iotlb tag
+	 * ID to be 0. The merge() and unref() will find the existing one in the
+	 * array to refcount_inc/dec. In case of missing a match, merge() should
+	 * allocate a new ID while unref() should WARN_ON.
+	 */
 	switch (smmu_domain->stage) {
 	case ARM_SMMU_DOMAIN_SVA:
 	case ARM_SMMU_DOMAIN_S1:
-		if (!arm_smmu_master_build_inv(master, INV_TYPE_S1_ASID,
-					       smmu_domain->cd.asid,
+		if (!arm_smmu_master_build_inv(master, INV_TYPE_S1_ASID, 0,
 					       IOMMU_NO_PASID, pgsize))
 			return NULL;
 		master->build_invs->alloc_fn = arm_smmu_inv_alloc_asid;
@@ -3333,8 +3338,7 @@ arm_smmu_master_build_invs(struct arm_smmu_master *master, bool ats_enabled,
 		master->build_invs->domain = smmu_domain;
 		break;
 	case ARM_SMMU_DOMAIN_S2:
-		if (!arm_smmu_master_build_inv(master, INV_TYPE_S2_VMID,
-					       smmu_domain->s2_cfg.vmid,
+		if (!arm_smmu_master_build_inv(master, INV_TYPE_S2_VMID, 0,
 					       IOMMU_NO_PASID, pgsize))
 			return NULL;
 		master->build_invs->alloc_fn = arm_smmu_inv_alloc_vmid;
@@ -3347,9 +3351,9 @@ arm_smmu_master_build_invs(struct arm_smmu_master *master, bool ats_enabled,
 
 	/* All the nested S1 ASIDs have to be flushed when S2 parent changes */
 	if (nesting) {
-		if (!arm_smmu_master_build_inv(
-			    master, INV_TYPE_S2_VMID_S1_CLEAR,
-			    smmu_domain->s2_cfg.vmid, IOMMU_NO_PASID, 0))
+		if (!arm_smmu_master_build_inv(master,
+					       INV_TYPE_S2_VMID_S1_CLEAR, 0,
+					       IOMMU_NO_PASID, 0))
 			return NULL;
 	}
 
