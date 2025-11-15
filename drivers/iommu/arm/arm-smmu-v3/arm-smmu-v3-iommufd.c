@@ -138,6 +138,11 @@ void arm_smmu_attach_commit_vmaster(struct arm_smmu_attach_state *state)
 	mutex_lock(&master->smmu->streams_mutex);
 	kfree(master->vmaster);
 	master->vmaster = state->vmaster;
+	if (master->vmaster && master->vmaster->vsmmu) {
+		if (!master->vmaster->vsmmu->vmid)
+			master->vmaster->vsmmu->vmid = master->vmid;
+		WARN_ON(master->vmaster->vsmmu->vmid != master->vmid);
+	}
 	mutex_unlock(&master->smmu->streams_mutex);
 }
 
@@ -454,8 +459,6 @@ int arm_vsmmu_init(struct iommufd_viommu *viommu,
 
 	vsmmu->smmu = smmu;
 	vsmmu->s2_parent = s2_parent;
-	/* FIXME Move VMID allocation from the S2 domain allocation to here */
-	vsmmu->vmid = s2_parent->s2_cfg.vmid;
 
 	if (viommu->type == IOMMU_VIOMMU_TYPE_ARM_SMMUV3) {
 		viommu->ops = &arm_vsmmu_ops;
