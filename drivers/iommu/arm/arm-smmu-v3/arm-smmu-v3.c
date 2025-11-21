@@ -1646,7 +1646,7 @@ void arm_smmu_write_cd_entry(struct arm_smmu_master *master, int ssid,
 
 void arm_smmu_make_s1_cd(struct arm_smmu_cd *target,
 			 struct arm_smmu_master *master,
-			 struct arm_smmu_domain *smmu_domain)
+			 struct arm_smmu_domain *smmu_domain, ioasid_t ssid)
 {
 	struct arm_smmu_ctx_desc *cd = &smmu_domain->cd;
 	const struct io_pgtable_cfg *pgtbl_cfg =
@@ -3801,7 +3801,8 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev,
 	case ARM_SMMU_DOMAIN_S1: {
 		struct arm_smmu_cd target_cd;
 
-		arm_smmu_make_s1_cd(&target_cd, master, smmu_domain);
+		arm_smmu_make_s1_cd(&target_cd, master, smmu_domain,
+				    IOMMU_NO_PASID);
 		arm_smmu_write_cd_entry(master, IOMMU_NO_PASID, cdptr,
 					&target_cd);
 		arm_smmu_make_cdtable_ste(&target, master, state.ats_enabled,
@@ -3844,7 +3845,7 @@ static int arm_smmu_s1_set_dev_pasid(struct iommu_domain *domain,
 	 * We can read cd.asid outside the lock because arm_smmu_set_pasid()
 	 * will fix it
 	 */
-	arm_smmu_make_s1_cd(&target_cd, master, smmu_domain);
+	arm_smmu_make_s1_cd(&target_cd, master, smmu_domain, id);
 	return arm_smmu_set_pasid(master, to_smmu_domain(domain), id,
 				  &target_cd, old);
 }

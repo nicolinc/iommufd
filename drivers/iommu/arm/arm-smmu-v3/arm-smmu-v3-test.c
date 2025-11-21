@@ -476,7 +476,7 @@ static void arm_smmu_test_make_s1_cd(struct kunit *test, struct arm_smmu_cd *cd,
 	KUNIT_ASSERT_NOT_NULL(test, master.asid);
 
 	master.asid[IOMMU_NO_PASID] = asid;
-	arm_smmu_make_s1_cd(cd, &master, &smmu_domain);
+	arm_smmu_make_s1_cd(cd, &master, &smmu_domain, IOMMU_NO_PASID);
 }
 
 static void arm_smmu_v3_write_cd_test_s1_clear(struct kunit *test)
