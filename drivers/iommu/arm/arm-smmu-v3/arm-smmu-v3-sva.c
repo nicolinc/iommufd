@@ -175,8 +175,12 @@ static void arm_smmu_mm_release(struct mmu_notifier *mn, struct mm_struct *mm)
 
 static void arm_smmu_mmu_notifier_free(struct mmu_notifier *mn)
 {
-	arm_smmu_domain_free(
-		container_of(mn, struct arm_smmu_domain, mmu_notifier));
+	struct arm_smmu_domain *smmu_domain = 
+		container_of(mn, struct arm_smmu_domain, mmu_notifier);
+
+	pr_alert("%s: domain@%px (type: %x)\n", __func__,
+		&smmu_domain->domain, smmu_domain->domain.type);
+	arm_smmu_domain_free(smmu_domain);
 }
 
 static const struct mmu_notifier_ops arm_smmu_mmu_notifier_ops = {
@@ -323,6 +327,8 @@ struct iommu_domain *arm_smmu_sva_domain_alloc(struct device *dev,
 	if (ret)
 		goto err_free;
 
+	dev_alert(master->dev, "%s: domain@%px (type: %x)\n", __func__,
+		&smmu_domain->domain, smmu_domain->domain.type);
 	return &smmu_domain->domain;
 
 err_free:

@@ -142,6 +142,7 @@ void arm_smmu_attach_commit_vmaster(struct arm_smmu_attach_state *state)
 		if (!master->vmaster->vsmmu->vmid)
 			master->vmaster->vsmmu->vmid = master->vmid;
 		WARN_ON(master->vmaster->vsmmu->vmid != master->vmid);
+		dev_alert(master->dev, "---------%s: vsmmu->vmid=%d\n", __func__, master->vmaster->vsmmu->vmid);
 	}
 	mutex_unlock(&master->smmu->streams_mutex);
 }

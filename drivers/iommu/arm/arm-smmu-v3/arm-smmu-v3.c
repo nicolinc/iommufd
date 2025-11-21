@@ -1141,6 +1141,10 @@ struct arm_smmu_invs *arm_smmu_invs_merge(struct arm_smmu_invs *invs,
 		/* A matching iotlb tag owned by the same SMMU can be shared */
 		if (cmp == 0) {
 			*cur = invs->inv[i];
+			if (cur->type == INV_TYPE_S1_ASID)
+				pr_alert("---------%s: resue asid=%d\n", __func__, cur->id);
+			else if (cur->type == INV_TYPE_S2_VMID)
+				pr_alert("---------%s: resue vmid=%d\n", __func__, cur->id);
 			continue;
 		}
 
@@ -1670,6 +1674,7 @@ void arm_smmu_make_s1_cd(struct arm_smmu_cd *target,
 		CTXDESC_CD_0_ASET |
 		FIELD_PREP(CTXDESC_CD_0_ASID, master->asid[ssid])
 		);
+	dev_alert(master->dev, "---------%s: master->asid[%d]=%d\n", __func__, ssid, master->asid[ssid]);
 
 	/* To enable dirty flag update, set both Access flag and dirty state update */
 	if (pgtbl_cfg->quirks & IO_PGTABLE_QUIRK_ARM_HD)
@@ -1966,6 +1971,7 @@ void arm_smmu_make_s2_domain_ste(struct arm_smmu_ste *target,
 		STRTAB_STE_2_S2PTW |
 		(master->stall_enabled ? STRTAB_STE_2_S2S : 0) |
 		STRTAB_STE_2_S2R);
+	dev_alert(master->dev, "---------%s: master->vmid=%d\n", __func__, master->vmid);
 
 	target->data[3] = cpu_to_le64(pgtbl_cfg->arm_lpae_s2_cfg.vttbr &
 				      STRTAB_STE_3_S2TTB_MASK);
@@ -3111,6 +3117,7 @@ static void arm_smmu_inv_free_asid(struct arm_smmu_inv *inv, bool flush)
 
 	/* Lastly, free the ASID as the last user detached */
 	xa_erase(&arm_smmu_asid_xa, inv->id);
+	pr_alert("---------%s: asid=%d\n", __func__, inv->id);
 }
 
 static void arm_smmu_inv_free_vmid(struct arm_smmu_inv *inv, bool flush)
@@ -3134,6 +3141,7 @@ static void arm_smmu_inv_free_vmid(struct arm_smmu_inv *inv, bool flush)
 
 	/* Lastly, free the VMID as the last user detached */
 	ida_free(&inv->smmu->vmid_map, inv->id);
+	pr_alert("---------%s: vmid=%d\n", __func__, inv->id);
 }
 
 static void arm_smmu_attach_free_iotlb_tag(struct arm_smmu_attach_state *state)
@@ -3171,6 +3179,7 @@ static int arm_smmu_inv_alloc_asid(struct arm_smmu_inv *inv, void *data)
 	if (ret)
 		return ret;
 	inv->id = asid;
+	pr_alert("---------%s: alloc asid=%d\n", __func__, asid);
 	return 0;
 }
 
@@ -3189,6 +3198,7 @@ static int arm_smmu_inv_alloc_vmid(struct arm_smmu_inv *inv, void *data)
 	if (vmid < 0)
 		return vmid;
 	inv->id = vmid;
+	pr_alert("---------%s: alloc vmid=%d\n", __func__, vmid);
 	return 0;
 }
 
@@ -3828,6 +3838,7 @@ int arm_smmu_set_pasid(struct arm_smmu_master *master,
 	cd->data[0] &= ~cpu_to_le64(CTXDESC_CD_0_ASID);
 	cd->data[0] |= cpu_to_le64(
 		FIELD_PREP(CTXDESC_CD_0_ASID, master->asid[pasid]));
+	dev_alert(master->dev, "---------%s: master->asid[%d]=%d\n", __func__, pasid, master->asid[pasid]);
 
 	arm_smmu_write_cd_entry(master, pasid, cdptr, cd);
 	arm_smmu_update_ste(master, sid_domain, state.ats_enabled);
@@ -3851,6 +3862,8 @@ static int arm_smmu_blocking_set_dev_pasid(struct iommu_domain *new_domain,
 		.ssid = pasid,
 	};
 
+	pr_alert("%s: domain@%px (type: %x)\n", __func__,
+		&smmu_domain->domain, smmu_domain->domain.type);
 	mutex_lock(&arm_smmu_asid_lock);
 	arm_smmu_attach_prepare_invs(&state, NULL);
 	arm_smmu_clear_cd(master, pasid);
