@@ -953,6 +953,8 @@ struct arm_smmu_master {
 	bool				stall_enabled;
 	unsigned int			ssid_bits;
 	unsigned int			iopf_refcount;
+	/* Store allocated ASID[1 << ssid_bits] and VMID */
+	u16				*asid, vmid;
 };
 
 /* SMMU private data for an IOMMU domain */
@@ -1117,11 +1119,13 @@ static inline bool arm_smmu_master_canwbs(struct arm_smmu_master *master)
  * @new_invs: for new domain, this is the new invs array to update domain->invs;
  *            for old domain, this is the master->build_invs to pass in as the
  *            to_unref argument to an arm_smmu_invs_unref() call
+ * @iotlb_tag: copy of the first entry in the build_invs for the domain
  */
 struct arm_smmu_inv_state {
 	struct arm_smmu_invs __rcu **invs_ptr;
 	struct arm_smmu_invs *old_invs;
 	struct arm_smmu_invs *new_invs;
+	struct arm_smmu_inv iotlb_tag;
 };
 
 struct arm_smmu_attach_state {
