@@ -955,6 +955,8 @@ struct arm_smmu_master {
 	bool				stall_enabled;
 	unsigned int			ssid_bits;
 	unsigned int			iopf_refcount;
+	/* Store allocated ASID[1 << ssid_bits] and VMID */
+	u16				*asid, vmid;
 };
 
 /* SMMU private data for an IOMMU domain */

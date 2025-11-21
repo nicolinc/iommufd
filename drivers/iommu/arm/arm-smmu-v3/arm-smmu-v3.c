@@ -3505,6 +3505,11 @@ arm_smmu_install_new_domain_invs(struct arm_smmu_attach_state *state)
 	 */
 	smp_mb();
 	kfree_rcu(invst->old_invs, rcu);
+
+	if (invst->iotlb_tag.type == INV_TYPE_S1_ASID)
+		state->master->asid[state->ssid] = invst->iotlb_tag.id;
+	else
+		state->master->vmid = invst->iotlb_tag.id;
 }
 
 /*
@@ -4352,6 +4357,13 @@ static struct iommu_device *arm_smmu_probe_device(struct device *dev)
 		master->ssid_bits = min_t(u8, master->ssid_bits,
 					  CTXDESC_LINEAR_CDMAX);
 
+	master->asid = kcalloc(1 << master->ssid_bits, sizeof(*master->asid),
+			       GFP_KERNEL);
+	if (!master->asid) {
+		ret = -ENOMEM;
+		goto err_disable_pasid;
+	}
+
 	if ((smmu->features & ARM_SMMU_FEAT_STALLS &&
 	     device_property_read_bool(dev, "dma-can-stall")) ||
 	    smmu->features & ARM_SMMU_FEAT_STALL_FORCE)
@@ -4365,6 +4377,9 @@ static struct iommu_device *arm_smmu_probe_device(struct device *dev)
 
 	return &smmu->iommu;
 
+err_disable_pasid:
+	arm_smmu_disable_pasid(master);
+	arm_smmu_remove_master(master);
 err_free_master:
 	kfree(master);
 	return ERR_PTR(ret);

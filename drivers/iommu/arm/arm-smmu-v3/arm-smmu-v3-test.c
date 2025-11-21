@@ -449,7 +449,8 @@ static void arm_smmu_v3_test_cd_expect_hitless_transition(
 					      num_syncs_expected, true);
 }
 
-static void arm_smmu_test_make_s1_cd(struct arm_smmu_cd *cd, unsigned int asid)
+static void arm_smmu_test_make_s1_cd(struct kunit *test, struct arm_smmu_cd *cd,
+				     unsigned int asid)
 {
 	struct arm_smmu_master master = {
 		.smmu = &smmu,
@@ -471,6 +472,10 @@ static void arm_smmu_test_make_s1_cd(struct arm_smmu_cd *cd, unsigned int asid)
 	io_pgtable.cfg.arm_lpae_s1_cfg.tcr.tsz = 4;
 	io_pgtable.cfg.arm_lpae_s1_cfg.mair = 0xabcdef012345678ULL;
 
+	master.asid = kunit_kzalloc(test, sizeof(*master.asid), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, master.asid);
+
+	master.asid[IOMMU_NO_PASID] = asid;
 	arm_smmu_make_s1_cd(cd, &master, &smmu_domain);
 }
 
@@ -479,7 +484,7 @@ static void arm_smmu_v3_write_cd_test_s1_clear(struct kunit *test)
 	struct arm_smmu_cd cd = {};
 	struct arm_smmu_cd cd_2;
 
-	arm_smmu_test_make_s1_cd(&cd_2, 1997);
+	arm_smmu_test_make_s1_cd(test, &cd_2, 1997);
 	arm_smmu_v3_test_cd_expect_non_hitless_transition(
 		test, &cd, &cd_2, NUM_EXPECTED_SYNCS(2));
 	arm_smmu_v3_test_cd_expect_non_hitless_transition(
@@ -491,8 +496,8 @@ static void arm_smmu_v3_write_cd_test_s1_change_asid(struct kunit *test)
 	struct arm_smmu_cd cd = {};
 	struct arm_smmu_cd cd_2;
 
-	arm_smmu_test_make_s1_cd(&cd, 778);
-	arm_smmu_test_make_s1_cd(&cd_2, 1997);
+	arm_smmu_test_make_s1_cd(test, &cd, 778);
+	arm_smmu_test_make_s1_cd(test, &cd_2, 1997);
 	arm_smmu_v3_test_cd_expect_hitless_transition(test, &cd, &cd_2,
 						      NUM_EXPECTED_SYNCS(1));
 	arm_smmu_v3_test_cd_expect_hitless_transition(test, &cd_2, &cd,
