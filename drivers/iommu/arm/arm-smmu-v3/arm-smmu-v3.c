@@ -3066,6 +3066,51 @@ static void arm_smmu_disable_iopf(struct arm_smmu_master *master,
 		iopf_queue_remove_device(master->smmu->evtq.iopf, master->dev);
 }
 
+static struct arm_smmu_inv *
+arm_smmu_master_build_inv(struct arm_smmu_master *master,
+			  enum arm_smmu_inv_type type, u32 id, ioasid_t ssid,
+			  size_t pgsize)
+{
+	struct arm_smmu_invs *build_invs = master->build_invs;
+	struct arm_smmu_inv *cur, inv = {
+		.smmu = master->smmu,
+		.type = type,
+		.id = id,
+		.pgsize = pgsize,
+	};
+
+	if (WARN_ON(build_invs->num_invs == build_invs->max_invs))
+		return NULL;
+	cur = &build_invs->inv[build_invs->num_invs];
+	build_invs->num_invs++;
+
+	*cur = inv;
+	switch (type) {
+	case INV_TYPE_S1_ASID:
+		if (master->smmu->features & ARM_SMMU_FEAT_E2H) {
+			cur->size_opcode = CMDQ_OP_TLBI_EL2_VA;
+			cur->nsize_opcode = CMDQ_OP_TLBI_EL2_ASID;
+		} else {
+			cur->size_opcode = CMDQ_OP_TLBI_NH_VA;
+			cur->nsize_opcode = CMDQ_OP_TLBI_NH_ASID;
+		}
+		break;
+	case INV_TYPE_S2_VMID:
+		cur->size_opcode = CMDQ_OP_TLBI_S2_IPA;
+		cur->nsize_opcode = CMDQ_OP_TLBI_S12_VMALL;
+		break;
+	case INV_TYPE_S2_VMID_S1_CLEAR:
+		cur->size_opcode = cur->nsize_opcode = CMDQ_OP_TLBI_NH_ALL;
+		break;
+	case INV_TYPE_ATS:
+	case INV_TYPE_ATS_FULL:
+		cur->size_opcode = cur->nsize_opcode = CMDQ_OP_ATC_INV;
+		break;
+	}
+
+	return cur;
+}
+
 /*
  * Use the preallocated scratch array at master->build_invs, to build a to_merge
  * or to_unref array, to pass into a following arm_smmu_invs_merge/unref() call.
@@ -3077,84 +3122,58 @@ static struct arm_smmu_invs *
 arm_smmu_master_build_invs(struct arm_smmu_master *master, bool ats_enabled,
 			   ioasid_t ssid, struct arm_smmu_domain *smmu_domain)
 {
-	const bool e2h = master->smmu->features & ARM_SMMU_FEAT_E2H;
-	struct arm_smmu_invs *build_invs = master->build_invs;
 	const bool nesting = smmu_domain->nest_parent;
-	struct arm_smmu_inv *cur;
+	size_t pgsize = 0, i;
 
 	iommu_group_mutex_assert(master->dev);
 
-	cur = build_invs->inv;
+	master->build_invs->num_invs = 0;
+
+	/* Range-based invalidation requires the leaf pgsize for calculation */
+	if (master->smmu->features & ARM_SMMU_FEAT_RANGE_INV)
+		pgsize = __ffs(smmu_domain->domain.pgsize_bitmap);
 
 	switch (smmu_domain->stage) {
 	case ARM_SMMU_DOMAIN_SVA:
 	case ARM_SMMU_DOMAIN_S1:
-		*cur = (struct arm_smmu_inv){
-			.smmu = master->smmu,
-			.type = INV_TYPE_S1_ASID,
-			.id = smmu_domain->cd.asid,
-			.size_opcode = e2h ? CMDQ_OP_TLBI_EL2_VA :
-					     CMDQ_OP_TLBI_NH_VA,
-			.nsize_opcode = e2h ? CMDQ_OP_TLBI_EL2_ASID :
-					      CMDQ_OP_TLBI_NH_ASID
-		};
+		if (!arm_smmu_master_build_inv(master, INV_TYPE_S1_ASID,
+					       smmu_domain->cd.asid,
+					       IOMMU_NO_PASID, pgsize))
+			return NULL;
 		break;
 	case ARM_SMMU_DOMAIN_S2:
-		*cur = (struct arm_smmu_inv){
-			.smmu = master->smmu,
-			.type = INV_TYPE_S2_VMID,
-			.id = smmu_domain->s2_cfg.vmid,
-			.size_opcode = CMDQ_OP_TLBI_S2_IPA,
-			.nsize_opcode = CMDQ_OP_TLBI_S12_VMALL,
-		};
+		if (!arm_smmu_master_build_inv(master, INV_TYPE_S2_VMID,
+					       smmu_domain->s2_cfg.vmid,
+					       IOMMU_NO_PASID, pgsize))
+			return NULL;
 		break;
 	default:
 		WARN_ON(true);
 		return NULL;
 	}
 
-	/* Range-based invalidation requires the leaf pgsize for calculation */
-	if (master->smmu->features & ARM_SMMU_FEAT_RANGE_INV)
-		cur->pgsize = __ffs(smmu_domain->domain.pgsize_bitmap);
-	cur++;
-
 	/* All the nested S1 ASIDs have to be flushed when S2 parent changes */
 	if (nesting) {
-		*cur = (struct arm_smmu_inv){
-			.smmu = master->smmu,
-			.type = INV_TYPE_S2_VMID_S1_CLEAR,
-			.id = smmu_domain->s2_cfg.vmid,
-			.size_opcode = CMDQ_OP_TLBI_NH_ALL,
-			.nsize_opcode = CMDQ_OP_TLBI_NH_ALL,
-		};
-		cur++;
+		if (!arm_smmu_master_build_inv(
+			    master, INV_TYPE_S2_VMID_S1_CLEAR,
+			    smmu_domain->s2_cfg.vmid, IOMMU_NO_PASID, 0))
+			return NULL;
 	}
 
-	if (ats_enabled) {
-		size_t i;
-
-		for (i = 0; i < master->num_streams; i++) {
-			/*
-			 * If an S2 used as a nesting parent is changed we have
-			 * no option but to completely flush the ATC.
-			 */
-			*cur = (struct arm_smmu_inv){
-				.smmu = master->smmu,
-				.type = nesting ? INV_TYPE_ATS_FULL :
-						  INV_TYPE_ATS,
-				.id = master->streams[i].id,
-				.ssid = ssid,
-				.size_opcode = CMDQ_OP_ATC_INV,
-				.nsize_opcode = CMDQ_OP_ATC_INV,
-			};
-			cur++;
-		}
+	for (i = 0; ats_enabled && i < master->num_streams; i++) {
+		/*
+		 * If an S2 used as a nesting parent is changed we have no
+		 * option but to completely flush the ATC.
+		 */
+		if (!arm_smmu_master_build_inv(
+			    master, nesting ? INV_TYPE_ATS_FULL : INV_TYPE_ATS,
+			    master->streams[i].id, ssid, 0))
+			return NULL;
 	}
 
 	/* Note this build_invs must have been sorted */
 
-	build_invs->num_invs = cur - build_invs->inv;
-	return build_invs;
+	return master->build_invs;
 }
 
 static void arm_smmu_remove_master_domain(struct arm_smmu_master *master,
