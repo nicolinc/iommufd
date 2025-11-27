@@ -675,7 +675,7 @@ struct arm_smmu_inv {
 	refcount_t users; /* users=0 to mark as a trash to be purged */
 };
 
-static inline bool arm_smmu_inv_is_ats(struct arm_smmu_inv *inv)
+static inline bool arm_smmu_inv_is_ats(const struct arm_smmu_inv *inv)
 {
 	return inv->type == INV_TYPE_ATS || inv->type == INV_TYPE_ATS_FULL;
 }
