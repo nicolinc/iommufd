@@ -1051,6 +1051,9 @@ static int arm_smmu_inv_cmp(const struct arm_smmu_inv *inv_l,
 		return cmp_int((uintptr_t)inv_l->smmu, (uintptr_t)inv_r->smmu);
 	if (inv_l->type != inv_r->type)
 		return cmp_int(inv_l->type, inv_r->type);
+	/* Each SMMU shares a single iotlb tag on a domain, so it is a match */
+	if (arm_smmu_inv_is_iotlb_tag(inv_l))
+		return 0;
 	return cmp_int(inv_l->id, inv_r->id);
 }
 
@@ -1127,8 +1130,38 @@ struct arm_smmu_invs *arm_smmu_invs_merge(struct arm_smmu_invs *invs,
 	size_t i, j;
 	int cmp;
 
-	arm_smmu_invs_for_each_cmp(invs, i, to_merge, j, cmp)
+	arm_smmu_invs_for_each_cmp(invs, i, to_merge, j, cmp) {
+		struct arm_smmu_inv *cur = &to_merge->inv[j];
+
 		num_invs++;
+
+		if (!arm_smmu_inv_is_iotlb_tag(cur))
+			continue;
+
+		/* A matching iotlb tag owned by the same SMMU can be shared */
+		if (cmp == 0) {
+			*cur = invs->inv[i];
+			continue;
+		}
+
+		/* Iterate the base invs array to find if next is a match */
+		if (i < invs->num_invs)
+			continue;
+
+		/* No found. Allocate a new one */
+		if (j == 0) {
+			int ret = -EOPNOTSUPP;
+
+			/* KUNIT test doesn't pass in a alloc_fn */
+			if (to_merge->alloc_fn)
+				ret = to_merge->alloc_fn(cur, invs->domain);
+			if (ret)
+				return ERR_PTR(ret);
+		} else {
+			/* Copy the allocated iotlb tag from the previous inv */
+			cur->id = cur[-1].id;
+		}
+	}
 
 	new_invs = arm_smmu_invs_alloc(num_invs);
 	if (!new_invs)
@@ -1208,8 +1241,8 @@ void arm_smmu_invs_unref(struct arm_smmu_invs *invs,
 			}
 
 			/* KUNIT test doesn't pass in a free_fn */
-			if (free_fn)
-				free_fn(&invs->inv[i]);
+			if (to_unref->free_fn)
+				to_unref->free_fn(&invs->inv[i], true);
 			invs->num_trashes++;
 		} else {
 			/* item in to_unref is not in invs or already a trash */
@@ -3117,6 +3150,112 @@ static void arm_smmu_disable_iopf(struct arm_smmu_master *master,
 		iopf_queue_remove_device(master->smmu->evtq.iopf, master->dev);
 }
 
+/*
+ * When an array entry's users count reaches zero, it means the ASID/VMID is no
+ * longer being invalidated by map/unmap and must be cleaned. The rule is that
+ * all ASIDs/VMIDs not in an invalidation array are left cleared in the IOTLB.
+ */
+static void arm_smmu_inv_free_asid(struct arm_smmu_inv *inv, bool flush)
+{
+	lockdep_assert_held(&arm_smmu_asid_lock);
+
+	if (inv->type != INV_TYPE_S1_ASID)
+		return;
+	if (refcount_read(&inv->users))
+		return;
+
+	if (flush) {
+		struct arm_smmu_cmdq_ent cmd = {
+			.opcode = inv->nsize_opcode,
+			.tlbi.asid = inv->id,
+		};
+
+		arm_smmu_cmdq_issue_cmd_with_sync(inv->smmu, &cmd);
+	}
+
+	/* Lastly, free the ASID as the last user detached */
+	xa_erase(&arm_smmu_asid_xa, inv->id);
+}
+
+static void arm_smmu_inv_free_vmid(struct arm_smmu_inv *inv, bool flush)
+{
+	lockdep_assert_held(&arm_smmu_asid_lock);
+
+	/* Note S2_VMID using nsize_opcode covers S2_VMID_S1_CLEAR already */
+	if (inv->type != INV_TYPE_S2_VMID)
+		return;
+	if (refcount_read(&inv->users))
+		return;
+
+	if (flush) {
+		struct arm_smmu_cmdq_ent cmd = {
+			.opcode = inv->nsize_opcode,
+			.tlbi.vmid = inv->id,
+		};
+
+		arm_smmu_cmdq_issue_cmd_with_sync(inv->smmu, &cmd);
+	}
+
+	/* Lastly, free the VMID as the last user detached */
+	ida_free(&inv->smmu->vmid_map, inv->id);
+}
+
+static void arm_smmu_attach_free_iotlb_tag(struct arm_smmu_attach_state *state)
+{
+	struct arm_smmu_inv_state *invst = &state->new_domain_invst;
+	struct arm_smmu_inv *inv = &invst->iotlb_tag;
+
+	switch (inv->type) {
+	case INV_TYPE_S1_ASID:
+		arm_smmu_inv_free_asid(&invst->iotlb_tag, false);
+		return;
+	case INV_TYPE_S2_VMID:
+		arm_smmu_inv_free_vmid(&invst->iotlb_tag, false);
+		return;
+	default:
+		WARN_ON(true);
+		return;
+	}
+}
+
+static int arm_smmu_inv_alloc_asid(struct arm_smmu_inv *inv, void *data)
+{
+	struct arm_smmu_domain *smmu_domain = data;
+	struct arm_smmu_device *smmu = inv->smmu;
+	u32 asid;
+	int ret;
+
+	lockdep_assert_held(&arm_smmu_asid_lock);
+
+	/* Allocate a new iotlb_tag.id */
+	WARN_ON(inv->type != INV_TYPE_S1_ASID);
+
+	ret = xa_alloc(&arm_smmu_asid_xa, &asid, smmu_domain,
+		       XA_LIMIT(1, (1 << smmu->asid_bits) - 1), GFP_KERNEL);
+	if (ret)
+		return ret;
+	inv->id = asid;
+	return 0;
+}
+
+static int arm_smmu_inv_alloc_vmid(struct arm_smmu_inv *inv, void *data)
+{
+	struct arm_smmu_device *smmu = inv->smmu;
+	int vmid;
+
+	lockdep_assert_held(&arm_smmu_asid_lock);
+
+	WARN_ON(inv->type != INV_TYPE_S2_VMID);
+
+	/* Reserve VMID 0 for stage-2 bypass STEs */
+	vmid = ida_alloc_range(&smmu->vmid_map, 1,
+			       (1 << smmu->vmid_bits) - 1, GFP_KERNEL);
+	if (vmid < 0)
+		return vmid;
+	inv->id = vmid;
+	return 0;
+}
+
 static struct arm_smmu_inv *
 arm_smmu_master_build_inv(struct arm_smmu_master *master,
 			  enum arm_smmu_inv_type type, u32 id, ioasid_t ssid,
@@ -3191,12 +3330,17 @@ arm_smmu_master_build_invs(struct arm_smmu_master *master, bool ats_enabled,
 					       smmu_domain->cd.asid,
 					       IOMMU_NO_PASID, pgsize))
 			return NULL;
+		master->build_invs->alloc_fn = arm_smmu_inv_alloc_asid;
+		master->build_invs->free_fn = arm_smmu_inv_free_asid;
+		master->build_invs->domain = smmu_domain;
 		break;
 	case ARM_SMMU_DOMAIN_S2:
 		if (!arm_smmu_master_build_inv(master, INV_TYPE_S2_VMID,
 					       smmu_domain->s2_cfg.vmid,
 					       IOMMU_NO_PASID, pgsize))
 			return NULL;
+		master->build_invs->alloc_fn = arm_smmu_inv_alloc_vmid;
+		master->build_invs->free_fn = arm_smmu_inv_free_vmid;
 		break;
 	default:
 		WARN_ON(true);
@@ -3326,6 +3470,7 @@ static int arm_smmu_attach_prepare_invs(struct arm_smmu_attach_state *state,
 		arm_smmu_invs_dbg(master, new_smmu_domain, build_invs, "merge");
 		arm_smmu_invs_dbg(master, new_smmu_domain, invst->new_invs,
 				  "new domain's new invs");
+		invst->iotlb_tag = build_invs->inv[0];
 	}
 
 	if (old_smmu_domain) {
@@ -3565,6 +3710,7 @@ err_free_master_domain:
 err_free_vmaster:
 	kfree(state->vmaster);
 err_unprepare_invs:
+	arm_smmu_attach_free_iotlb_tag(state);
 	kfree(state->new_domain_invst.new_invs);
 	return ret;
 }

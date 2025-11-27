@@ -680,6 +680,9 @@ static inline bool arm_smmu_inv_is_ats(const struct arm_smmu_inv *inv)
 	return inv->type == INV_TYPE_ATS || inv->type == INV_TYPE_ATS_FULL;
 }
 
+/* S1_ASID/S2_VMID(S1_CLEAR) types */
+#define arm_smmu_inv_is_iotlb_tag(inv) !arm_smmu_inv_is_ats(inv)
+
 /**
  * struct arm_smmu_invs - Per-domain invalidation array
  * @max_invs: maximum capacity of the flexible array
@@ -691,6 +694,9 @@ static inline bool arm_smmu_inv_is_ats(const struct arm_smmu_inv *inv)
  * @rwlock: optional rwlock to fench ATS operations
  * @has_ats: flag if the array contains an INV_TYPE_ATS or INV_TYPE_ATS_FULL
  * @rcu: rcu head for kfree_rcu()
+ * @domain: owner domain of the array
+ * @alloc_fn: a callback to allocate a new iotlb tag
+ * @free_fn: a callback to free a new iotlb tag if its user counter reaches 0
  * @inv: flexible invalidation array
  *
  * The arm_smmu_invs is an RCU data structure. During a ->attach_dev callback,
@@ -720,6 +726,9 @@ struct arm_smmu_invs {
 	rwlock_t rwlock;
 	bool has_ats;
 	struct rcu_head rcu;
+	struct arm_smmu_domain *domain;
+	int (*alloc_fn)(struct arm_smmu_inv *inv, void *data);
+	void (*free_fn)(struct arm_smmu_inv *inv, bool flush);
 	struct arm_smmu_inv inv[] __counted_by(max_invs);
 };
 
@@ -1115,6 +1124,7 @@ struct arm_smmu_inv_state {
 	struct arm_smmu_invs __rcu **invs_ptr;
 	struct arm_smmu_invs *old_invs;
 	struct arm_smmu_invs *new_invs;
+	struct arm_smmu_inv iotlb_tag;
 };
 
 struct arm_smmu_attach_state {
