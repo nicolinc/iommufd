@@ -1186,6 +1186,7 @@ struct arm_vsmmu {
 	struct iommufd_viommu core;
 	struct arm_smmu_device *smmu;
 	struct arm_smmu_domain *s2_parent;
+	int nr_vmasters;
 	u16 vmid;
 };
 

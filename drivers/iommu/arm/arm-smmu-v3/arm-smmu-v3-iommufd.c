@@ -136,6 +136,19 @@ void arm_smmu_attach_commit_vmaster(struct arm_smmu_attach_state *state)
 	struct arm_smmu_master *master = state->master;
 
 	mutex_lock(&master->smmu->streams_mutex);
+
+	/* Clear the old vsmmu's VMID and set the new vsmmu's VMID */
+	if (master->vmaster && master->vmaster->vsmmu) {
+		if (--master->vmaster->vsmmu->nr_vmasters == 0)
+			master->vmaster->vsmmu->vmid = 0;
+		WARN_ON(master->vmaster->vsmmu->nr_vmasters < 0);
+	}
+	if (state->vmaster && state->vmaster->vsmmu) {
+		cmpxchg(&state->vmaster->vsmmu->vmid, 0, master->vmid);
+		WARN_ON(state->vmaster->vsmmu->vmid != master->vmid);
+		state->vmaster->vsmmu->nr_vmasters++;
+	}
+
 	kfree(master->vmaster);
 	master->vmaster = state->vmaster;
 	mutex_unlock(&master->smmu->streams_mutex);
@@ -454,8 +467,6 @@ int arm_vsmmu_init(struct iommufd_viommu *viommu,
 
 	vsmmu->smmu = smmu;
 	vsmmu->s2_parent = s2_parent;
-	/* FIXME Move VMID allocation from the S2 domain allocation to here */
-	vsmmu->vmid = s2_parent->s2_cfg.vmid;
 
 	if (viommu->type == IOMMU_VIOMMU_TYPE_ARM_SMMUV3) {
 		viommu->ops = &arm_vsmmu_ops;
