@@ -1201,9 +1201,6 @@ EXPORT_SYMBOL_IF_KUNIT(arm_smmu_invs_merge);
  *                         the user counts without deletions
  * @invs: the base invalidation array
  * @to_unref: an array of invlidations to decrease their user counts
- * @free_fn: A callback function to invoke, when an entry's user count reduces
- *           to 0
- *
  * Return: the number of trash entries in the array, for arm_smmu_invs_purge()
  *
  * This function will not fail. Any entry with users=0 will be marked as trash.
@@ -1221,8 +1218,7 @@ EXPORT_SYMBOL_IF_KUNIT(arm_smmu_invs_merge);
  */
 VISIBLE_IF_KUNIT
 void arm_smmu_invs_unref(struct arm_smmu_invs *invs,
-			 struct arm_smmu_invs *to_unref,
-			 void (*free_fn)(struct arm_smmu_inv *inv))
+			 struct arm_smmu_invs *to_unref)
 {
 	unsigned long flags;
 	size_t num_invs = 0;
@@ -3514,31 +3510,6 @@ arm_smmu_install_new_domain_invs(struct arm_smmu_attach_state *state)
 		state->master->vmid = invst->iotlb_tag.id;
 }
 
-/*
- * When an array entry's users count reaches zero, it means the ASID/VMID is no
- * longer being invalidated by map/unmap and must be cleaned. The rule is that
- * all ASIDs/VMIDs not in an invalidation array are left cleared in the IOTLB.
- */
-static void arm_smmu_inv_flush_iotlb_tag(struct arm_smmu_inv *inv)
-{
-	struct arm_smmu_cmdq_ent cmd = {};
-
-	switch (inv->type) {
-	case INV_TYPE_S1_ASID:
-		cmd.tlbi.asid = inv->id;
-		break;
-	case INV_TYPE_S2_VMID:
-		/* S2_VMID using nsize_opcode covers S2_VMID_S1_CLEAR */
-		cmd.tlbi.vmid = inv->id;
-		break;
-	default:
-		return;
-	}
-
-	cmd.opcode = inv->nsize_opcode;
-	arm_smmu_cmdq_issue_cmd_with_sync(inv->smmu, &cmd);
-}
-
 /* Should be installed after arm_smmu_install_ste_for_dev() */
 static void
 arm_smmu_install_old_domain_invs(struct arm_smmu_attach_state *state)
@@ -3558,8 +3529,7 @@ arm_smmu_install_old_domain_invs(struct arm_smmu_attach_state *state)
 	arm_smmu_invs_dbg(master, old_smmu_domain, old_invs,
 			  "old domain's old invs");
 	arm_smmu_invs_dbg(master, old_smmu_domain, invst->new_invs, "unref");
-	arm_smmu_invs_unref(old_invs, invst->new_invs,
-			    arm_smmu_inv_flush_iotlb_tag);
+	arm_smmu_invs_unref(old_invs, invst->new_invs);
 
 	new_invs = arm_smmu_invs_purge(old_invs);
 	if (!new_invs) {
