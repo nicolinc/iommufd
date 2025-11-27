@@ -632,7 +632,7 @@ static void arm_smmu_v3_invs_test(struct kunit *test)
 				     results2[0], results2[1]);
 
 	/* Test3: unref invs2 (same array) */
-	arm_smmu_invs_unref(test_a, &invs2, NULL);
+	arm_smmu_invs_unref(test_a, &invs2);
 	arm_smmu_v3_invs_test_verify(test, test_a, ARRAY_SIZE(results3[0]),
 				     results3[0], results3[1]);
 	KUNIT_EXPECT_EQ(test, test_a->num_trashes, 0);
@@ -644,7 +644,7 @@ static void arm_smmu_v3_invs_test(struct kunit *test)
 				     results4[0], results4[1]);
 
 	/* Test5: unref invs1 (same array) */
-	arm_smmu_invs_unref(test_b, &invs1, NULL);
+	arm_smmu_invs_unref(test_b, &invs1);
 	arm_smmu_v3_invs_test_verify(test, test_b, ARRAY_SIZE(results5[0]),
 				     results5[0], results5[1]);
 	KUNIT_EXPECT_EQ(test, test_b->num_trashes, 2);
@@ -656,7 +656,7 @@ static void arm_smmu_v3_invs_test(struct kunit *test)
 				     results6[0], results6[1]);
 
 	/* Test7: unref invs3 (same array) */
-	arm_smmu_invs_unref(test_a, &invs3, NULL);
+	arm_smmu_invs_unref(test_a, &invs3);
 	KUNIT_EXPECT_EQ(test, test_a->num_invs, 0);
 	KUNIT_EXPECT_EQ(test, test_a->num_trashes, 0);
 
