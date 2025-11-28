@@ -691,6 +691,9 @@ static inline bool arm_smmu_inv_is_ats(const struct arm_smmu_inv *inv)
  * @rwlock: optional rwlock to fench ATS operations
  * @has_ats: flag if the array contains an INV_TYPE_ATS or INV_TYPE_ATS_FULL
  * @rcu: rcu head for kfree_rcu()
+ * @smmu_domain: owner domain of the array
+ * @alloc_id: a callback to allocate a new iotlb tag
+ * @free_id: a callback to free an iotlb tag when its user counter reaches 0
  * @inv: flexible invalidation array
  *
  * The arm_smmu_invs is an RCU data structure. During a ->attach_dev callback,
@@ -720,6 +723,9 @@ struct arm_smmu_invs {
 	rwlock_t rwlock;
 	bool has_ats;
 	struct rcu_head rcu;
+	struct arm_smmu_domain *smmu_domain;
+	int (*alloc_id)(struct arm_smmu_inv *inv, void *data);
+	void (*free_id)(struct arm_smmu_inv *inv, bool flush);
 	struct arm_smmu_inv inv[] __counted_by(max_invs);
 };
 
