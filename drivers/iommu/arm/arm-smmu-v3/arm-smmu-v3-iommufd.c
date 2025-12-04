@@ -85,9 +85,8 @@ static void arm_smmu_make_nested_domain_ste(
 						  ats_enabled);
 		break;
 	case STRTAB_STE_0_CFG_BYPASS:
-		arm_smmu_make_s2_domain_ste(target, master,
-					    nested_domain->vsmmu->s2_parent,
-					    ats_enabled);
+		arm_smmu_make_s2_domain_ste(
+			target, master, nested_domain->vsmmu->s2_parent, true);
 		break;
 	case STRTAB_STE_0_CFG_ABORT:
 	default:
