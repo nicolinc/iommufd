@@ -205,6 +205,20 @@ int pci_ats_page_aligned(struct pci_dev *pdev)
 	return 0;
 }
 
+void pci_ats_set_always_on(struct pci_dev *dev)
+{
+	if (WARN_ON(pci_ats_disabled()))
+		return;
+	dev->ats_always_on = true;
+}
+EXPORT_SYMBOL_GPL(pci_ats_set_always_on);
+
+bool pci_ats_always_on(struct pci_dev *dev)
+{
+	return dev->ats_always_on;
+}
+EXPORT_SYMBOL_GPL(pci_ats_always_on);
+
 #ifdef CONFIG_PCI_PRI
 void pci_pri_init(struct pci_dev *pdev)
 {
