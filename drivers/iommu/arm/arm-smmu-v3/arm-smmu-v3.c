@@ -1051,6 +1051,9 @@ static int arm_smmu_inv_cmp(const struct arm_smmu_inv *inv_l,
 		return cmp_int((uintptr_t)inv_l->smmu, (uintptr_t)inv_r->smmu);
 	if (inv_l->type != inv_r->type)
 		return cmp_int(inv_l->type, inv_r->type);
+	/* Each SMMU shares a single iotlb tag on a domain, so it is a match */
+	if (arm_smmu_inv_is_iotlb_tag(inv_l))
+		return 0;
 	return cmp_int(inv_l->id, inv_r->id);
 }
 
@@ -1127,8 +1130,51 @@ struct arm_smmu_invs *arm_smmu_invs_merge(struct arm_smmu_invs *invs,
 	size_t i, j;
 	int cmp;
 
-	arm_smmu_invs_for_each_cmp(invs, i, to_merge, j, cmp)
+	arm_smmu_invs_for_each_cmp(invs, i, to_merge, j, cmp) {
+		struct arm_smmu_inv *cur = &to_merge->inv[j];
+
 		num_invs++;
+
+		if (!arm_smmu_inv_is_iotlb_tag(cur))
+			continue;
+
+		/* A matching iotlb tag owned by the same SMMU can be shared */
+		if (cmp == 0) {
+			*cur = invs->inv[i];
+			continue;
+		}
+
+		/* Iterate the base invs array to find if next is a match */
+		if (cmp < 0 && i < invs->num_invs)
+			continue;
+
+		/*
+		 * Currently the @to_merge array always carries an id (> 0) that
+		 * is also installed in the CD/STE. So, we cannot allocate a new
+		 * ID at this moment, because that would misalign with what's in
+		 * the CD/STE. To not break the existing flow, bypass the new ID
+		 * allocating code. We will lift this bypass line once rework is
+		 * done.
+		 */
+		if (cur->id)
+			continue;
+
+		/* No found. Allocate a new one */
+		if (j == 0) {
+			/* KUNIT test doesn't pass in an alloc_id function */
+			if (to_merge->alloc_id) {
+				int ret;
+
+				ret = to_merge->alloc_id(cur,
+							 invs->smmu_domain);
+				if (ret)
+					return ERR_PTR(ret);
+			}
+		} else {
+			/* Copy the allocated iotlb tag from the previous inv */
+			cur->id = cur[-1].id;
+		}
+	}
 
 	new_invs = arm_smmu_invs_alloc(num_invs);
 	if (!new_invs)
@@ -1207,9 +1253,9 @@ void arm_smmu_invs_unref(struct arm_smmu_invs *invs,
 				continue;
 			}
 
-			/* KUNIT test doesn't pass in a free_fn */
-			if (free_fn)
-				free_fn(&invs->inv[i]);
+			/* KUNIT test doesn't pass in a free_id function */
+			if (to_unref->free_id)
+				to_unref->free_id(&invs->inv[i], true);
 			invs->num_trashes++;
 		} else {
 			/* item in to_unref is not in invs or already a trash */
@@ -3167,6 +3213,21 @@ static void arm_smmu_inv_free_vmid(struct arm_smmu_inv *inv, bool flush)
 	ida_free(&inv->smmu->vmid_map, inv->id);
 }
 
+static void arm_smmu_inv_free_iotlb_tag(struct arm_smmu_inv *inv)
+{
+	switch (inv->type) {
+	case INV_TYPE_S1_ASID:
+		arm_smmu_inv_free_asid(inv, false);
+		return;
+	case INV_TYPE_S2_VMID:
+		arm_smmu_inv_free_vmid(inv, false);
+		return;
+	default:
+		WARN_ON(true);
+		return;
+	}
+}
+
 static int arm_smmu_inv_alloc_asid(struct arm_smmu_inv *inv, void *data)
 {
 	struct arm_smmu_domain *smmu_domain = data;
@@ -3667,6 +3728,7 @@ err_free_master_domain:
 err_free_vmaster:
 	kfree(state->vmaster);
 err_unprepare_invs:
+	arm_smmu_inv_free_iotlb_tag(&state->new_domain_invst.iotlb_tag);
 	kfree(state->new_domain_invst.new_invs);
 	return ret;
 }

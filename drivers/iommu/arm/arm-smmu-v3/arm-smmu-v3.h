@@ -680,6 +680,9 @@ static inline bool arm_smmu_inv_is_ats(const struct arm_smmu_inv *inv)
 	return inv->type == INV_TYPE_ATS || inv->type == INV_TYPE_ATS_FULL;
 }
 
+/* S1_ASID/S2_VMID(S1_CLEAR) types */
+#define arm_smmu_inv_is_iotlb_tag(inv) !arm_smmu_inv_is_ats(inv)
+
 /**
  * struct arm_smmu_invs - Per-domain invalidation array
  * @max_invs: maximum capacity of the flexible array
