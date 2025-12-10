@@ -462,7 +462,7 @@ int arm_vsmmu_init(struct iommufd_viommu *viommu,
 		container_of(viommu->iommu_dev, struct arm_smmu_device, iommu);
 	struct arm_smmu_domain *s2_parent = to_smmu_domain(parent_domain);
 
-	if (s2_parent->smmu != smmu)
+	if (!arm_smmu_domain_can_share(s2_parent, smmu))
 		return -EINVAL;
 
 	vsmmu->smmu = smmu;

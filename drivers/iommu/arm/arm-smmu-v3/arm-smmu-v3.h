@@ -992,6 +992,26 @@ struct arm_smmu_nested_domain {
 	__le64 ste[2];
 };
 
+static inline bool
+arm_smmu_domain_can_share(struct arm_smmu_domain *smmu_domain,
+			  struct arm_smmu_device *new_smmu)
+{
+	struct arm_smmu_device *base_smmu = smmu_domain->smmu;
+
+	if (base_smmu == new_smmu)
+		return true;
+	/* Only support identical SMMUs for now */
+	if (base_smmu->features != new_smmu->features)
+		return false;
+	if (base_smmu->iommu.ops != new_smmu->iommu.ops)
+		return false;
+	if (base_smmu->pgsize_bitmap != new_smmu->pgsize_bitmap)
+		return false;
+	if (base_smmu->ias > new_smmu->ias || base_smmu->oas > new_smmu->oas)
+		return false;
+	return true;
+}
+
 /* The following are exposed for testing purposes. */
 struct arm_smmu_entry_writer_ops;
 struct arm_smmu_entry_writer {
