@@ -1137,7 +1137,7 @@ struct arm_smmu_attach_state {
 
 int arm_smmu_domain_get_iotlb_tag(struct arm_smmu_domain *smmu_domain,
 				  struct arm_smmu_device *smmu,
-				  struct arm_smmu_inv *tag);
+				  struct arm_smmu_inv *tag, bool alloc);
 
 int arm_smmu_attach_prepare(struct arm_smmu_attach_state *state,
 			    struct iommu_domain *new_domain);

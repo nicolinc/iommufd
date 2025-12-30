@@ -3120,10 +3120,31 @@ static void arm_smmu_disable_iopf(struct arm_smmu_master *master,
 		iopf_queue_remove_device(master->smmu->evtq.iopf, master->dev);
 }
 
+static int __arm_smmu_domain_get_iotlb_tag(struct arm_smmu_domain *smmu_domain,
+					   struct arm_smmu_inv *tag)
+{
+	struct arm_smmu_invs *invs = rcu_dereference_protected(
+		smmu_domain->invs, lockdep_is_held(&arm_smmu_asid_lock));
+	size_t i;
+
+	for (i = 0; i != invs->num_invs; i++) {
+		if (invs->inv[i].type == tag->type &&
+		    invs->inv[i].smmu == tag->smmu &&
+		    refcount_read(&invs->inv[i].users)) {
+			*tag = invs->inv[i];
+			return 0;
+		}
+	}
+
+	return -ENOENT;
+}
+
 int arm_smmu_domain_get_iotlb_tag(struct arm_smmu_domain *smmu_domain,
 				  struct arm_smmu_device *smmu,
-				  struct arm_smmu_inv *tag)
+				  struct arm_smmu_inv *tag, bool alloc)
 {
+	int ret;
+
 	/* Decide the type of the iotlb cache tag */
 	switch (smmu_domain->stage) {
 	case ARM_SMMU_DOMAIN_SVA:
@@ -3138,6 +3159,11 @@ int arm_smmu_domain_get_iotlb_tag(struct arm_smmu_domain *smmu_domain,
 	}
 
 	tag->smmu = smmu;
+
+	/* Re-use an existing IOTLB cache tag in invs (users counter != 0) */
+	ret = __arm_smmu_domain_get_iotlb_tag(smmu_domain, tag);
+	if (!ret || !alloc)
+		return ret;
 
 	if (tag->type == INV_TYPE_S1_ASID)
 		tag->id = smmu_domain->cd.asid;
@@ -3314,7 +3340,7 @@ static int arm_smmu_attach_prepare_invs(struct arm_smmu_attach_state *state,
 			lockdep_is_held(&arm_smmu_asid_lock));
 
 		ret = arm_smmu_domain_get_iotlb_tag(new_smmu_domain, smmu,
-						    &invst->tag);
+						    &invst->tag, true);
 		if (ret)
 			return ret;
 
@@ -3344,7 +3370,7 @@ static int arm_smmu_attach_prepare_invs(struct arm_smmu_attach_state *state,
 				lockdep_is_held(&arm_smmu_asid_lock));
 
 		ret = arm_smmu_domain_get_iotlb_tag(old_smmu_domain, smmu,
-						    &invst->tag);
+						    &invst->tag, false);
 		if (WARN_ON(ret))
 			return ret;
 
