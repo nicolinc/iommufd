@@ -3117,6 +3117,33 @@ static void arm_smmu_disable_iopf(struct arm_smmu_master *master,
 		iopf_queue_remove_device(master->smmu->evtq.iopf, master->dev);
 }
 
+int arm_smmu_domain_get_iotlb_tag(struct arm_smmu_domain *smmu_domain,
+				  struct arm_smmu_device *smmu,
+				  struct arm_smmu_inv *tag)
+{
+	/* Decide the type of the iotlb cache tag */
+	switch (smmu_domain->stage) {
+	case ARM_SMMU_DOMAIN_SVA:
+	case ARM_SMMU_DOMAIN_S1:
+		tag->type = INV_TYPE_S1_ASID;
+		break;
+	case ARM_SMMU_DOMAIN_S2:
+		tag->type = INV_TYPE_S2_VMID;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	tag->smmu = smmu;
+
+	if (tag->type == INV_TYPE_S1_ASID)
+		tag->id = smmu_domain->cd.asid;
+	else
+		tag->id = smmu_domain->s2_cfg.vmid;
+
+	return 0;
+}
+
 static struct arm_smmu_inv *
 arm_smmu_master_build_inv(struct arm_smmu_master *master,
 			  enum arm_smmu_inv_type type, u32 id, ioasid_t ssid,
@@ -3176,7 +3203,8 @@ arm_smmu_master_build_inv(struct arm_smmu_master *master,
  */
 static struct arm_smmu_invs *
 arm_smmu_master_build_invs(struct arm_smmu_master *master, bool ats_enabled,
-			   ioasid_t ssid, struct arm_smmu_domain *smmu_domain)
+			   ioasid_t ssid, struct arm_smmu_domain *smmu_domain,
+			   struct arm_smmu_inv *tag)
 {
 	const bool nesting = smmu_domain->nest_parent;
 	size_t pgsize = 0, i;
@@ -3189,30 +3217,15 @@ arm_smmu_master_build_invs(struct arm_smmu_master *master, bool ats_enabled,
 	if (master->smmu->features & ARM_SMMU_FEAT_RANGE_INV)
 		pgsize = __ffs(smmu_domain->domain.pgsize_bitmap);
 
-	switch (smmu_domain->stage) {
-	case ARM_SMMU_DOMAIN_SVA:
-	case ARM_SMMU_DOMAIN_S1:
-		if (!arm_smmu_master_build_inv(master, INV_TYPE_S1_ASID,
-					       smmu_domain->cd.asid,
-					       IOMMU_NO_PASID, pgsize))
-			return NULL;
-		break;
-	case ARM_SMMU_DOMAIN_S2:
-		if (!arm_smmu_master_build_inv(master, INV_TYPE_S2_VMID,
-					       smmu_domain->s2_cfg.vmid,
-					       IOMMU_NO_PASID, pgsize))
-			return NULL;
-		break;
-	default:
-		WARN_ON(true);
+	if (!arm_smmu_master_build_inv(master, tag->type, tag->id,
+				       IOMMU_NO_PASID, pgsize))
 		return NULL;
-	}
 
 	/* All the nested S1 ASIDs have to be flushed when S2 parent changes */
 	if (nesting) {
-		if (!arm_smmu_master_build_inv(
-			    master, INV_TYPE_S2_VMID_S1_CLEAR,
-			    smmu_domain->s2_cfg.vmid, IOMMU_NO_PASID, 0))
+		if (!arm_smmu_master_build_inv(master,
+					       INV_TYPE_S2_VMID_S1_CLEAR,
+					       tag->id, IOMMU_NO_PASID, 0))
 			return NULL;
 	}
 
@@ -3280,7 +3293,9 @@ static int arm_smmu_attach_prepare_invs(struct arm_smmu_attach_state *state,
 	struct arm_smmu_domain *old_smmu_domain =
 		to_smmu_domain_devices(state->old_domain);
 	struct arm_smmu_master *master = state->master;
+	struct arm_smmu_device *smmu = master->smmu;
 	ioasid_t ssid = state->ssid;
+	int ret;
 
 	/*
 	 * At this point a NULL domain indicates the domain doesn't use the
@@ -3294,8 +3309,16 @@ static int arm_smmu_attach_prepare_invs(struct arm_smmu_attach_state *state,
 		invst->old_invs = rcu_dereference_protected(
 			new_smmu_domain->invs,
 			lockdep_is_held(&arm_smmu_asid_lock));
-		build_invs = arm_smmu_master_build_invs(
-			master, state->ats_enabled, ssid, new_smmu_domain);
+
+		ret = arm_smmu_domain_get_iotlb_tag(new_smmu_domain, smmu,
+						    &invst->tag);
+		if (ret)
+			return ret;
+
+		build_invs = arm_smmu_master_build_invs(master,
+							state->ats_enabled,
+							ssid, new_smmu_domain,
+							&invst->tag);
 		if (!build_invs)
 			return -EINVAL;
 
@@ -3316,9 +3339,16 @@ static int arm_smmu_attach_prepare_invs(struct arm_smmu_attach_state *state,
 			invst->old_invs = rcu_dereference_protected(
 				old_smmu_domain->invs,
 				lockdep_is_held(&arm_smmu_asid_lock));
+
+		ret = arm_smmu_domain_get_iotlb_tag(old_smmu_domain, smmu,
+						    &invst->tag);
+		if (WARN_ON(ret))
+			return ret;
+
 		/* For old_smmu_domain, new_invs points to master->build_invs */
 		invst->new_invs = arm_smmu_master_build_invs(
-			master, master->ats_enabled, ssid, old_smmu_domain);
+			master, master->ats_enabled, ssid, old_smmu_domain,
+			&invst->tag);
 	}
 
 	return 0;
