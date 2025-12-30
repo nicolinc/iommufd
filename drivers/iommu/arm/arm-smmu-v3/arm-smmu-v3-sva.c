@@ -24,12 +24,18 @@ arm_smmu_update_s1_domain_cd_entry(struct arm_smmu_domain *smmu_domain)
 	list_for_each_entry(master_domain, &smmu_domain->devices, devices_elm) {
 		struct arm_smmu_master *master = master_domain->master;
 		struct arm_smmu_cd *cdptr;
+		struct arm_smmu_inv tag;
 
 		cdptr = arm_smmu_get_cd_ptr(master, master_domain->ssid);
 		if (WARN_ON(!cdptr))
 			continue;
 
-		arm_smmu_make_s1_cd(&target_cd, master, smmu_domain);
+		if (WARN_ON(arm_smmu_domain_get_iotlb_tag(smmu_domain,
+							  master->smmu, &tag)))
+			continue;
+		if (WARN_ON(tag.type != INV_TYPE_S1_ASID))
+			continue;
+		arm_smmu_make_s1_cd(&target_cd, master, smmu_domain, &tag);
 		arm_smmu_write_cd_entry(master, master_domain->ssid, cdptr,
 					&target_cd);
 	}
@@ -158,12 +164,18 @@ static void arm_smmu_mm_release(struct mmu_notifier *mn, struct mm_struct *mm)
 		struct arm_smmu_master *master = master_domain->master;
 		struct arm_smmu_cd target;
 		struct arm_smmu_cd *cdptr;
+		struct arm_smmu_inv tag;
 
 		cdptr = arm_smmu_get_cd_ptr(master, master_domain->ssid);
 		if (WARN_ON(!cdptr))
 			continue;
-		arm_smmu_make_sva_cd(&target, master, NULL,
-				     smmu_domain->cd.asid);
+
+		if (WARN_ON(arm_smmu_domain_get_iotlb_tag(smmu_domain,
+							  master->smmu, &tag)))
+			continue;
+		if (WARN_ON(tag.type != INV_TYPE_S1_ASID))
+			continue;
+		arm_smmu_make_sva_cd(&target, master, NULL, tag.id);
 		arm_smmu_write_cd_entry(master, master_domain->ssid, cdptr,
 					&target);
 	}
@@ -262,10 +274,12 @@ static int arm_smmu_sva_set_dev_pasid(struct iommu_domain *domain,
 		return -EINVAL;
 
 	/*
+	 * Use a dummy asid and fix it in arm_smmu_set_pasid().
+	 *
 	 * This does not need the arm_smmu_asid_lock because SVA domains never
 	 * get reassigned
 	 */
-	arm_smmu_make_sva_cd(&target, master, domain->mm, smmu_domain->cd.asid);
+	arm_smmu_make_sva_cd(&target, master, domain->mm, 0);
 	ret = arm_smmu_set_pasid(master, smmu_domain, id, &target, old);
 
 	mmput(domain->mm);
