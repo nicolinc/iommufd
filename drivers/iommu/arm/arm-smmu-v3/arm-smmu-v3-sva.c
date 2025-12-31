@@ -31,7 +31,7 @@ arm_smmu_update_s1_domain_cd_entry(struct arm_smmu_domain *smmu_domain)
 			continue;
 
 		if (WARN_ON(arm_smmu_domain_get_iotlb_tag(
-			    smmu_domain, master->smmu, &tag, false)))
+			    smmu_domain, master->smmu, NULL, &tag, false)))
 			continue;
 		if (WARN_ON(tag.type != INV_TYPE_S1_ASID))
 			continue;
@@ -171,7 +171,7 @@ static void arm_smmu_mm_release(struct mmu_notifier *mn, struct mm_struct *mm)
 			continue;
 
 		if (WARN_ON(arm_smmu_domain_get_iotlb_tag(
-			    smmu_domain, master->smmu, &tag, false)))
+			    smmu_domain, master->smmu, NULL, &tag, false)))
 			continue;
 		if (WARN_ON(tag.type != INV_TYPE_S1_ASID))
 			continue;

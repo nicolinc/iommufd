@@ -3137,6 +3137,7 @@ static int __arm_smmu_domain_get_iotlb_tag(struct arm_smmu_domain *smmu_domain,
 
 int arm_smmu_domain_get_iotlb_tag(struct arm_smmu_domain *smmu_domain,
 				  struct arm_smmu_device *smmu,
+				  struct arm_vsmmu *vsmmu,
 				  struct arm_smmu_inv *tag, bool alloc)
 {
 	int ret;
@@ -3360,6 +3361,7 @@ static int arm_smmu_attach_prepare_invs(struct arm_smmu_attach_state *state,
 	 */
 	if (new_smmu_domain) {
 		struct arm_smmu_inv_state *invst = &state->new_domain_invst;
+		struct arm_vsmmu *vsmmu = state->vsmmu;
 		struct arm_smmu_invs *build_invs;
 
 		invst->invs_ptr = &new_smmu_domain->invs;
@@ -3368,7 +3370,7 @@ static int arm_smmu_attach_prepare_invs(struct arm_smmu_attach_state *state,
 			lockdep_is_held(&arm_smmu_asid_lock));
 
 		ret = arm_smmu_domain_get_iotlb_tag(new_smmu_domain, smmu,
-						    &invst->tag, true);
+						    vsmmu, &invst->tag, true);
 		if (ret)
 			return ret;
 
@@ -3387,6 +3389,7 @@ static int arm_smmu_attach_prepare_invs(struct arm_smmu_attach_state *state,
 
 	if (old_smmu_domain) {
 		struct arm_smmu_inv_state *invst = &state->old_domain_invst;
+		struct arm_vsmmu *vsmmu = to_vsmmu(state->old_domain);
 
 		invst->invs_ptr = &old_smmu_domain->invs;
 		/* A re-attach case might have a different ats_enabled state */
@@ -3398,7 +3401,7 @@ static int arm_smmu_attach_prepare_invs(struct arm_smmu_attach_state *state,
 				lockdep_is_held(&arm_smmu_asid_lock));
 
 		ret = arm_smmu_domain_get_iotlb_tag(old_smmu_domain, smmu,
-						    &invst->tag, false);
+						    vsmmu, &invst->tag, false);
 		if (WARN_ON(ret))
 			return ret;
 

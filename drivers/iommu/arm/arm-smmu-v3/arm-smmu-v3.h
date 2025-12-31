@@ -1124,6 +1124,7 @@ struct arm_smmu_attach_state {
 	/* Inputs */
 	struct iommu_domain *old_domain;
 	struct arm_smmu_master *master;
+	struct arm_vsmmu *vsmmu;
 	bool cd_needs_ats;
 	bool disable_ats;
 	ioasid_t ssid;
@@ -1136,6 +1137,7 @@ struct arm_smmu_attach_state {
 
 int arm_smmu_domain_get_iotlb_tag(struct arm_smmu_domain *smmu_domain,
 				  struct arm_smmu_device *smmu,
+				  struct arm_vsmmu *vsmmu,
 				  struct arm_smmu_inv *tag, bool alloc);
 
 int arm_smmu_attach_prepare(struct arm_smmu_attach_state *state,
@@ -1181,6 +1183,13 @@ struct arm_vsmmu {
 	struct arm_smmu_domain *s2_parent;
 	u16 vmid;
 };
+
+static inline struct arm_vsmmu *to_vsmmu(struct iommu_domain *domain)
+{
+	if (domain->type == IOMMU_DOMAIN_NESTED)
+		return to_smmu_nested_domain(domain)->vsmmu;
+	return NULL;
+}
 
 #if IS_ENABLED(CONFIG_ARM_SMMU_V3_IOMMUFD)
 void *arm_smmu_hw_info(struct device *dev, u32 *length,
