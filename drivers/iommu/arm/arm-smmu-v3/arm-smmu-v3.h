@@ -656,6 +656,7 @@ struct arm_smmu_cmdq_batch {
 enum arm_smmu_inv_type {
 	INV_TYPE_S1_ASID,
 	INV_TYPE_S2_VMID,
+	INV_TYPE_S2_VMID_VSMMU,
 	INV_TYPE_S2_VMID_S1_CLEAR,
 	INV_TYPE_ATS,
 	INV_TYPE_ATS_FULL,
