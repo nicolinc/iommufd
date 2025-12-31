@@ -404,7 +404,17 @@ out:
 	return ret;
 }
 
+void arm_vsmmu_destroy(struct iommufd_viommu *viommu)
+{
+	struct arm_vsmmu *vsmmu = container_of(viommu, struct arm_vsmmu, core);
+
+	mutex_lock(&arm_smmu_asid_lock);
+	ida_free(&vsmmu->smmu->vmid_map, vsmmu->vmid);
+	mutex_unlock(&arm_smmu_asid_lock);
+}
+
 static const struct iommufd_viommu_ops arm_vsmmu_ops = {
+	.destroy = arm_vsmmu_destroy,
 	.alloc_domain_nested = arm_vsmmu_alloc_domain_nested,
 	.cache_invalidate = arm_vsmmu_cache_invalidate,
 };
@@ -454,14 +464,21 @@ int arm_vsmmu_init(struct iommufd_viommu *viommu,
 	struct arm_smmu_device *smmu =
 		container_of(viommu->iommu_dev, struct arm_smmu_device, iommu);
 	struct arm_smmu_domain *s2_parent = to_smmu_domain(parent_domain);
+	int id;
 
 	if (s2_parent->smmu != smmu)
 		return -EINVAL;
 
+	mutex_lock(&arm_smmu_asid_lock);
+	id = ida_alloc_range(&smmu->vmid_map, 1, (1 << smmu->vmid_bits) - 1,
+			     GFP_KERNEL);
+	mutex_unlock(&arm_smmu_asid_lock);
+	if (id < 0)
+		return id;
+
+	vsmmu->vmid = id;
 	vsmmu->smmu = smmu;
 	vsmmu->s2_parent = s2_parent;
-	/* FIXME Move VMID allocation from the S2 domain allocation to here */
-	vsmmu->vmid = s2_parent->s2_cfg.vmid;
 
 	if (viommu->type == IOMMU_VIOMMU_TYPE_ARM_SMMUV3) {
 		viommu->ops = &arm_vsmmu_ops;
