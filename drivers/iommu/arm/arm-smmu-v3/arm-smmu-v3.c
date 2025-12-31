@@ -1168,8 +1168,6 @@ EXPORT_SYMBOL_IF_KUNIT(arm_smmu_invs_merge);
  *                         the user counts without deletions
  * @invs: the base invalidation array
  * @to_unref: an array of invlidations to decrease their user counts
- * @free_fn: A callback function to invoke, when an entry's user count reduces
- *           to 0
  *
  * Return: the number of trash entries in the array, for arm_smmu_invs_purge()
  *
@@ -1188,8 +1186,7 @@ EXPORT_SYMBOL_IF_KUNIT(arm_smmu_invs_merge);
  */
 VISIBLE_IF_KUNIT
 void arm_smmu_invs_unref(struct arm_smmu_invs *invs,
-			 struct arm_smmu_invs *to_unref,
-			 void (*free_fn)(struct arm_smmu_inv *inv))
+			 struct arm_smmu_invs *to_unref)
 {
 	unsigned long flags;
 	size_t num_invs = 0;
@@ -1207,9 +1204,6 @@ void arm_smmu_invs_unref(struct arm_smmu_invs *invs,
 				continue;
 			}
 
-			/* KUNIT test doesn't pass in a free_fn */
-			if (free_fn)
-				free_fn(&invs->inv[i]);
 			/* Notify the caller to free the iotlb tag */
 			refcount_set(&to_unref->inv[j].users, 0);
 			invs->num_trashes++;
@@ -3188,6 +3182,16 @@ int arm_smmu_domain_get_iotlb_tag(struct arm_smmu_domain *smmu_domain,
 
 static void arm_smmu_iotlb_tag_free(struct arm_smmu_inv *tag)
 {
+	struct arm_smmu_cmdq_ent cmd = {
+		.opcode = tag->nsize_opcode,
+	};
+
+	if (tag->type == INV_TYPE_S1_ASID)
+		cmd.tlbi.asid = tag->id;
+	else
+		cmd.tlbi.vmid = tag->id;
+	arm_smmu_cmdq_issue_cmd_with_sync(tag->smmu, &cmd);
+
 	if (tag->type == INV_TYPE_S1_ASID)
 		xa_erase(&arm_smmu_asid_xa, tag->id);
 	else if (tag->type == INV_TYPE_S2_VMID)
@@ -3437,31 +3441,6 @@ arm_smmu_install_new_domain_invs(struct arm_smmu_attach_state *state)
 	kfree_rcu(invst->old_invs, rcu);
 }
 
-/*
- * When an array entry's users count reaches zero, it means the ASID/VMID is no
- * longer being invalidated by map/unmap and must be cleaned. The rule is that
- * all ASIDs/VMIDs not in an invalidation array are left cleared in the IOTLB.
- */
-static void arm_smmu_inv_flush_iotlb_tag(struct arm_smmu_inv *inv)
-{
-	struct arm_smmu_cmdq_ent cmd = {};
-
-	switch (inv->type) {
-	case INV_TYPE_S1_ASID:
-		cmd.tlbi.asid = inv->id;
-		break;
-	case INV_TYPE_S2_VMID:
-		/* S2_VMID using nsize_opcode covers S2_VMID_S1_CLEAR */
-		cmd.tlbi.vmid = inv->id;
-		break;
-	default:
-		return;
-	}
-
-	cmd.opcode = inv->nsize_opcode;
-	arm_smmu_cmdq_issue_cmd_with_sync(inv->smmu, &cmd);
-}
-
 /* Should be installed after arm_smmu_install_ste_for_dev() */
 static void
 arm_smmu_install_old_domain_invs(struct arm_smmu_attach_state *state)
@@ -3475,8 +3454,7 @@ arm_smmu_install_old_domain_invs(struct arm_smmu_attach_state *state)
 	if (!invst->invs_ptr)
 		return;
 
-	arm_smmu_invs_unref(old_invs, invst->new_invs,
-			    arm_smmu_inv_flush_iotlb_tag);
+	arm_smmu_invs_unref(old_invs, invst->new_invs);
 	if (!refcount_read(&invst->new_invs->inv[0].users))
 		arm_smmu_iotlb_tag_free(&invst->tag);
 
