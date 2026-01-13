@@ -5681,6 +5681,20 @@ static void quirk_cxl_ats_always_on(struct pci_dev *pdev)
 		pci_ats_set_always_on(pdev);
 }
 DECLARE_PCI_FIXUP_FINAL(PCI_ANY_ID, PCI_ANY_ID, quirk_cxl_ats_always_on);
+
+static void quirk_ats_always_on(struct pci_dev *pdev)
+{
+	if (!pci_ats_disabled() && pci_ats_supported(pdev))
+		pci_ats_set_always_on(pdev);
+}
+
+/*
+ * Some non-CXL NVIDIA GPUs support ATS on RID when it is IOMMU-bypassed. IOMMU
+ * driver needs to always turn on the ATS feature to keep the device functional.
+ */
+DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_NVIDIA, 0x2e12, quirk_ats_always_on);
+DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_NVIDIA, 0x2e2a, quirk_ats_always_on);
+DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_NVIDIA, 0x2e2b, quirk_ats_always_on);
 #endif /* CONFIG_PCI_ATS */
 
 /* Freescale PCIe doesn't support MSI in RC mode */
