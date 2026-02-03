@@ -106,6 +106,7 @@ static int __iommu_attach_group(struct iommu_domain *domain,
 static struct iommu_domain *__iommu_paging_domain_alloc_flags(struct device *dev,
 						       unsigned int type,
 						       unsigned int flags);
+static int __iommu_group_alloc_blocking_domain(struct iommu_group *group);
 
 enum {
 	IOMMU_SET_DOMAIN_MUST_SUCCEED = 1 << 0,
@@ -598,6 +599,7 @@ DEFINE_MUTEX(iommu_probe_device_lock);
 
 static int __iommu_probe_device(struct device *dev, struct list_head *group_list)
 {
+	struct iommu_domain *old_domain;
 	struct iommu_group *group;
 	struct group_device *gdev;
 	int ret;
@@ -618,12 +620,6 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 	ret = iommu_init_device(dev);
 	if (ret)
 		return ret;
-	/*
-	 * And if we do now see any replay calls, they would indicate someone
-	 * misusing the dma_configure path outside bus code.
-	 */
-	if (dev->driver)
-		dev_WARN(dev, "late IOMMU probe at driver bind, something fishy here!\n");
 
 	group = dev->iommu_group;
 	gdev = iommu_group_alloc_device(group, dev);
@@ -641,11 +637,27 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 	WARN_ON(group->default_domain && !group->domain);
 	if (group->default_domain)
 		iommu_create_device_direct_mappings(group->default_domain, dev);
+
+	old_domain = group->domain;
+
+	/*
+	 * Block translation requests from a device not bound to a driver yet.
+	 *
+	 * IOMMU_RESV_DIRECT (require_direct) is an exception here, because it
+	 * guarantees that the device always has access to reserved region(s).
+	 */
+	if (!dev->driver && !group->domain && !dev->iommu->require_direct) {
+		ret = __iommu_group_alloc_blocking_domain(group);
+		if (ret)
+			goto err_remove_gdev;
+		group->domain = group->blocking_domain;
+	}
+
 	if (group->domain) {
 		ret = __iommu_device_set_domain(group, dev, group->domain, NULL,
 						0);
 		if (ret)
-			goto err_remove_gdev;
+			goto err_revert_domain;
 	} else if (!group->default_domain && !group_list) {
 		ret = iommu_setup_default_domain(group, 0);
 		if (ret)
@@ -667,6 +679,8 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 
 	return 0;
 
+err_revert_domain:
+	group->domain = old_domain;
 err_remove_gdev:
 	list_del(&gdev->list);
 	__iommu_group_free_device(group, gdev);
@@ -3174,16 +3188,25 @@ int iommu_device_use_default_domain(struct device *dev)
 
 	mutex_lock(&group->mutex);
 	/* We may race against bus_iommu_probe() finalising groups here */
-	if (!group->default_domain) {
+	if (!group->default_domain && group->domain != group->blocking_domain) {
 		ret = -EPROBE_DEFER;
 		goto unlock_out;
 	}
 	if (group->owner_cnt) {
-		if (group->domain != group->default_domain || group->owner ||
-		    !xa_empty(&group->pasid_array)) {
+		if ((group->default_domain &&
+		     group->domain != group->default_domain) ||
+		    group->owner || !xa_empty(&group->pasid_array)) {
 			ret = -EBUSY;
 			goto unlock_out;
 		}
+	}
+	if (!group->owner_cnt && group->domain != group->default_domain) {
+		/* __iommu_probe_device() presets to group->blocking_domain */
+		WARN_ON(group->domain != group->blocking_domain);
+		ret = iommu_setup_default_domain(group, 0);
+		if (ret)
+			goto unlock_out;
+		iommu_setup_dma_ops(dev);
 	}
 
 	group->owner_cnt++;
@@ -3212,6 +3235,20 @@ void iommu_device_unuse_default_domain(struct device *dev)
 	mutex_lock(&group->mutex);
 	if (!WARN_ON(!group->owner_cnt || !xa_empty(&group->pasid_array)))
 		group->owner_cnt--;
+
+	/*
+	 * Block translation requests after a device leaves its default domain.
+	 *
+	 * IOMMU_RESV_DIRECT (require_direct) is an exception here, because it
+	 * guarantees that the device always has access to reserved region(s).
+	 */
+	if (!group->owner_cnt && !dev->iommu->require_direct) {
+		__iommu_group_set_domain_nofail(group, group->blocking_domain);
+
+		/* Next iommu_device_use_default_domain() will reset it up */
+		iommu_domain_free(group->default_domain);
+		group->default_domain = NULL;
+	}
 
 	mutex_unlock(&group->mutex);
 }
