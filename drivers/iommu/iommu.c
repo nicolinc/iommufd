@@ -77,6 +77,7 @@ struct group_device {
 	struct device *dev;
 	char *name;
 	unsigned int reset_depth;
+	bool quarantined;
 };
 
 /* Iterate over each struct group_device in a struct iommu_group */
@@ -2222,13 +2223,13 @@ int iommu_deferred_attach(struct device *dev, struct iommu_domain *domain)
 	if (WARN_ON(!gdev))
 		return -ENODEV;
 	/*
-	 * This is a concurrent attach during a device reset. Reject it until
-	 * pci_dev_reset_iommu_done() attaches the device to group->domain.
+	 * This is a concurrent attach during a device reset/quarantine. Reject
+	 * it until pci_dev_reset_iommu_done() re-attaches it to group->domain.
 	 *
 	 * Note that this might fail the iommu_dma_map(). But there's nothing
 	 * more we can do here.
 	 */
-	if (gdev->reset_depth)
+	if (gdev->reset_depth || gdev->quarantined)
 		return -EBUSY;
 	return __iommu_attach_device(domain, dev, NULL);
 }
@@ -2300,7 +2301,7 @@ struct iommu_domain *iommu_driver_get_domain_for_dev(struct device *dev)
 	 * prevents it from re-attaching the device from group->domain (old) to
 	 * group->domain (new).
 	 */
-	if (gdev->reset_depth)
+	if (gdev->reset_depth || gdev->quarantined)
 		return group->blocking_domain;
 
 	return group->domain;
@@ -3962,8 +3963,9 @@ EXPORT_SYMBOL_NS_GPL(iommu_replace_group_handle, "IOMMUFD_INTERNAL");
  * IOMMU activity while leaving the group->domain pointer intact. Later when the
  * reset is finished, pci_dev_reset_iommu_done() can restore everything.
  *
- * Caller must use pci_dev_reset_iommu_prepare() with pci_dev_reset_iommu_done()
- * before/after the core-level reset routine, to decrement the reset_cnt.
+ * Caller must use pci_dev_reset_iommu_done() after a successful PCI-level reset
+ * to decrement the reset_cnt. If the reset fails, caller can choose to keep the
+ * device in the blocking_domain to protect system memory using IOMMU.
  *
  * Return: 0 on success or negative error code if the preparation failed.
  *
@@ -3992,6 +3994,17 @@ int pci_dev_reset_iommu_prepare(struct pci_dev *pdev)
 
 	if (gdev->reset_depth++)
 		return 0;
+
+	/*
+	 * If the device is already quarantined in the blocking_domain. Promote
+	 * it from the quarantine state into an active reset state. A successful
+	 * pci_dev_reset_iommu_done() can restore the device later.
+	 */
+	if (gdev->quarantined) {
+		gdev->quarantined = false;
+		group->reset_cnt++;
+		return 0;
+	}
 
 	ret = __iommu_group_alloc_blocking_domain(group);
 	if (ret)
@@ -4027,18 +4040,21 @@ EXPORT_SYMBOL_GPL(pci_dev_reset_iommu_prepare);
 /**
  * pci_dev_reset_iommu_done() - Restore IOMMU after a PCI device reset is done
  * @pdev: PCI device that has finished a reset routine
+ * @reset_succeeds: Whether the PCI device reset is successful or not
  *
  * After a PCIe device finishes a reset routine, it wants to restore its IOMMU
  * activity, including new translation and cache invalidation, by re-attaching
  * all RID/PASID of the device back to the domains retained in the core-level
  * structure.
  *
- * Caller must pair it with a successful pci_dev_reset_iommu_prepare().
+ * This is a pairing function for pci_dev_reset_iommu_prepare(). Caller should
+ * use it on a successful PCI-level reset. Otherwise, it's suggested for caller
+ * to keep the device in the blocking_domain to protect system memory.
  *
  * Note that, although unlikely, there is a risk that re-attaching domains might
  * fail due to some unexpected happening like OOM.
  */
-void pci_dev_reset_iommu_done(struct pci_dev *pdev)
+void pci_dev_reset_iommu_done(struct pci_dev *pdev, bool reset_succeeds)
 {
 	struct iommu_group *group = pdev->dev.iommu_group;
 	struct group_device *gdev;
@@ -4064,6 +4080,23 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev)
 	if (gdev->reset_depth > 1) {
 		gdev->reset_depth--;
 		return;
+	}
+
+	/*
+	 * A reset failure implies that the device might be unreliable. E.g. its
+	 * device cache might retain stale entries, which potentially results in
+	 * memory corruption. Thus, quarantine the device in the blocking_domain
+	 * until a successful reset.
+	 */
+	if (!reset_succeeds) {
+		pci_err(pdev,
+			"Reset failed. Quarantine the device to protect memory\n");
+		gdev->quarantined = true;
+		/*
+		 * We must decrement the counters so that a subsequent retry via
+		 * prepare() is treated as a fresh start v.s. a nested re-entry.
+		 */
+		goto out_dec;
 	}
 
 	/*
@@ -4096,6 +4129,8 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev)
 		}
 	}
 
+	gdev->quarantined = false;
+out_dec:
 	if (!WARN_ON(group->reset_cnt == 0))
 		group->reset_cnt--;
 	gdev->reset_depth = 0;
