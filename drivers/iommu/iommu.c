@@ -80,6 +80,7 @@ struct group_device {
 	 * Device is blocked for a pending recovery while its group->domain is
 	 * retained. This can happen when:
 	 *  - Device is undergoing a reset
+	 *  - Device failed the last reset
 	 */
 	bool blocked;
 	unsigned int reset_depth;
@@ -3984,7 +3985,9 @@ EXPORT_SYMBOL_NS_GPL(iommu_replace_group_handle, "IOMMUFD_INTERNAL");
  * reset is finished, pci_dev_reset_iommu_done() can restore everything.
  *
  * Caller must use pci_dev_reset_iommu_prepare() with pci_dev_reset_iommu_done()
- * before/after the core-level reset routine, to decrement the recovery_cnt.
+ * before/after the core-level reset routine. On a successful reset, done() will
+ * decrement group->recovery_cnt and restore domains. On a failure, recovery_cnt
+ * is left intact and the device stays blocked.
  *
  * Return: 0 on success or negative error code if the preparation failed.
  *
@@ -4012,6 +4015,9 @@ int pci_dev_reset_iommu_prepare(struct pci_dev *pdev)
 		return -ENODEV;
 
 	if (gdev->reset_depth++)
+		return 0;
+	/* Device might be already blocked for a quarantine */
+	if (gdev->blocked)
 		return 0;
 
 	ret = __iommu_group_alloc_blocking_domain(group);
@@ -4060,18 +4066,22 @@ EXPORT_SYMBOL_GPL(pci_dev_reset_iommu_prepare);
 /**
  * pci_dev_reset_iommu_done() - Restore IOMMU after a PCI device reset is done
  * @pdev: PCI device that has finished a reset routine
+ * @reset_succeeds: Whether the PCI device reset is successful or not
  *
  * After a PCIe device finishes a reset routine, it wants to restore its IOMMU
  * activity, including new translation and cache invalidation, by re-attaching
  * all RID/PASID of the device back to the domains retained in the core-level
  * structure.
  *
- * Caller must pair it with a successful pci_dev_reset_iommu_prepare().
+ * This is a pairing function for pci_dev_reset_iommu_prepare(). Caller should
+ * pass in the reset state via @reset_succeeds. On a failed reset, the device
+ * remains blocked for a quarantine with the group->recovery_cnt intact, so as
+ * to protect system memory until a subsequent successful reset.
  *
  * Note that, although unlikely, there is a risk that re-attaching domains might
  * fail due to some unexpected happening like OOM.
  */
-void pci_dev_reset_iommu_done(struct pci_dev *pdev)
+void pci_dev_reset_iommu_done(struct pci_dev *pdev, bool reset_succeeds)
 {
 	struct iommu_group *group = pdev->dev.iommu_group;
 	struct group_device *gdev;
@@ -4095,6 +4105,18 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev)
 
 	if (WARN_ON(!group->blocking_domain))
 		return;
+
+	/*
+	 * A reset failure implies that the device might be unreliable. E.g. its
+	 * device cache might retain stale entries, which potentially results in
+	 * memory corruption. Thus, do not unblock the device until a successful
+	 * reset.
+	 */
+	if (!reset_succeeds) {
+		pci_err(pdev,
+			"Reset failed. Keep it blocked to protect memory\n");
+		return;
+	}
 
 	/* Re-attach RID domain back to group->domain */
 	if (group->domain != group->blocking_domain) {
