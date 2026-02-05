@@ -75,6 +75,7 @@ struct iommu_group {
 enum gdev_blocked {
 	BLOCKED_NO = 0, /* Not blocked */
 	BLOCKED_RESETTING, /* PCI reset in flight */
+	BLOCKED_RESET_FAILED, /* PCI reset failed */
 };
 
 struct group_device {
@@ -762,6 +763,9 @@ static void __iommu_group_remove_device(struct device *dev)
 		if (device->dev != dev)
 			continue;
 
+		/* Must drop the recovery_cnt when removing a blocked device */
+		if (device->blocked && !WARN_ON(group->recovery_cnt == 0))
+			group->recovery_cnt--;
 		list_del(&device->list);
 		__iommu_group_free_device(group, device);
 		if (dev_has_iommu(dev))
@@ -3988,7 +3992,12 @@ EXPORT_SYMBOL_NS_GPL(iommu_replace_group_handle, "IOMMUFD_INTERNAL");
  * reset is finished, pci_dev_reset_iommu_done() can restore everything.
  *
  * Caller must use pci_dev_reset_iommu_prepare() with pci_dev_reset_iommu_done()
- * before/after the core-level reset routine, to decrement the recovery_cnt.
+ * before/after the core-level reset routine. On a successful reset, done() will
+ * decrement group->recovery_cnt and restore domains. On a failure, recovery_cnt
+ * is left intact and the device stays blocked.
+ *
+ * Callers must skip pci_dev_reset_iommu_prepare/done() entirely when no reset
+ * is attempted (e.g. probe mode).
  *
  * Return: 0 on success or negative error code if the preparation failed.
  *
@@ -4016,6 +4025,10 @@ int pci_dev_reset_iommu_prepare(struct pci_dev *pdev)
 		return -ENODEV;
 
 	if (gdev->reset_depth++)
+		return 0;
+
+	/* Device might be already blocked for a quarantine */
+	if (gdev->blocked)
 		return 0;
 
 	ret = __iommu_group_alloc_blocking_domain(group);
@@ -4106,7 +4119,13 @@ static bool group_device_dma_alias_is_blocked(struct iommu_group *group,
  * all RID/PASID of the device back to the domains retained in the core-level
  * structure.
  *
- * Caller must pair it with a successful pci_dev_reset_iommu_prepare().
+ * This is a pairing function for pci_dev_reset_iommu_prepare(). Caller passes
+ * the reset routine's outcome to @result. On PCI_RESET_FAILED, the device will
+ * remain blocked as a quarantine measure, with group->recovery_cnt intact, to
+ * protect system memory until a subsequent successful reset.
+ *
+ * Callers must skip pci_dev_reset_iommu_prepare/done() entirely when no reset
+ * is attempted (e.g. probe mode).
  *
  * Note that, although unlikely, there is a risk that re-attaching domains might
  * fail due to some unexpected happening like OOM.
@@ -4135,6 +4154,27 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev,
 		return;
 
 	if (WARN_ON(!group->blocking_domain))
+		return;
+
+	/*
+	 * A reset failure implies that the device might be unreliable. E.g. its
+	 * device cache might retain stale entries, which might result in memory
+	 * corruption. Thus, do not unblock the device until a successful reset.
+	 */
+	if (result == PCI_RESET_FAILED) {
+		pci_err(pdev,
+			"Reset failed. Keep it blocked to protect memory\n");
+		if (gdev->blocked == BLOCKED_RESETTING)
+			gdev->blocked = BLOCKED_RESET_FAILED;
+		return;
+	}
+
+	/*
+	 * PCI_RESET_SKIPPED indicates no physical reset occurred. It is okay to
+	 * revert a prepare() call. But the device must remain blocked if it was
+	 * blocked for any reason other than BLOCKED_RESETTING.
+	 */
+	if (result == PCI_RESET_SKIPPED && gdev->blocked != BLOCKED_RESETTING)
 		return;
 
 	if (group_device_dma_alias_is_blocked(group, gdev)) {
