@@ -29,10 +29,12 @@
 #include <linux/string_choices.h>
 #include <kunit/visibility.h>
 #include <uapi/linux/iommufd.h>
+#include <linux/debugfs.h>
 
 #include "arm-smmu-v3.h"
 #include "../../dma-iommu.h"
 
+static struct arm_smmu_master *gpu[4];
 static bool disable_msipolling;
 module_param(disable_msipolling, bool, 0444);
 MODULE_PARM_DESC(disable_msipolling,
@@ -3672,6 +3674,29 @@ static void arm_smmu_remove_master(struct arm_smmu_master *master)
 	kfree(master->streams);
 }
 
+static ssize_t arm_smmu_debugfs_atc_write(struct file *file,
+					  const char __user *user_buf,
+					  size_t count, loff_t *ppos)
+{
+	int i;
+
+	for (i = 0; i < 4; i++) {
+		if (gpu[i]) {
+			dev_info(gpu[i]->dev, "%s: ATC_INV ret=%d\n", __func__,
+				 arm_smmu_atc_inv_master(gpu[i],
+							 IOMMU_NO_PASID));
+		}
+	}
+
+	return count;
+}
+
+static const struct file_operations arm_smmu_debugfs_atc_fops = {
+	.owner = THIS_MODULE,
+	.write = arm_smmu_debugfs_atc_write,
+	.llseek = noop_llseek,
+};
+
 static struct iommu_device *arm_smmu_probe_device(struct device *dev)
 {
 	int ret;
@@ -3724,6 +3749,18 @@ static struct iommu_device *arm_smmu_probe_device(struct device *dev)
 		unsigned int stu = __ffs(smmu->pgsize_bitmap);
 
 		pci_prepare_ats(to_pci_dev(dev), stu);
+	}
+
+	if (strstr(dev_name(dev), "0009:01")) {
+		gpu[0] = master;
+		debugfs_create_file("test_atc_inv", 0200, iommu_debugfs_dir,
+				    NULL, &arm_smmu_debugfs_atc_fops);
+	} else if (strstr(dev_name(dev), "0019:01")) {
+		gpu[1] = master;
+	} else if (strstr(dev_name(dev), "0008:01")) {
+		gpu[2] = master;
+	} else if (strstr(dev_name(dev), "0018:01")) {
+		gpu[3] = master;
 	}
 
 	return &smmu->iommu;
