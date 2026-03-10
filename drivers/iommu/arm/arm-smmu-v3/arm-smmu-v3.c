@@ -107,6 +107,8 @@ static const char * const event_class_str[] = {
 	[3] = "Reserved",
 };
 
+static struct arm_smmu_ste *
+arm_smmu_get_step_for_sid(struct arm_smmu_device *smmu, u32 sid);
 static int arm_smmu_alloc_cd_tables(struct arm_smmu_master *master);
 
 static void parse_driver_options(struct arm_smmu_device *smmu)
@@ -2502,12 +2504,95 @@ arm_smmu_atc_inv_to_cmd(int ssid, unsigned long iova, size_t size,
 	cmd->atc.size	= log2_span;
 }
 
+static void arm_smmu_reset_device_done(struct device *dev)
+{
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+
+	if (WARN_ON(!master))
+		return;
+	WRITE_ONCE(master->ats_broken, false);
+}
+
+static void arm_smmu_disable_eats_for_sid(struct arm_smmu_device *smmu,
+					  struct arm_smmu_cmdq *cmdq, u32 sid)
+{
+	struct arm_smmu_cmdq_ent ent = {
+		.opcode = CMDQ_OP_CFGI_STE,
+		.cfgi	= {
+			.sid = sid,
+			.leaf = true,
+		},
+	};
+	struct arm_smmu_ste *step;
+	u64 cmd[CMDQ_ENT_DWORDS];
+
+	step = arm_smmu_get_step_for_sid(smmu, sid);
+	WRITE_ONCE(step->data[1],
+		   step->data[1] & cpu_to_le64(~STRTAB_STE_1_EATS));
+
+	arm_smmu_cmdq_build_cmd(cmd, &ent);
+	arm_smmu_cmdq_issue_cmdlist(smmu, cmdq, cmd, 1, true);
+}
+
+static void arm_smmu_invs_disable_ats(struct arm_smmu_invs *invs,
+				      struct arm_smmu_device *smmu, u32 sid)
+{
+	struct arm_smmu_inv *cur;
+	size_t i;
+
+	arm_smmu_invs_for_each_entry(invs, i, cur) {
+		if (cur->master->smmu == smmu && arm_smmu_inv_is_ats(cur) &&
+		    cur->id == sid) {
+			WRITE_ONCE(cur->type, INV_TYPE_ATS_DISABLED);
+			WRITE_ONCE(cur->master->ats_broken, true);
+			/* Also notify the core for a complete quarantine */
+			iommu_report_device_broken(cur->master->dev);
+		}
+	}
+}
+
+static void arm_smmu_master_disable_ats(struct arm_smmu_master *master,
+					struct arm_smmu_cmdq *cmdq)
+{
+	int i;
+
+	lockdep_assert_held(&arm_smmu_asid_lock);
+
+	for (i = 0; i < master->num_streams; i++) {
+		u32 sid = master->streams[i].id;
+		struct arm_smmu_invs *invs;
+		unsigned long flags;
+
+		arm_smmu_disable_eats_for_sid(master->smmu, cmdq, sid);
+
+		if (!master->invs_domain) {
+			iommu_report_device_broken(master->dev);
+			continue;
+		}
+
+		rcu_read_lock();
+		invs = rcu_dereference_protected(
+				master->invs_domain->invs,
+				lockdep_is_held(&arm_smmu_asid_lock));
+		if (invs->has_ats) {
+			write_lock_irqsave(&invs->rwlock, flags);
+			arm_smmu_invs_disable_ats(invs, master->smmu, sid);
+			write_unlock_irqrestore(&invs->rwlock, flags);
+		}
+		rcu_read_unlock();
+	}
+}
+
 static int arm_smmu_atc_inv_master(struct arm_smmu_master *master,
 				   ioasid_t ssid)
 {
-	int i;
+	int i, ret;
 	struct arm_smmu_cmdq_ent cmd;
 	struct arm_smmu_cmdq_batch cmds;
+
+	/* Do not issue ATC invalidation that will definitely time out */
+	if (READ_ONCE(master->ats_broken))
+		return 0;
 
 	arm_smmu_atc_inv_to_cmd(ssid, 0, 0, &cmd);
 
@@ -2517,7 +2602,10 @@ static int arm_smmu_atc_inv_master(struct arm_smmu_master *master,
 		arm_smmu_cmdq_batch_add(master->smmu, &cmds, &cmd);
 	}
 
-	return arm_smmu_cmdq_batch_submit(master->smmu, &cmds);
+	ret = arm_smmu_cmdq_batch_submit(master->smmu, &cmds);
+	if (ret)
+		arm_smmu_master_disable_ats(master, cmds.cmdq);
+	return ret;
 }
 
 /* IO_PGTABLE API */
@@ -2664,6 +2752,40 @@ static inline bool arm_smmu_invs_end_batch(struct arm_smmu_inv *cur,
 	return false;
 }
 
+static void arm_smmu_cmdq_batch_retry(struct arm_smmu_device *smmu,
+				      struct arm_smmu_invs *invs,
+				      struct arm_smmu_cmdq_batch *cmds)
+{
+	u64 atc[CMDQ_ENT_DWORDS] = {0};
+	int i;
+
+	/* Only a timed out ATC_INV command needs a retry */
+	if (!invs->has_ats)
+		return;
+
+	for (i = 0; i < cmds->num * CMDQ_ENT_DWORDS; i += CMDQ_ENT_DWORDS) {
+		struct arm_smmu_cmdq *cmdq = cmds->cmdq;
+		u32 sid;
+
+		/* Only need to retry ATC invalidations */
+		if (FIELD_GET(CMDQ_0_OP, cmds->cmds[i]) != CMDQ_OP_ATC_INV)
+			continue;
+
+		/* Only need to retry with one ATC_INV per Stream ID (device) */
+		sid = FIELD_GET(CMDQ_ATC_0_SID, cmds->cmds[i]);
+		if (atc[0] && sid == FIELD_GET(CMDQ_ATC_0_SID, atc[0]))
+			continue;
+
+		atc[0] = cmds->cmds[i];
+		atc[1] = cmds->cmds[i + 1];
+		if (arm_smmu_cmdq_issue_cmdlist(smmu, cmdq, atc, 1, true)) {
+			arm_smmu_disable_eats_for_sid(smmu, cmdq, sid);
+			/* Caution! It's inside the read lock of invs->rwlock */
+			arm_smmu_invs_disable_ats(invs, smmu, sid);
+		}
+	}
+}
+
 static void __arm_smmu_domain_inv_range(struct arm_smmu_invs *invs,
 					unsigned long iova, size_t size,
 					unsigned int granule, bool leaf)
@@ -2738,7 +2860,8 @@ static void __arm_smmu_domain_inv_range(struct arm_smmu_invs *invs,
 
 		if (cmds.num &&
 		    (next == end || arm_smmu_invs_end_batch(cur, next))) {
-			arm_smmu_cmdq_batch_submit(smmu, &cmds);
+			if (arm_smmu_cmdq_batch_submit(smmu, &cmds))
+				arm_smmu_cmdq_batch_retry(smmu, invs, &cmds);
 			cmds.num = 0;
 		}
 		cur = next;
@@ -3067,6 +3190,14 @@ static bool arm_smmu_ats_supported(struct arm_smmu_master *master)
 		return false;
 
 	if (!(fwspec->flags & IOMMU_FWSPEC_PCI_RC_ATS))
+		return false;
+
+	/*
+	 * Reject any new ATS request because ATC invalidation was timed out.
+	 * The PCI device should go through a recovery (reset) and notify the
+	 * SMMUv3 driver via a reset_device_done callback.
+	 */
+	if (READ_ONCE(master->ats_broken))
 		return false;
 
 	return dev_is_pci(dev) && pci_ats_supported(to_pci_dev(dev));
@@ -4406,6 +4537,7 @@ static const struct iommu_ops arm_smmu_ops = {
 	.domain_alloc_paging_flags = arm_smmu_domain_alloc_paging_flags,
 	.probe_device		= arm_smmu_probe_device,
 	.release_device		= arm_smmu_release_device,
+	.reset_device_done	= arm_smmu_reset_device_done,
 	.device_group		= arm_smmu_device_group,
 	.of_xlate		= arm_smmu_of_xlate,
 	.get_resv_regions	= arm_smmu_get_resv_regions,
