@@ -107,6 +107,8 @@ static const char * const event_class_str[] = {
 	[3] = "Reserved",
 };
 
+static struct arm_smmu_ste *
+arm_smmu_get_step_for_sid(struct arm_smmu_device *smmu, u32 sid);
 static int arm_smmu_alloc_cd_tables(struct arm_smmu_master *master);
 
 static void parse_driver_options(struct arm_smmu_device *smmu)
@@ -2516,10 +2518,49 @@ arm_smmu_atc_inv_to_cmd(int ssid, unsigned long iova, size_t size,
 	cmd->atc.size	= log2_span;
 }
 
+static void arm_smmu_disable_eats_for_sid(struct arm_smmu_device *smmu,
+					  struct arm_smmu_cmdq *cmdq, u32 sid)
+{
+	struct arm_smmu_cmdq_ent ent = {
+		.opcode = CMDQ_OP_CFGI_STE,
+		.cfgi	= {
+			.sid = sid,
+			.leaf = true,
+		},
+	};
+	struct arm_smmu_ste *step;
+	u64 cmd[CMDQ_ENT_DWORDS];
+	__le64 old, new;
+
+	step = arm_smmu_get_step_for_sid(smmu, sid);
+
+	old = READ_ONCE(step->data[1]);
+	do {
+		new = old & cpu_to_le64(~STRTAB_STE_1_EATS);
+	} while (!try_cmpxchg64(&step->data[1], &old, new));
+
+	arm_smmu_cmdq_build_cmd(cmd, &ent);
+	if (arm_smmu_cmdq_issue_cmdlist(smmu, cmdq, cmd, 1, true))
+		dev_err_ratelimited(smmu->dev,
+				    "failed to disable ATS for sid %#x\n", sid);
+}
+
+static void arm_smmu_master_disable_ats(struct arm_smmu_master *master,
+					struct arm_smmu_cmdq *cmdq)
+{
+	int i;
+
+	for (i = 0; i < master->num_streams; i++)
+		arm_smmu_disable_eats_for_sid(master->smmu, cmdq,
+					      master->streams[i].id);
+	WRITE_ONCE(master->ats_broken, true);
+	iommu_report_device_broken(master->dev);
+}
+
 static int arm_smmu_atc_inv_master(struct arm_smmu_master *master,
 				   ioasid_t ssid)
 {
-	int i;
+	int i, ret;
 	struct arm_smmu_cmdq_ent cmd;
 	struct arm_smmu_cmdq_batch cmds;
 
@@ -2535,7 +2576,10 @@ static int arm_smmu_atc_inv_master(struct arm_smmu_master *master,
 		arm_smmu_cmdq_batch_add(master->smmu, &cmds, &cmd);
 	}
 
-	return arm_smmu_cmdq_batch_submit(master->smmu, &cmds);
+	ret = arm_smmu_cmdq_batch_submit(master->smmu, &cmds);
+	if (ret == -EIO)
+		arm_smmu_master_disable_ats(master, cmds.cmdq);
+	return ret;
 }
 
 /* IO_PGTABLE API */
@@ -2682,6 +2726,55 @@ static inline bool arm_smmu_invs_end_batch(struct arm_smmu_inv *cur,
 	return false;
 }
 
+static void arm_smmu_invs_disable_ats(struct arm_smmu_invs *invs,
+				      struct arm_smmu_cmdq *cmdq,
+				      struct arm_smmu_device *smmu, u32 sid)
+{
+	struct arm_smmu_inv *cur;
+	size_t i;
+
+	arm_smmu_invs_for_each_entry(invs, i, cur) {
+		if (cur->master->smmu == smmu && arm_smmu_inv_is_ats(cur) &&
+		    cur->id == sid) {
+			arm_smmu_master_disable_ats(cur->master, cmdq);
+			break;
+		}
+	}
+}
+
+static void arm_smmu_cmdq_batch_retry(struct arm_smmu_device *smmu,
+				      struct arm_smmu_invs *invs,
+				      struct arm_smmu_cmdq_batch *cmds)
+{
+	u64 atc[CMDQ_ENT_DWORDS] = {0};
+	int i;
+
+	/* Only a timed out ATC_INV command needs a retry */
+	if (!invs->has_ats)
+		return;
+
+	for (i = 0; i < cmds->num * CMDQ_ENT_DWORDS; i += CMDQ_ENT_DWORDS) {
+		struct arm_smmu_cmdq *cmdq = cmds->cmdq;
+		u32 sid;
+		int ret;
+
+		/* Only need to retry ATC invalidations */
+		if (FIELD_GET(CMDQ_0_OP, cmds->cmds[i]) != CMDQ_OP_ATC_INV)
+			continue;
+
+		/* Only need to retry with one ATC_INV per Stream ID (device) */
+		sid = FIELD_GET(CMDQ_ATC_0_SID, cmds->cmds[i]);
+		if (atc[0] && sid == FIELD_GET(CMDQ_ATC_0_SID, atc[0]))
+			continue;
+
+		atc[0] = cmds->cmds[i];
+		atc[1] = cmds->cmds[i + 1];
+		ret = arm_smmu_cmdq_issue_cmdlist(smmu, cmdq, atc, 1, true);
+		if (ret == -EIO)
+			arm_smmu_invs_disable_ats(invs, cmdq, smmu, sid);
+	}
+}
+
 static void __arm_smmu_domain_inv_range(struct arm_smmu_invs *invs,
 					unsigned long iova, size_t size,
 					unsigned int granule, bool leaf)
@@ -2760,7 +2853,8 @@ static void __arm_smmu_domain_inv_range(struct arm_smmu_invs *invs,
 
 		if (cmds.num &&
 		    (next == end || arm_smmu_invs_end_batch(cur, next))) {
-			arm_smmu_cmdq_batch_submit(smmu, &cmds);
+			if (arm_smmu_cmdq_batch_submit(smmu, &cmds) == -EIO)
+				arm_smmu_cmdq_batch_retry(smmu, invs, &cmds);
 			cmds.num = 0;
 		}
 		cur = next;
