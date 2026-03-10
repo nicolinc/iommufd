@@ -756,6 +756,24 @@ arm_smmu_invs_iter_next(struct arm_smmu_invs *invs, size_t next, size_t *idx)
 	for (cur = arm_smmu_invs_iter_next(invs, 0, &(idx)); cur;              \
 	     cur = arm_smmu_invs_iter_next(invs, idx + 1, &(idx)))
 
+static inline struct arm_smmu_master *
+arm_smmu_invs_find_ats_master(struct arm_smmu_invs *invs,
+			      struct arm_smmu_device *smmu, u32 sid)
+{
+	struct arm_smmu_inv *cur;
+	size_t i;
+
+	if (!invs->has_ats)
+		return NULL;
+
+	arm_smmu_invs_for_each_entry(invs, i, cur) {
+		if (cur->smmu == smmu && arm_smmu_inv_is_ats(cur) &&
+		    cur->id == sid)
+			return cur->master;
+	}
+	return NULL;
+}
+
 static inline struct arm_smmu_invs *arm_smmu_invs_alloc(size_t num_invs)
 {
 	struct arm_smmu_invs *new_invs;
