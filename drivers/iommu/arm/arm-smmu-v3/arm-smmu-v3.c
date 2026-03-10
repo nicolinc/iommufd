@@ -169,10 +169,16 @@ static void queue_sync_cons_out(struct arm_smmu_queue *q)
 	writel_relaxed(q->llq.cons, q->cons_reg);
 }
 
+static u32 __queue_inc_cons(struct arm_smmu_ll_queue *q, u32 cons)
+{
+	u32 tmp = (Q_WRP(q, cons) | Q_IDX(q, cons)) + 1;
+
+	return Q_OVF(cons) | Q_WRP(q, tmp) | Q_IDX(q, tmp);
+}
+
 static void queue_inc_cons(struct arm_smmu_ll_queue *q)
 {
-	u32 cons = (Q_WRP(q, q->cons) | Q_IDX(q, q->cons)) + 1;
-	q->cons = Q_OVF(q->cons) | Q_WRP(q, cons) | Q_IDX(q, cons);
+	q->cons = __queue_inc_cons(q, q->cons);
 }
 
 static void queue_sync_cons_ovf(struct arm_smmu_queue *q)
@@ -445,7 +451,12 @@ void __arm_smmu_cmdq_skip_err(struct arm_smmu_device *smmu,
 		 * at the CMD_SYNC. Attempt to complete other pending commands
 		 * by repeating the CMD_SYNC, though we might well end up back
 		 * here since the ATC invalidation may still be pending.
+		 *
+		 * Mark the faulty batch using the PROD for caller to match.
 		 */
+		WRITE_ONCE(cmdq->prod_atc, __queue_inc_cons(&q->llq, cons));
+		/* Ensure prod_atc is visible */
+		smp_wmb();
 		return;
 	case CMDQ_ERR_CERROR_ILL_IDX:
 	default:
@@ -903,6 +914,9 @@ int arm_smmu_cmdq_issue_cmdlist(struct arm_smmu_device *smmu,
 					    llq.prod,
 					    readl_relaxed(cmdq->q.prod_reg),
 					    readl_relaxed(cmdq->q.cons_reg));
+		} else if (llq.prod == READ_ONCE(cmdq->prod_atc)) {
+			WRITE_ONCE(cmdq->prod_atc, U32_MAX);
+			ret = -ETIMEDOUT;
 		}
 
 		/*
@@ -4445,6 +4459,7 @@ int arm_smmu_cmdq_init(struct arm_smmu_device *smmu,
 {
 	unsigned int nents = 1 << cmdq->q.llq.max_n_shift;
 
+	WRITE_ONCE(cmdq->prod_atc, U32_MAX);
 	atomic_set(&cmdq->owner_prod, 0);
 	atomic_set(&cmdq->lock, 0);
 
