@@ -107,8 +107,13 @@ static const char * const event_class_str[] = {
 	[3] = "Reserved",
 };
 
+static struct arm_smmu_ste *
+arm_smmu_get_step_for_sid(struct arm_smmu_device *smmu, u32 sid);
 static int arm_smmu_alloc_cd_tables(struct arm_smmu_master *master);
 static bool arm_smmu_ats_supported(struct arm_smmu_master *master);
+static void arm_smmu_cmdq_batch_retry(struct arm_smmu_device *smmu,
+				      struct arm_smmu_invs *invs,
+				      struct arm_smmu_cmdq_batch *cmds);
 
 static void parse_driver_options(struct arm_smmu_device *smmu)
 {
@@ -905,8 +910,13 @@ static int arm_smmu_cmdq_batch_issue(struct arm_smmu_device *smmu,
 				     struct arm_smmu_cmdq_batch *cmds,
 				     bool sync)
 {
-	return arm_smmu_cmdq_issue_cmdlist(smmu, cmds->cmdq, cmds->cmds,
-					   cmds->num, sync);
+	int ret = arm_smmu_cmdq_issue_cmdlist(smmu, cmds->cmdq, cmds->cmds,
+					      cmds->num, sync);
+
+	/* Identify the timed-out master via cmds->invs */
+	if (ret == -EIO && cmds->invs)
+		arm_smmu_cmdq_batch_retry(smmu, cmds->invs, cmds);
+	return ret;
 }
 
 static void arm_smmu_cmdq_batch_add_cmd_p(struct arm_smmu_device *smmu,
@@ -924,7 +934,11 @@ static void arm_smmu_cmdq_batch_add_cmd_p(struct arm_smmu_device *smmu,
 	}
 
 	if (cmds->num == CMDQ_BATCH_ENTRIES) {
-		arm_smmu_cmdq_batch_issue(smmu, cmds, false);
+		/*
+		 * Force sync for ATS-bearing batches so the timeout is caught
+		 * here, not at a later unrelated batch's CMD_SYNC.
+		 */
+		arm_smmu_cmdq_batch_issue(smmu, cmds, cmds->has_ats);
 		arm_smmu_cmdq_batch_init_cmd(smmu, cmds, cmd, cmds->invs);
 	}
 
@@ -943,6 +957,104 @@ static int arm_smmu_cmdq_batch_submit(struct arm_smmu_device *smmu,
 				      struct arm_smmu_cmdq_batch *cmds)
 {
 	return arm_smmu_cmdq_batch_issue(smmu, cmds, true);
+}
+
+static void arm_smmu_master_disable_ats(struct arm_smmu_master *master)
+{
+	struct arm_smmu_cmd cmd = arm_smmu_make_cmd_op(CMDQ_OP_CFGI_STE);
+	struct arm_smmu_device *smmu = master->smmu;
+	struct arm_smmu_cmdq_batch cmds;
+	struct arm_smmu_inv *cur;
+	size_t i;
+
+	lockdep_assert_held(&master->ats_broken_lock);
+
+	/* Disable STE.EATS on every SID */
+	arm_smmu_cmdq_batch_init_cmd(smmu, &cmds, &cmd, NULL);
+	arm_smmu_invs_for_each_entry(master->ats_invs, i, cur) {
+		struct arm_smmu_ste *step =
+			arm_smmu_get_step_for_sid(smmu, cur->id);
+
+		/* EATS is safe to update. See arm_smmu_get_ste_update_safe() */
+		WRITE_ONCE(step->data[1],
+			   step->data[1] & ~cpu_to_le64(STRTAB_STE_1_EATS));
+
+		arm_smmu_cmdq_batch_add_cmd(
+			smmu, &cmds, arm_smmu_make_cmd_cfgi_ste(cur->id, true));
+	}
+	if (arm_smmu_cmdq_batch_submit(smmu, &cmds))
+		dev_err_ratelimited(smmu->dev,
+				    "failed to disable ATS for master\n");
+
+	/* Pair with lockless readers */
+	WRITE_ONCE(master->ats_broken, true);
+
+	/* Lastly, report to the core to schedule a full blocking procedure */
+	iommu_report_device_broken(master->dev);
+
+	/*
+	 * When a concurrent pci_dev_reset_iommu_done() runs after this report
+	 * (e.g. an AER recovery in flight), the broken_worker may transiently
+	 * block a recovering device. pci_dev_reset_iommu_done() will lift it
+	 * immediately. Net end-state is correct.
+	 */
+}
+
+static void arm_smmu_cmdq_batch_retry(struct arm_smmu_device *smmu,
+				      struct arm_smmu_invs *invs,
+				      struct arm_smmu_cmdq_batch *cmds)
+{
+	struct arm_smmu_cmd atc = {};
+	int i;
+
+	/* Only a timed out ATC_INV command needs a retry */
+	if (!invs->has_ats)
+		return;
+
+	for (i = 0; i < cmds->num; i++) {
+		struct arm_smmu_cmdq *cmdq = cmds->cmdq;
+		struct arm_smmu_master *master = NULL;
+		unsigned long flags;
+		u32 sid;
+		int ret;
+
+		/* Only need to retry ATC invalidations */
+		if (FIELD_GET(CMDQ_0_OP, cmds->cmds[i].data[0]) !=
+		    CMDQ_OP_ATC_INV)
+			continue;
+
+		/* Only need to retry with one ATC_INV per Stream ID (device) */
+		sid = FIELD_GET(CMDQ_ATC_0_SID, cmds->cmds[i].data[0]);
+		if (atc.data[0] &&
+		    sid == FIELD_GET(CMDQ_ATC_0_SID, atc.data[0]))
+			continue;
+
+		master = arm_smmu_invs_find_ats_master(invs, smmu, sid);
+		if (WARN_ON(!master))
+			continue;
+
+		atc = cmds->cmds[i];
+		/*
+		 * Hold ats_broken_lock across the per-master re-issue and the
+		 * possible disable_ats, so a concurrent reset_device_done()
+		 * cannot clear ats_broken between the timeout observation and
+		 * the quarantine action.
+		 */
+		spin_lock_irqsave(&master->ats_broken_lock, flags);
+		/*
+		 * A previous retry on a sibling SID may have already disabled
+		 * ATS across all the STEs owned by this master's SIDs. Skip it.
+		 */
+		if (master->ats_broken) {
+			spin_unlock_irqrestore(&master->ats_broken_lock, flags);
+			continue;
+		}
+
+		ret = arm_smmu_cmdq_issue_cmdlist(smmu, cmdq, &atc, 1, true);
+		if (ret == -EIO)
+			arm_smmu_master_disable_ats(master);
+		spin_unlock_irqrestore(&master->ats_broken_lock, flags);
+	}
 }
 
 static void arm_smmu_page_response(struct device *dev, struct iopf_fault *unused,
