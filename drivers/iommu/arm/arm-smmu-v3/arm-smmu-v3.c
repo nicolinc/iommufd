@@ -1092,8 +1092,9 @@ arm_smmu_invs_iter_next(struct arm_smmu_invs *invs, size_t next, size_t *idx)
 static int arm_smmu_inv_cmp(const struct arm_smmu_inv *inv_l,
 			    const struct arm_smmu_inv *inv_r)
 {
-	if (inv_l->smmu != inv_r->smmu)
-		return cmp_int((uintptr_t)inv_l->smmu, (uintptr_t)inv_r->smmu);
+	if (inv_l->master->smmu != inv_r->master->smmu)
+		return cmp_int((uintptr_t)inv_l->master->smmu,
+			       (uintptr_t)inv_r->master->smmu);
 	if (inv_l->type != inv_r->type)
 		return cmp_int(inv_l->type, inv_r->type);
 	if (inv_l->id != inv_r->id)
@@ -2650,22 +2651,22 @@ static void arm_smmu_inv_to_cmdq_batch(struct arm_smmu_inv *inv,
 				       unsigned long iova, size_t size,
 				       unsigned int granule)
 {
-	if (arm_smmu_inv_size_too_big(inv->smmu, size, granule)) {
+	if (arm_smmu_inv_size_too_big(inv->master->smmu, size, granule)) {
 		cmd->opcode = inv->nsize_opcode;
-		arm_smmu_cmdq_batch_add(inv->smmu, cmds, cmd);
+		arm_smmu_cmdq_batch_add(inv->master->smmu, cmds, cmd);
 		return;
 	}
 
 	cmd->opcode = inv->size_opcode;
-	arm_smmu_cmdq_batch_add_range(inv->smmu, cmds, cmd, iova, size, granule,
-				      inv->pgsize);
+	arm_smmu_cmdq_batch_add_range(inv->master->smmu, cmds, cmd, iova, size,
+				      granule, inv->pgsize);
 }
 
 static inline bool arm_smmu_invs_end_batch(struct arm_smmu_inv *cur,
 					   struct arm_smmu_inv *next)
 {
 	/* Changing smmu means changing command queue */
-	if (cur->smmu != next->smmu)
+	if (cur->master->smmu != next->master->smmu)
 		return true;
 	/* The batch for S2 TLBI must be done before nested S1 ASIDs */
 	if (cur->type != INV_TYPE_S2_VMID_S1_CLEAR &&
@@ -2692,7 +2693,7 @@ static void __arm_smmu_domain_inv_range(struct arm_smmu_invs *invs,
 		if (READ_ONCE(cur->users))
 			break;
 	while (cur != end) {
-		struct arm_smmu_device *smmu = cur->smmu;
+		struct arm_smmu_device *smmu = cur->master->smmu;
 		struct arm_smmu_cmdq_ent cmd = {
 			/*
 			 * Pick size_opcode to run arm_smmu_get_cmdq(). This can
@@ -2721,7 +2722,8 @@ static void __arm_smmu_domain_inv_range(struct arm_smmu_invs *invs,
 			break;
 		case INV_TYPE_S2_VMID_S1_CLEAR:
 			/* CMDQ_OP_TLBI_S12_VMALL already flushed S1 entries */
-			if (arm_smmu_inv_size_too_big(cur->smmu, size, granule))
+			if (arm_smmu_inv_size_too_big(cur->master->smmu, size,
+						      granule))
 				break;
 			cmd.tlbi.vmid = cur->id;
 			arm_smmu_cmdq_batch_add(smmu, &cmds, &cmd);
@@ -3246,7 +3248,7 @@ arm_smmu_master_build_inv(struct arm_smmu_master *master,
 {
 	struct arm_smmu_invs *build_invs = master->build_invs;
 	struct arm_smmu_inv *cur, inv = {
-		.smmu = master->smmu,
+		.master = master,
 		.type = type,
 		.id = id,
 		.pgsize = pgsize,
@@ -3478,7 +3480,7 @@ static void arm_smmu_inv_flush_iotlb_tag(struct arm_smmu_inv *inv)
 	}
 
 	cmd.opcode = inv->nsize_opcode;
-	arm_smmu_cmdq_issue_cmd_with_sync(inv->smmu, &cmd);
+	arm_smmu_cmdq_issue_cmd_with_sync(inv->master->smmu, &cmd);
 }
 
 /* Should be installed after arm_smmu_install_ste_for_dev() */
