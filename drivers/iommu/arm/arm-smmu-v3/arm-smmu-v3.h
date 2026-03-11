@@ -663,6 +663,7 @@ enum arm_smmu_inv_type {
 
 struct arm_smmu_inv {
 	struct arm_smmu_device *smmu;
+	struct arm_smmu_master *master; /* INV_TYPE_ATS* */
 	u8 type;
 	u8 size_opcode;
 	u8 nsize_opcode;

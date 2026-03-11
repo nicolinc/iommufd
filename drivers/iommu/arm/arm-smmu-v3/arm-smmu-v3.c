@@ -3301,6 +3301,7 @@ arm_smmu_master_build_inv(struct arm_smmu_master *master,
 	case INV_TYPE_ATS_FULL:
 		cur->size_opcode = cur->nsize_opcode = CMDQ_OP_ATC_INV;
 		cur->ssid = ssid;
+		cur->master = master;
 		break;
 	}
 
@@ -4259,9 +4260,6 @@ static void arm_smmu_remove_master(struct arm_smmu_master *master)
 	for (i = 0; i < fwspec->num_ids; i++)
 		rb_erase(&master->streams[i].node, &smmu->streams);
 	mutex_unlock(&smmu->streams_mutex);
-
-	kfree(master->streams);
-	kfree(master->build_invs);
 }
 
 static struct iommu_device *arm_smmu_probe_device(struct device *dev)
@@ -4335,6 +4333,16 @@ static void arm_smmu_release_device(struct device *dev)
 	arm_smmu_remove_master(master);
 	if (arm_smmu_cdtab_allocated(&master->cd_table))
 		arm_smmu_free_cd_tables(master);
+
+	/*
+	 * The iommu core detaches @dev from every iommu domain before invoking
+	 * release_device. So the updated domain->invs no longer references the
+	 * @master; IOW, new RCU readers cannot reach it. Wait one grace period
+	 * for in-flight readers to drop their references.
+	 */
+	synchronize_rcu();
+	kfree(master->streams);
+	kfree(master->build_invs);
 	kfree(master);
 }
 
