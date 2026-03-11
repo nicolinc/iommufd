@@ -1155,6 +1155,7 @@ struct arm_smmu_invs *arm_smmu_invs_merge(struct arm_smmu_invs *invs,
 	struct arm_smmu_invs *new_invs;
 	struct arm_smmu_inv *new;
 	size_t num_invs = 0;
+	unsigned long flags;
 	size_t i, j;
 	int cmp;
 
@@ -1166,6 +1167,7 @@ struct arm_smmu_invs *arm_smmu_invs_merge(struct arm_smmu_invs *invs,
 		return ERR_PTR(-ENOMEM);
 
 	new = new_invs->inv;
+	write_lock_irqsave(&invs->rwlock, flags);
 	arm_smmu_invs_for_each_cmp(invs, i, to_merge, j, cmp) {
 		if (cmp < 0) {
 			*new = invs->inv[i];
@@ -1187,6 +1189,7 @@ struct arm_smmu_invs *arm_smmu_invs_merge(struct arm_smmu_invs *invs,
 			new_invs->has_ats = true;
 		new++;
 	}
+	write_unlock_irqrestore(&invs->rwlock, flags);
 
 	WARN_ON(new != new_invs->inv + new_invs->num_invs);
 
@@ -1227,6 +1230,7 @@ void arm_smmu_invs_unref(struct arm_smmu_invs *invs,
 	size_t i, j;
 	int cmp;
 
+	write_lock_irqsave(&invs->rwlock, flags);
 	arm_smmu_invs_for_each_cmp(invs, i, to_unref, j, cmp) {
 		if (cmp < 0) {
 			/* not found in to_unref, leave alone */
@@ -1259,7 +1263,6 @@ void arm_smmu_invs_unref(struct arm_smmu_invs *invs,
 	invs->num_trashes -= invs->num_invs - num_invs;
 
 	/* The lock is required to fence concurrent ATS operations. */
-	write_lock_irqsave(&invs->rwlock, flags);
 	WRITE_ONCE(invs->num_invs, num_invs); /* Remove tailing trash entries */
 	write_unlock_irqrestore(&invs->rwlock, flags);
 }
@@ -1283,6 +1286,7 @@ struct arm_smmu_invs *arm_smmu_invs_purge(struct arm_smmu_invs *invs)
 	struct arm_smmu_invs *new_invs;
 	struct arm_smmu_inv *inv;
 	size_t i, num_invs = 0;
+	unsigned long flags;
 
 	if (WARN_ON(invs->num_invs < invs->num_trashes))
 		return NULL;
@@ -1293,10 +1297,12 @@ struct arm_smmu_invs *arm_smmu_invs_purge(struct arm_smmu_invs *invs)
 	if (!new_invs)
 		return ERR_PTR(-ENOMEM);
 
+	write_lock_irqsave(&invs->rwlock, flags);
 	arm_smmu_invs_for_each_entry(invs, i, inv) {
 		new_invs->inv[num_invs] = *inv;
 		num_invs++;
 	}
+	write_unlock_irqrestore(&invs->rwlock, flags);
 
 	WARN_ON(num_invs != new_invs->num_invs);
 	return new_invs;
