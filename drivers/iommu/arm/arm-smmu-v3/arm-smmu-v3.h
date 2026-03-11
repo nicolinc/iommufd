@@ -938,6 +938,7 @@ struct arm_smmu_master {
 	 */
 	struct arm_smmu_invs		*build_invs;
 	struct arm_smmu_vmaster		*vmaster; /* use smmu->streams_mutex */
+	struct arm_smmu_domain		*invs_domain;
 	/* Locked by the iommu core using the group mutex */
 	struct arm_smmu_ctx_desc_cfg	cd_table;
 	unsigned int			num_streams;

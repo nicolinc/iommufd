@@ -3614,6 +3614,8 @@ int arm_smmu_attach_prepare(struct arm_smmu_attach_state *state,
 		 */
 		wmb();
 	}
+
+	master->invs_domain = smmu_domain;
 	return 0;
 
 err_iopf:
