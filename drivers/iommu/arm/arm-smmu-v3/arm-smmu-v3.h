@@ -659,6 +659,7 @@ enum arm_smmu_inv_type {
 	INV_TYPE_S2_VMID_S1_CLEAR,
 	INV_TYPE_ATS,
 	INV_TYPE_ATS_FULL,
+	INV_TYPE_ATS_DISABLED,
 };
 
 struct arm_smmu_inv {
@@ -675,9 +676,15 @@ struct arm_smmu_inv {
 	int users; /* users=0 to mark as a trash to be purged */
 };
 
+static inline bool arm_smmu_type_is_ats(u8 type)
+{
+	return type == INV_TYPE_ATS || type == INV_TYPE_ATS_FULL ||
+	       type == INV_TYPE_ATS_DISABLED;
+}
+
 static inline bool arm_smmu_inv_is_ats(const struct arm_smmu_inv *inv)
 {
-	return inv->type == INV_TYPE_ATS || inv->type == INV_TYPE_ATS_FULL;
+	return arm_smmu_type_is_ats(READ_ONCE(inv->type));
 }
 
 /**

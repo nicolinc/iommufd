@@ -1072,11 +1072,16 @@ arm_smmu_invs_iter_next(struct arm_smmu_invs *invs, size_t next, size_t *idx)
 static int arm_smmu_inv_cmp(const struct arm_smmu_inv *inv_l,
 			    const struct arm_smmu_inv *inv_r)
 {
+	u8 type_l = READ_ONCE(inv_l->type);
+	u8 type_r = READ_ONCE(inv_r->type);
+	bool are_ats = arm_smmu_type_is_ats(type_l) &&
+		       arm_smmu_type_is_ats(type_r);
+
 	if (inv_l->master->smmu != inv_r->master->smmu)
 		return cmp_int((uintptr_t)inv_l->master->smmu,
 			       (uintptr_t)inv_r->master->smmu);
-	if (inv_l->type != inv_r->type)
-		return cmp_int(inv_l->type, inv_r->type);
+	if (!are_ats && type_l != type_r)
+		return cmp_int(type_l, type_r);
 	return cmp_int(inv_l->id, inv_r->id);
 }
 
@@ -2644,8 +2649,8 @@ static inline bool arm_smmu_invs_end_batch(struct arm_smmu_inv *cur,
 	if (cur->master->smmu != next->master->smmu)
 		return true;
 	/* The batch for S2 TLBI must be done before nested S1 ASIDs */
-	if (cur->type != INV_TYPE_S2_VMID_S1_CLEAR &&
-	    next->type == INV_TYPE_S2_VMID_S1_CLEAR)
+	if (READ_ONCE(cur->type) != INV_TYPE_S2_VMID_S1_CLEAR &&
+	    READ_ONCE(next->type) == INV_TYPE_S2_VMID_S1_CLEAR)
 		return true;
 	/* ATS must be after a sync of the S1/S2 invalidations */
 	if (!arm_smmu_inv_is_ats(cur) && arm_smmu_inv_is_ats(next))
@@ -2682,7 +2687,7 @@ static void __arm_smmu_domain_inv_range(struct arm_smmu_invs *invs,
 		if (!cmds.num)
 			arm_smmu_cmdq_batch_init(smmu, &cmds, &cmd);
 
-		switch (cur->type) {
+		switch (READ_ONCE(cur->type)) {
 		case INV_TYPE_S1_ASID:
 			cmd.tlbi.asid = cur->id;
 			cmd.tlbi.leaf = leaf;
@@ -2713,6 +2718,8 @@ static void __arm_smmu_domain_inv_range(struct arm_smmu_invs *invs,
 			cmd.atc.sid = cur->id;
 			arm_smmu_cmdq_batch_add(smmu, &cmds, &cmd);
 			break;
+		case INV_TYPE_ATS_DISABLED:
+			continue;
 		default:
 			WARN_ON_ONCE(1);
 			continue;
@@ -3261,6 +3268,9 @@ arm_smmu_master_build_inv(struct arm_smmu_master *master,
 		cur->size_opcode = cur->nsize_opcode = CMDQ_OP_ATC_INV;
 		cur->master = master;
 		cur->ssid = ssid;
+		break;
+	case INV_TYPE_ATS_DISABLED:
+		WARN_ON(true);
 		break;
 	}
 
