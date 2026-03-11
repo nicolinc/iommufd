@@ -651,25 +651,29 @@ static void arm_smmu_v3_invs_test_verify(struct kunit *test,
 	}
 }
 
+static struct arm_smmu_master invs_master = {
+	.smmu = &smmu,
+};
+
 static struct arm_smmu_invs invs1 = {
 	.num_invs = 3,
-	.inv = { { .type = INV_TYPE_S2_VMID, .id = 1, },
-		 { .type = INV_TYPE_S2_VMID_S1_CLEAR, .id = 1, },
-		 { .type = INV_TYPE_ATS, .id = 3, }, },
+	.inv = { { .master = &invs_master, .type = INV_TYPE_S2_VMID, .id = 1, },
+		 { .master = &invs_master, .type = INV_TYPE_S2_VMID_S1_CLEAR, .id = 1, },
+		 { .master = &invs_master, .type = INV_TYPE_ATS, .id = 3, }, },
 };
 
 static struct arm_smmu_invs invs2 = {
 	.num_invs = 3,
-	.inv = { { .type = INV_TYPE_S2_VMID, .id = 1, }, /* duplicated */
-		 { .type = INV_TYPE_ATS, .id = 4, },
-		 { .type = INV_TYPE_ATS, .id = 5, }, },
+	.inv = { { .master = &invs_master, .type = INV_TYPE_S2_VMID, .id = 1, }, /* duplicated */
+		 { .master = &invs_master, .type = INV_TYPE_ATS, .id = 4, },
+		 { .master = &invs_master, .type = INV_TYPE_ATS, .id = 5, }, },
 };
 
 static struct arm_smmu_invs invs3 = {
 	.num_invs = 3,
-	.inv = { { .type = INV_TYPE_S2_VMID, .id = 1, }, /* duplicated */
-		 { .type = INV_TYPE_ATS, .id = 5, }, /* recover a trash */
-		 { .type = INV_TYPE_ATS, .id = 6, }, },
+	.inv = { { .master = &invs_master, .type = INV_TYPE_S2_VMID, .id = 1, }, /* duplicated */
+		 { .master = &invs_master, .type = INV_TYPE_ATS, .id = 5, }, /* recover a trash */
+		 { .master = &invs_master, .type = INV_TYPE_ATS, .id = 6, }, },
 };
 
 static void arm_smmu_v3_invs_test(struct kunit *test)
