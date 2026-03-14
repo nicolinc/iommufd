@@ -4182,12 +4182,14 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev, int reset_result)
 {
 	struct iommu_group *group = pdev->dev.iommu_group;
 	enum gdev_blocked old_gdev_blocked;
+	const struct iommu_ops *ops;
 	struct group_device *gdev;
 	unsigned long pasid;
 	void *entry;
 
 	if (!pci_ats_supported(pdev) || !dev_has_iommu(&pdev->dev))
 		return;
+	ops = dev_iommu_ops(&pdev->dev);
 
 	guard(mutex)(&group->mutex);
 
@@ -4248,6 +4250,16 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev, int reset_result)
 		pci_warn(pdev,
 			 "DMA-aliased sibling may be prematurely unblocked\n");
 	}
+
+	/*
+	 * A PCI device might have been in an error state, so the IOMMU driver
+	 * had to quarantine the device by disabling specific hardware features
+	 * or dropping translation capability. Here notify the IOMMU driver as
+	 * a reliable signal that the faulty PCI device has been cleanly reset
+	 * so now it can lift its quarantine and restore full functionality.
+	 */
+	if (ops->reset_device_done)
+		ops->reset_device_done(&pdev->dev);
 
 	/*
 	 * Re-attach RID domain back to group->domain
