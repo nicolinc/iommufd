@@ -4116,12 +4116,14 @@ static bool group_device_dma_alias_is_blocked(struct iommu_group *group,
 void pci_dev_reset_iommu_done(struct pci_dev *pdev, bool reset_succeeds)
 {
 	struct iommu_group *group = pdev->dev.iommu_group;
+	const struct iommu_ops *ops;
 	struct group_device *gdev;
 	unsigned long pasid;
 	void *entry;
 
 	if (!pci_ats_supported(pdev) || !dev_has_iommu(&pdev->dev))
 		return;
+	ops = dev_iommu_ops(&pdev->dev);
 
 	guard(mutex)(&group->mutex);
 
@@ -4163,6 +4165,16 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev, bool reset_succeeds)
 			"Reset failed. Keep it blocked to protect memory\n");
 		return;
 	}
+
+	/*
+	 * A PCI device might have been in an error state, so the IOMMU driver
+	 * had to quarantine the device by disabling specific hardware features
+	 * or dropping translation capability. Here notify the IOMMU driver as
+	 * a reliable signal that the faulty PCI device has been cleanly reset
+	 * so now it can lift its quarantine and restore full functionality.
+	 */
+	if (ops->reset_device_done)
+		ops->reset_device_done(&pdev->dev);
 
 	/*
 	 * Re-attach RID domain back to group->domain
