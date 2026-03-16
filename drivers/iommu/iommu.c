@@ -79,6 +79,7 @@ struct group_device {
 	unsigned int reset_depth;
 	bool quarantined;
 	struct rcu_head rcu;
+	struct work_struct broken_work;
 };
 
 /* Iterate over each struct group_device in a struct iommu_group */
@@ -162,6 +163,7 @@ static struct group_device *iommu_group_alloc_device(struct iommu_group *group,
 						     struct device *dev);
 static void __iommu_group_free_device(struct iommu_group *group,
 				      struct group_device *grp_dev);
+static void iommu_group_broken_worker(struct work_struct *work);
 static void iommu_domain_init(struct iommu_domain *domain, unsigned int type,
 			      const struct iommu_ops *ops);
 
@@ -744,6 +746,8 @@ static void __iommu_group_free_device(struct iommu_group *group,
 	sysfs_remove_link(group->devices_kobj, grp_dev->name);
 	sysfs_remove_link(&dev->kobj, "iommu_group");
 
+	/* Must wait for broken_work to prevent UAF */
+	cancel_work_sync(&grp_dev->broken_work);
 	trace_remove_device_from_group(group->id, dev);
 
 	kfree(grp_dev->name);
@@ -1276,6 +1280,7 @@ static struct group_device *iommu_group_alloc_device(struct iommu_group *group,
 		return ERR_PTR(-ENOMEM);
 
 	device->dev = dev;
+	INIT_WORK(&device->broken_work, iommu_group_broken_worker);
 
 	ret = sysfs_create_link(&dev->kobj, &group->kobj, "iommu_group");
 	if (ret)
@@ -4171,6 +4176,64 @@ out_dec:
 	gdev->reset_depth = 0;
 }
 EXPORT_SYMBOL_GPL(pci_dev_reset_iommu_done);
+
+static void iommu_group_broken_worker(struct work_struct *work)
+{
+	struct group_device *gdev =
+		container_of(work, struct group_device, broken_work);
+	struct iommu_group *group = gdev->dev->iommu_group;
+
+	mutex_lock(&group->mutex);
+
+	if (gdev->quarantined || gdev->reset_depth)
+		goto out_unlock;
+
+	/*
+	 * Quarantine the device completely. For a PCI device, it will be lifted
+	 * upon a pci_dev_reset_iommu_done() call indicating the recovery.
+	 *
+	 * For a non-PCI device, currently it has no recovery framework tied to
+	 * the IOMMU subsystem. Quarantine it indefinitely until a recovery path
+	 * is introduced.
+	 */
+	if (!WARN_ON(__iommu_group_block_device(group, gdev->dev))) {
+		dev_warn(gdev->dev, "IOMMU has quarantined the device\n");
+		gdev->quarantined = true;
+	}
+
+out_unlock:
+	mutex_unlock(&group->mutex);
+	iommu_group_put(group);
+}
+
+void iommu_report_device_broken(struct device *dev)
+{
+	struct iommu_group *group = iommu_group_get(dev);
+	struct group_device *gdev;
+	bool scheduled = false;
+	bool found = false;
+
+	if (!group)
+		return;
+	if (!dev_has_iommu(dev))
+		goto out;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(gdev, &group->devices, list) {
+		if (gdev->dev != dev)
+			continue;
+		/* iommu_group_broken_worker() must put the group */
+		scheduled = schedule_work(&gdev->broken_work);
+		found = true;
+		break;
+	}
+	WARN_ON(!found);
+	rcu_read_unlock();
+out:
+	if (!scheduled)
+		iommu_group_put(group);
+}
+EXPORT_SYMBOL_GPL(iommu_report_device_broken);
 
 #if IS_ENABLED(CONFIG_IRQ_MSI_IOMMU)
 /**
