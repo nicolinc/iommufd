@@ -646,7 +646,10 @@ __iommu_copy_struct_to_user(const struct iommu_user_data *dst_data,
  *                  group and attached to the groups domain
  * @reset_device_done: Notify the driver that a device has reset successfully.
  *                     Note that the core invokes the callback function while
- *                     holding the group->mutex
+ *                     holding the group->mutex. Before returning, the driver
+ *                     must drain or filter pre-reset fault reports so that
+ *                     subsequent calls to iommu_report_device_broken() will
+ *                     reflect only post-reset faults.
  * @device_group: find iommu group for a particular device
  * @get_resv_regions: Request list of reserved regions for a device
  * @of_xlate: add OF master IDs to iommu grouping
@@ -910,6 +913,8 @@ static inline struct iommu_device *__iommu_get_iommu_dev(struct device *dev)
 
 #define iommu_get_iommu_dev(dev, type, member) \
 	container_of(__iommu_get_iommu_dev(dev), type, member)
+
+void iommu_report_device_broken(struct device *dev);
 
 static inline void iommu_iotlb_gather_init(struct iommu_iotlb_gather *gather)
 {
@@ -1225,6 +1230,10 @@ struct iommu_fault_param {};
 struct iommu_iotlb_gather {};
 struct iommu_dirty_bitmap {};
 struct iommu_dirty_ops {};
+
+static inline void iommu_report_device_broken(struct device *dev)
+{
+}
 
 static inline bool device_iommu_capable(struct device *dev, enum iommu_cap cap)
 {

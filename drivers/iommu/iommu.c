@@ -81,6 +81,7 @@ enum gdev_blocked {
 	BLOCKED_NO = 0, /* Not blocked */
 	BLOCKED_RESETTING, /* PCI reset in flight */
 	BLOCKED_RESET_FAILED, /* PCI reset failed */
+	BLOCKED_BROKEN, /* Driver flagged a fault */
 };
 
 struct group_device {
@@ -95,6 +96,9 @@ struct group_device {
 	enum gdev_blocked blocked;
 	unsigned int reset_depth;
 	struct rcu_head rcu;
+	struct work_struct broken_work;
+	/* Transient state before broken_worker thread starts */
+	bool broken_pending;
 };
 
 /* Iterate over each struct group_device in a struct iommu_group */
@@ -199,6 +203,7 @@ static ssize_t iommu_group_store_type(struct iommu_group *group,
 static struct group_device *iommu_group_alloc_device(struct iommu_group *group,
 						     struct device *dev);
 static void __iommu_group_free_device(struct group_device *grp_dev);
+static void iommu_group_broken_worker(struct work_struct *work);
 static void iommu_domain_init(struct iommu_domain *domain, unsigned int type,
 			      const struct iommu_ops *ops);
 
@@ -790,6 +795,12 @@ static void __iommu_group_free_device(struct group_device *grp_dev)
 	sysfs_remove_link(group->devices_kobj, grp_dev->name);
 	sysfs_remove_link(&dev->kobj, "iommu_group");
 
+	/*
+	 * Disable (not just cancel) broken_work to prevent UAF; otherwise a
+	 * concurrent schedule_work() from iommu_report_device_broken() would
+	 * queue onto an about-to-be-freed gdev.
+	 */
+	disable_work_sync(&grp_dev->broken_work);
 	trace_remove_device_from_group(group->id, dev);
 
 	kfree(grp_dev->name);
@@ -1328,6 +1339,7 @@ static struct group_device *iommu_group_alloc_device(struct iommu_group *group,
 	device->group = group;
 	/* Keep dev alive for any in-flight RCU reader of grp_dev->dev. */
 	get_device(dev);
+	INIT_WORK(&device->broken_work, iommu_group_broken_worker);
 
 	ret = sysfs_create_link(&dev->kobj, &group->kobj, "iommu_group");
 	if (ret)
@@ -4240,9 +4252,12 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev,
 	/*
 	 * PCI_RESET_SKIPPED indicates no physical reset occurred. It is okay to
 	 * revert a prepare() call. But the device must remain blocked if it was
-	 * blocked for any reason other than BLOCKED_RESETTING.
+	 * blocked for any reason other than BLOCKED_RESETTING or if there is a
+	 * pending "broken" report.
 	 */
-	if (result == PCI_RESET_SKIPPED && gdev->blocked != BLOCKED_RESETTING)
+	if (result == PCI_RESET_SKIPPED &&
+	    (gdev->blocked != BLOCKED_RESETTING ||
+	     READ_ONCE(gdev->broken_pending)))
 		return;
 
 	if (group_device_dma_alias_is_blocked(gdev)) {
@@ -4269,8 +4284,18 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev,
 	 * Note: PCI_RESET_SKIPPED indicates that no physical reset occurred to
 	 * the device. Thus, do not notify the driver in that case.
 	 */
-	if (result != PCI_RESET_SKIPPED && ops->reset_device_done)
-		ops->reset_device_done(&pdev->dev);
+	if (result != PCI_RESET_SKIPPED) {
+		if (ops->reset_device_done)
+			ops->reset_device_done(&pdev->dev);
+		/*
+		 * Clear broken_pending after the reset_device_done callback to
+		 * neutralize any stale pre-reset report. Until this moment, a
+		 * driver may call iommu_report_device_broken() on a pre-reset
+		 * fault. Legitimate post-reset reports can only fire after the
+		 * re-attach below, so this clear cannot hide them.
+		 */
+		WRITE_ONCE(gdev->broken_pending, false);
+	}
 
 	/*
 	 * Re-attach RID domain back to group->domain
@@ -4311,6 +4336,106 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev,
 		group->recovery_cnt--;
 }
 EXPORT_SYMBOL_GPL(pci_dev_reset_iommu_done);
+
+static void iommu_group_broken_worker(struct work_struct *work)
+{
+	struct group_device *gdev =
+		container_of(work, struct group_device, broken_work);
+	struct iommu_group *group = gdev->group;
+	struct device *dev = gdev->dev;
+
+	guard(mutex)(&group->mutex);
+
+	/*
+	 * iommu_deinit_device() frees dev->iommu under group->mutex. Bail
+	 * out if the device has already been removed from IOMMU handling.
+	 */
+	if (!dev_has_iommu(dev))
+		return;
+
+	/*
+	 * A successful reset between schedule_work() and now would have cleared
+	 * broken_pending. Skip — the device has already been recovered.
+	 */
+	if (!READ_ONCE(gdev->broken_pending))
+		return;
+
+	/*
+	 * Quarantine the device completely. For a PCI device, it will be lifted
+	 * upon a pci_dev_reset_iommu_done(pdev, reset_rc=0) call indicating a
+	 * device recovery.
+	 *
+	 * For a non-PCI device, currently it has no recovery framework tied to
+	 * the IOMMU subsystem. Quarantine it indefinitely until a recovery path
+	 * is introduced.
+	 */
+	if (WARN_ON(__iommu_group_block_device(gdev, BLOCKED_BROKEN)))
+		return;
+
+	dev_warn(dev, "IOMMU has quarantined the device\n");
+	WRITE_ONCE(gdev->broken_pending, false);
+}
+
+/**
+ * iommu_report_device_broken() - Report a broken device to quarantine it
+ * @dev: Device that has encountered an unrecoverable IOMMU-related error
+ *
+ * When an IOMMU driver detects a critical error caused by a device (e.g. an ATC
+ * invalidation timeout), this function should be used to quarantine the device
+ * at the IOMMU core level.
+ *
+ * The quarantine moves the device's RID and PASIDs to group->blocking_domain to
+ * prevent any further DMA/ATS activity that can potentially corrupt the system
+ * memory due to stale device cache entries.
+ *
+ * This function must not be called from a reset_device_done callback: setting
+ * broken_pending there would race the clear in pci_dev_reset_iommu_done() that
+ * follows. Otherwise, this function is safe to call from any context (including
+ * interrupt handlers), as the actual quarantine is done in an asynchronous work
+ * thread. The caller should have already taken driver-level measures (e.g., ATS
+ * disabled in HW) to contain the fault promptly before calling this function.
+ *
+ * An asynchronous reset can occur while the driver is handling an IOMMU-related
+ * error. The driver is responsible for calling this only for post-reset faults.
+ * A queued or delayed pre-reset fault must be drained or filtered by the driver
+ * before delivery. Otherwise, a stale report would falsely quarantine a freshly
+ * recovered device.
+ *
+ * For PCI devices, the quarantine will be lifted by a successful device reset
+ * via pci_dev_reset_iommu_done(). For non-PCI devices, the quarantine remains
+ * in effect indefinitely until a recovery mechanism is introduced.
+ *
+ * If the device is concurrently being removed or has already been removed from
+ * the IOMMU subsystem, this function will silently return without any action.
+ */
+void iommu_report_device_broken(struct device *dev)
+{
+	struct group_device *gdev;
+
+	/*
+	 * We cannot hold group->mutex here. Rely on iommu_group_broken_worker()
+	 * to validate dev_has_iommu(). The iommu_group memory is RCU-protected
+	 * via kfree_rcu() in iommu_group_release(), and group->devices is an
+	 * RCU-protected list, so the lookup runs entirely under rcu_read_lock.
+	 *
+	 * Note the device might have been concurrently removed from the group
+	 * (list_del_rcu) before iommu_deinit_device() cleared the dev->iommu.
+	 */
+	rcu_read_lock();
+	gdev = __dev_to_gdev_rcu(dev);
+	if (gdev) {
+		/*
+		 * Narrow chance we re-set broken_pending right after a concurrent
+		 * worker cleared it. Benign: the worker we are queueing here will
+		 * read it true and clear it again (skipping if already blocked);
+		 * pci_dev_reset_iommu_done() also clears it on a successful reset.
+		 */
+		WRITE_ONCE(gdev->broken_pending, true);
+		schedule_work(&gdev->broken_work);
+	}
+	rcu_read_unlock();
+}
+EXPORT_SYMBOL_GPL(iommu_report_device_broken);
 
 #if IS_ENABLED(CONFIG_IRQ_MSI_IOMMU)
 /**
