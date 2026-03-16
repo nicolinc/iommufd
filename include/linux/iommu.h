@@ -891,6 +891,8 @@ static inline struct iommu_device *__iommu_get_iommu_dev(struct device *dev)
 #define iommu_get_iommu_dev(dev, type, member) \
 	container_of(__iommu_get_iommu_dev(dev), type, member)
 
+void iommu_report_device_broken(struct device *dev);
+
 static inline void iommu_iotlb_gather_init(struct iommu_iotlb_gather *gather)
 {
 	*gather = (struct iommu_iotlb_gather) {

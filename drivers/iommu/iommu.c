@@ -55,6 +55,8 @@ struct iommu_group {
 	struct list_head devices;
 	struct xarray pasid_array;
 	struct mutex mutex;
+	struct work_struct broken_work;
+	bool requires_reset;
 	void *iommu_data;
 	void (*iommu_data_release)(void *iommu_data);
 	char *name;
@@ -146,6 +148,7 @@ static struct group_device *iommu_group_alloc_device(struct iommu_group *group,
 						     struct device *dev);
 static void __iommu_group_free_device(struct iommu_group *group,
 				      struct group_device *grp_dev);
+static void iommu_group_broken_worker(struct work_struct *work);
 static void iommu_domain_init(struct iommu_domain *domain, unsigned int type,
 			      const struct iommu_ops *ops);
 
@@ -1057,6 +1060,7 @@ struct iommu_group *iommu_group_alloc(void)
 	if (!group)
 		return ERR_PTR(-ENOMEM);
 
+	INIT_WORK(&group->broken_work, iommu_group_broken_worker);
 	group->kobj.kset = iommu_group_kset;
 	mutex_init(&group->mutex);
 	INIT_LIST_HEAD(&group->devices);
@@ -4031,6 +4035,7 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev)
 	if (WARN_ON(!group->blocking_domain))
 		return;
 
+	WRITE_ONCE(group->requires_reset, false);
 	/*
 	 * A PCI device might have been in an error state, so the IOMMU driver
 	 * had to quarantine the device by disabling specific hardware feature
@@ -4061,6 +4066,60 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev)
 	group->resetting_domain = NULL;
 }
 EXPORT_SYMBOL_GPL(pci_dev_reset_iommu_done);
+
+static void iommu_group_broken_worker(struct work_struct *work)
+{
+	struct iommu_group *group =
+		container_of(work, struct iommu_group, broken_work);
+	struct pci_dev *pdev = NULL;
+	struct device *dev;
+
+	scoped_guard(mutex, &group->mutex) {
+		/* Do not block the device again if it has been recovered */
+		if (!READ_ONCE(group->requires_reset))
+			goto out_put;
+		if (list_is_singular(&group->devices)) {
+			/* Note: only support group with a single device */
+			dev = iommu_group_first_dev(group);
+			if (dev_is_pci(dev)) {
+				pdev = to_pci_dev(dev);
+				pci_dev_get(pdev);
+			}
+		}
+	}
+
+	if (pdev) {
+		/*
+		 * Quarantine the device completely. This will be cleared upon
+		 * a pci_dev_reset_iommu_done() call indicating the recovery.
+		 */
+		pci_dev_lock(pdev);
+		pci_dev_reset_iommu_prepare(pdev);
+		pci_dev_unlock(pdev);
+		pci_dev_put(pdev);
+	}
+out_put:
+	iommu_group_put(group);
+}
+
+void iommu_report_device_broken(struct device *dev)
+{
+	struct iommu_group *group = iommu_group_get(dev);
+
+	if (!group)
+		return;
+
+	if (READ_ONCE(group->requires_reset)) {
+		iommu_group_put(group);
+		return;
+	}
+	WRITE_ONCE(group->requires_reset, true);
+
+	/* Put the group now or later in iommu_group_broken_worker() */
+	if (!schedule_work(&group->broken_work))
+		iommu_group_put(group);
+}
+EXPORT_SYMBOL_GPL(iommu_report_device_broken);
 
 #if IS_ENABLED(CONFIG_IRQ_MSI_IOMMU)
 /**
