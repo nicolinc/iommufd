@@ -73,6 +73,7 @@ struct iommu_group {
 };
 
 struct group_device {
+	struct iommu_group *group;
 	struct list_head list;
 	struct device *dev;
 	char *name;
@@ -81,10 +82,12 @@ struct group_device {
 	 * retained. This can happen when:
 	 *  - Device is undergoing a reset
 	 *  - Device failed the last reset
+	 *  - Device is broken and quarantined
 	 */
 	bool blocked;
 	unsigned int reset_depth;
 	struct rcu_head rcu;
+	struct work_struct broken_work;
 };
 
 /* Iterate over each struct group_device in a struct iommu_group */
@@ -170,6 +173,7 @@ static struct group_device *iommu_group_alloc_device(struct iommu_group *group,
 						     struct device *dev);
 static void __iommu_group_free_device(struct iommu_group *group,
 				      struct group_device *grp_dev);
+static void iommu_group_broken_worker(struct work_struct *work);
 static void iommu_domain_init(struct iommu_domain *domain, unsigned int type,
 			      const struct iommu_ops *ops);
 
@@ -752,6 +756,8 @@ static void __iommu_group_free_device(struct iommu_group *group,
 	sysfs_remove_link(group->devices_kobj, grp_dev->name);
 	sysfs_remove_link(&dev->kobj, "iommu_group");
 
+	/* Must wait for broken_work to prevent UAF */
+	cancel_work_sync(&grp_dev->broken_work);
 	trace_remove_device_from_group(group->id, dev);
 
 	kfree(grp_dev->name);
@@ -1284,6 +1290,8 @@ static struct group_device *iommu_group_alloc_device(struct iommu_group *group,
 		return ERR_PTR(-ENOMEM);
 
 	device->dev = dev;
+	device->group = group;
+	INIT_WORK(&device->broken_work, iommu_group_broken_worker);
 
 	ret = sysfs_create_link(&dev->kobj, &group->kobj, "iommu_group");
 	if (ret)
@@ -4190,6 +4198,98 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev, bool reset_succeeds)
 		group->recovery_cnt--;
 }
 EXPORT_SYMBOL_GPL(pci_dev_reset_iommu_done);
+
+static void iommu_group_broken_worker(struct work_struct *work)
+{
+	struct group_device *gdev =
+		container_of(work, struct group_device, broken_work);
+	struct iommu_group *group = gdev->group;
+	struct device *dev = gdev->dev;
+
+	mutex_lock(&group->mutex);
+
+	/*
+	 * iommu_deinit_device() frees dev->iommu under group->mutex. Bail
+	 * out if the device has already been removed from IOMMU handling.
+	 */
+	if (!dev_has_iommu(dev))
+		goto out_unlock;
+
+	if (gdev->blocked) {
+		dev_dbg(dev, "IOMMU has already quarantined the device\n");
+		goto out_unlock;
+	}
+
+	/*
+	 * Quarantine the device completely. For a PCI device, it will be lifted
+	 * upon a pci_dev_reset_iommu_done(pdev, succeeds=true) call indicating
+	 * a device recovery.
+	 *
+	 * For a non-PCI device, currently it has no recovery framework tied to
+	 * the IOMMU subsystem. Quarantine it indefinitely until a recovery path
+	 * is introduced.
+	 */
+	if (!WARN_ON(__iommu_group_block_device(group, gdev)))
+		dev_warn(dev, "IOMMU has quarantined the device\n");
+
+out_unlock:
+	mutex_unlock(&group->mutex);
+	iommu_group_put(group);
+}
+
+/**
+ * iommu_report_device_broken() - Report a broken device to quarantine it
+ * @dev: Device that has encountered an unrecoverable IOMMU-related error
+ *
+ * When an IOMMU driver detects a critical error caused by a device (e.g. an ATC
+ * invalidation timeout), this function should be used to quarantine the device
+ * at the IOMMU core level.
+ *
+ * The quarantine moves the device's RID and PASIDs to group->blocking_domain to
+ * prevent any further DMA/ATS activity that can potentially corrupt the system
+ * memory due to stale device cache entries.
+ *
+ * This function is safe to call from any context, including interrupt handlers,
+ * as it schedules the actual quarantine work asynchronously. The caller should
+ * have already taken driver-level measures (e.g., disabling ATS in hardware) to
+ * contain the fault immediately, before calling this function.
+ *
+ * For PCI devices, the quarantine will be lifted by a successful device reset
+ * via pci_dev_reset_iommu_done(). For non-PCI devices, the quarantine remains
+ * in effect indefinitely until a recovery mechanism is introduced.
+ *
+ * If the device is concurrently being removed or has already been removed from
+ * the IOMMU subsystem, this function will silently return without any action.
+ */
+void iommu_report_device_broken(struct device *dev)
+{
+	struct iommu_group *group = iommu_group_get(dev);
+	struct group_device *gdev;
+	bool scheduled = false;
+
+	if (!group)
+		return;
+	if (!dev_has_iommu(dev))
+		goto out;
+
+	rcu_read_lock();
+	/*
+	 * Note the device might have been concurrently removed from the group
+	 * (list_del_rcu) before iommu_deinit_device() cleared the dev->iommu.
+	 */
+	list_for_each_entry_rcu(gdev, &group->devices, list) {
+		if (gdev->dev != dev)
+			continue;
+		/* iommu_group_broken_worker() must put the group ref */
+		scheduled = schedule_work(&gdev->broken_work);
+		break;
+	}
+	rcu_read_unlock();
+out:
+	if (!scheduled)
+		iommu_group_put(group);
+}
+EXPORT_SYMBOL_GPL(iommu_report_device_broken);
 
 #if IS_ENABLED(CONFIG_IRQ_MSI_IOMMU)
 /**
