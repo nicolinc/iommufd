@@ -2523,6 +2523,10 @@ static int arm_smmu_atc_inv_master(struct arm_smmu_master *master,
 	struct arm_smmu_cmdq_ent cmd;
 	struct arm_smmu_cmdq_batch cmds;
 
+	/* Do not issue ATC_INV that will definitely time out */
+	if (READ_ONCE(master->ats_broken))
+		return 0;
+
 	arm_smmu_atc_inv_to_cmd(ssid, 0, 0, &cmd);
 
 	arm_smmu_cmdq_batch_init(master->smmu, &cmds, &cmd);
@@ -2729,11 +2733,17 @@ static void __arm_smmu_domain_inv_range(struct arm_smmu_invs *invs,
 			arm_smmu_cmdq_batch_add(smmu, &cmds, &cmd);
 			break;
 		case INV_TYPE_ATS:
+			/* Do not issue ATC_INV that will definitely time out */
+			if (READ_ONCE(cur->master->ats_broken))
+				break;
 			arm_smmu_atc_inv_to_cmd(cur->ssid, iova, size, &cmd);
 			cmd.atc.sid = cur->id;
 			arm_smmu_cmdq_batch_add(smmu, &cmds, &cmd);
 			break;
 		case INV_TYPE_ATS_FULL:
+			/* Do not issue ATC_INV that will definitely time out */
+			if (READ_ONCE(cur->master->ats_broken))
+				break;
 			arm_smmu_atc_inv_to_cmd(IOMMU_NO_PASID, 0, 0, &cmd);
 			cmd.atc.sid = cur->id;
 			arm_smmu_cmdq_batch_add(smmu, &cmds, &cmd);
@@ -3069,6 +3079,15 @@ void arm_smmu_install_ste_for_dev(struct arm_smmu_master *master,
 	}
 }
 
+static void arm_smmu_reset_device_done(struct device *dev)
+{
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+
+	if (WARN_ON(!master))
+		return;
+	WRITE_ONCE(master->ats_broken, false);
+}
+
 static bool arm_smmu_ats_supported(struct arm_smmu_master *master)
 {
 	struct device *dev = master->dev;
@@ -3079,6 +3098,14 @@ static bool arm_smmu_ats_supported(struct arm_smmu_master *master)
 		return false;
 
 	if (!(fwspec->flags & IOMMU_FWSPEC_PCI_RC_ATS))
+		return false;
+
+	/*
+	 * Do not enable ATS if master->ats_broken is set. The PCI device should
+	 * go through a recovery (reset) that shall notify the SMMUv3 driver via
+	 * a reset_device_done callback.
+	 */
+	if (READ_ONCE(master->ats_broken))
 		return false;
 
 	return dev_is_pci(dev) && pci_ats_supported(to_pci_dev(dev));
@@ -4412,6 +4439,7 @@ static const struct iommu_ops arm_smmu_ops = {
 	.domain_alloc_paging_flags = arm_smmu_domain_alloc_paging_flags,
 	.probe_device		= arm_smmu_probe_device,
 	.release_device		= arm_smmu_release_device,
+	.reset_device_done	= arm_smmu_reset_device_done,
 	.device_group		= arm_smmu_device_group,
 	.of_xlate		= arm_smmu_of_xlate,
 	.get_resv_regions	= arm_smmu_get_resv_regions,
