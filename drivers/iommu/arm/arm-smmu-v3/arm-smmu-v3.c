@@ -1990,7 +1990,8 @@ void arm_smmu_make_s2_domain_ste(struct arm_smmu_ste *target,
 	u64 vtcr_val;
 	struct arm_smmu_device *smmu = master->smmu;
 
-	WARN_ON(tag->type != INV_TYPE_S2_VMID);
+	WARN_ON(tag->type != INV_TYPE_S2_VMID &&
+		tag->type != INV_TYPE_S2_VMID_VSMMU);
 
 	memset(target, 0, sizeof(*target));
 	target->data[0] = cpu_to_le64(
@@ -2690,6 +2691,7 @@ static void __arm_smmu_domain_inv_range(struct arm_smmu_invs *invs,
 						   granule);
 			break;
 		case INV_TYPE_S2_VMID:
+		case INV_TYPE_S2_VMID_VSMMU:
 			cmd.tlbi.vmid = cur->id;
 			cmd.tlbi.leaf = leaf;
 			arm_smmu_inv_to_cmdq_batch(cur, &cmds, &cmd, iova, size,
@@ -3264,6 +3266,20 @@ int arm_smmu_find_iotlb_tag(struct arm_smmu_device *smmu,
 		tag->type = INV_TYPE_S1_ASID;
 		break;
 	case ARM_SMMU_DOMAIN_S2:
+		if (to_vsmmu(domain)) {
+			/*
+			 * VMID for VSMMU is pre-allocated in arm_vsmmu_init().
+			 * Return that directly.
+			 */
+			WARN_ON(to_vsmmu(domain)->vmid == 0);
+			tag->nsize_opcode = CMDQ_OP_TLBI_S12_VMALL;
+			tag->size_opcode = CMDQ_OP_TLBI_S2_IPA;
+			tag->type = INV_TYPE_S2_VMID_VSMMU;
+			tag->id = to_vsmmu(domain)->vmid;
+			tag->smmu = smmu;
+			tag->users = 1;
+			return 0;
+		}
 		tag->type = INV_TYPE_S2_VMID;
 		break;
 	default:
@@ -3342,6 +3358,7 @@ arm_smmu_master_build_inv(struct arm_smmu_master *master,
 		}
 		break;
 	case INV_TYPE_S2_VMID:
+	case INV_TYPE_S2_VMID_VSMMU:
 		cur->size_opcode = CMDQ_OP_TLBI_S2_IPA;
 		cur->nsize_opcode = CMDQ_OP_TLBI_S12_VMALL;
 		break;
