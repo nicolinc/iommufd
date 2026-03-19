@@ -3950,6 +3950,40 @@ err_unlock:
 }
 EXPORT_SYMBOL_NS_GPL(iommu_replace_group_handle, "IOMMUFD_INTERNAL");
 
+static int __iommu_group_block_device(struct iommu_group *group,
+				      struct device *dev)
+{
+	unsigned long pasid;
+	void *entry;
+	int ret;
+
+	lockdep_assert_held(&group->mutex);
+
+	ret = __iommu_group_alloc_blocking_domain(group);
+	if (ret)
+		return ret;
+
+	/* Stage RID domain at blocking_domain while retaining group->domain */
+	if (group->domain != group->blocking_domain) {
+		ret = __iommu_attach_device(group->blocking_domain, dev,
+					    group->domain);
+		if (ret)
+			return ret;
+	}
+
+	/*
+	 * Stage PASID domains at blocking_domain while retaining pasid_array.
+	 *
+	 * The pasid_array is mostly fenced by group->mutex, except one reader
+	 * in iommu_attach_handle_get(), so it's safe to read without xa_lock.
+	 */
+	xa_for_each_start(&group->pasid_array, pasid, entry, 1)
+		iommu_remove_dev_pasid(dev, pasid,
+				       pasid_array_entry_to_domain(entry));
+
+	return 0;
+}
+
 /**
  * pci_dev_reset_iommu_prepare() - Block IOMMU to prepare for a PCI device reset
  * @pdev: PCI device that is going to enter a reset routine
@@ -3979,8 +4013,6 @@ int pci_dev_reset_iommu_prepare(struct pci_dev *pdev)
 {
 	struct iommu_group *group = pdev->dev.iommu_group;
 	struct group_device *gdev;
-	unsigned long pasid;
-	void *entry;
 	int ret;
 
 	if (!pci_ats_supported(pdev) || !dev_has_iommu(&pdev->dev))
@@ -4006,34 +4038,14 @@ int pci_dev_reset_iommu_prepare(struct pci_dev *pdev)
 		return 0;
 	}
 
-	ret = __iommu_group_alloc_blocking_domain(group);
-	if (ret)
-		goto err_depth;
-
-	/* Stage RID domain at blocking_domain while retaining group->domain */
-	if (group->domain != group->blocking_domain) {
-		ret = __iommu_attach_device(group->blocking_domain, &pdev->dev,
-					    group->domain);
-		if (ret)
-			goto err_depth;
+	ret = __iommu_group_block_device(group, &pdev->dev);
+	if (ret) {
+		gdev->reset_depth--;
+		return ret;
 	}
 
-	/*
-	 * Stage PASID domains at blocking_domain while retaining pasid_array.
-	 *
-	 * The pasid_array is mostly fenced by group->mutex, except one reader
-	 * in iommu_attach_handle_get(), so it's safe to read without xa_lock.
-	 */
-	xa_for_each_start(&group->pasid_array, pasid, entry, 1)
-		iommu_remove_dev_pasid(&pdev->dev, pasid,
-				       pasid_array_entry_to_domain(entry));
-
 	group->reset_cnt++;
-	return ret;
-
-err_depth:
-	gdev->reset_depth--;
-	return ret;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(pci_dev_reset_iommu_prepare);
 
