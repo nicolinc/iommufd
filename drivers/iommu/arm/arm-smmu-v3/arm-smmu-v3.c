@@ -3726,6 +3726,35 @@ void arm_smmu_attach_commit(struct arm_smmu_attach_state *state)
 	master->ats_enabled = state->ats_enabled;
 }
 
+bool arm_smmu_domain_can_share(struct arm_smmu_domain *smmu_domain,
+			       struct arm_smmu_device *new_smmu)
+{
+	struct io_pgtable *pgtbl;
+
+	if (!smmu_domain->pgtbl_ops)
+		return true;
+	pgtbl = io_pgtable_ops_to_pgtable(smmu_domain->pgtbl_ops);
+
+	if (pgtbl->fmt == ARM_64_LPAE_S1 &&
+	    !(new_smmu->features & ARM_SMMU_FEAT_TRANS_S1))
+		return false;
+	if (pgtbl->fmt == ARM_64_LPAE_S2 &&
+	    !(new_smmu->features & ARM_SMMU_FEAT_TRANS_S2))
+		return false;
+	if (!(new_smmu->pgsize_bitmap &
+	      BIT(__ffs(smmu_domain->domain.pgsize_bitmap))))
+		return false;
+	if (pgtbl->cfg.oas > new_smmu->oas)
+		return false;
+	if (pgtbl->cfg.coherent_walk &&
+	    !(new_smmu->features & ARM_SMMU_FEAT_COHERENCY))
+		return false;
+	if ((pgtbl->cfg.quirks & IO_PGTABLE_QUIRK_ARM_S2FWB) &&
+	    !(new_smmu->features & ARM_SMMU_FEAT_S2FWB))
+		return false;
+	return true;
+}
+
 static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev,
 			       struct iommu_domain *old_domain)
 {
@@ -3747,7 +3776,7 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev,
 	state.master = master = dev_iommu_priv_get(dev);
 	smmu = master->smmu;
 
-	if (smmu_domain->smmu != smmu)
+	if (!arm_smmu_domain_can_share(smmu_domain, smmu))
 		return -EINVAL;
 
 	if (smmu_domain->stage == ARM_SMMU_DOMAIN_S1) {
@@ -3810,7 +3839,7 @@ static int arm_smmu_s1_set_dev_pasid(struct iommu_domain *domain,
 	struct arm_smmu_device *smmu = master->smmu;
 	struct arm_smmu_cd target_cd;
 
-	if (smmu_domain->smmu != smmu)
+	if (!arm_smmu_domain_can_share(smmu_domain, smmu))
 		return -EINVAL;
 
 	if (smmu_domain->stage != ARM_SMMU_DOMAIN_S1)
@@ -3862,7 +3891,7 @@ int arm_smmu_set_pasid(struct arm_smmu_master *master,
 
 	/* The core code validates pasid */
 
-	if (smmu_domain->smmu != master->smmu)
+	if (!arm_smmu_domain_can_share(smmu_domain, master->smmu))
 		return -EINVAL;
 
 	if (!master->cd_table.in_ste &&

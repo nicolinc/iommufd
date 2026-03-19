@@ -986,6 +986,9 @@ struct arm_smmu_nested_domain {
 	__le64 ste[2];
 };
 
+bool arm_smmu_domain_can_share(struct arm_smmu_domain *smmu_domain,
+			       struct arm_smmu_device *new_smmu);
+
 /* The following are exposed for testing purposes. */
 struct arm_smmu_entry_writer_ops;
 struct arm_smmu_entry_writer {
