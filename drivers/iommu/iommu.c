@@ -3985,6 +3985,57 @@ err_unlock:
 }
 EXPORT_SYMBOL_NS_GPL(iommu_replace_group_handle, "IOMMUFD_INTERNAL");
 
+static int __iommu_group_block_device(struct group_device *gdev)
+{
+	struct iommu_group *group = gdev->group;
+	unsigned long pasid;
+	void *entry;
+	int ret;
+
+	lockdep_assert_held(&group->mutex);
+
+	/* Device might be already blocked for a quarantine */
+	if (gdev->blocked)
+		return 0;
+
+	ret = __iommu_group_alloc_blocking_domain(group);
+	if (ret)
+		return ret;
+
+	/* Stage RID domain at blocking_domain while retaining group->domain */
+	if (group->domain != group->blocking_domain) {
+		ret = __iommu_attach_device(group->blocking_domain, gdev->dev,
+					    group->domain);
+		if (ret)
+			return ret;
+	}
+
+	/*
+	 * Update gdev->blocked upon the domain change, as it is used to return
+	 * the correct domain in iommu_driver_get_domain_for_dev() that might be
+	 * called in a set_dev_pasid callback function.
+	 */
+	gdev->blocked = true;
+
+	/*
+	 * Stage PASID domains at blocking_domain while retaining pasid_array.
+	 *
+	 * The pasid_array is mostly fenced by group->mutex, except one reader
+	 * in iommu_attach_handle_get(), so it's safe to read without xa_lock.
+	 */
+	if (gdev->dev->iommu->max_pasids > 0) {
+		xa_for_each_start(&group->pasid_array, pasid, entry, 1) {
+			struct iommu_domain *pasid_dom =
+				pasid_array_entry_to_domain(entry);
+
+			iommu_remove_dev_pasid(gdev->dev, pasid, pasid_dom);
+		}
+	}
+
+	group->recovery_cnt++;
+	return 0;
+}
+
 /**
  * pci_dev_reset_iommu_prepare() - Block IOMMU to prepare for a PCI device reset
  * @pdev: PCI device that is going to enter a reset routine
@@ -4015,8 +4066,6 @@ int pci_dev_reset_iommu_prepare(struct pci_dev *pdev)
 {
 	struct iommu_group *group = pdev->dev.iommu_group;
 	struct group_device *gdev;
-	unsigned long pasid;
-	void *entry;
 	int ret;
 
 	if (!pci_ats_supported(pdev) || !dev_has_iommu(&pdev->dev))
@@ -4031,45 +4080,9 @@ int pci_dev_reset_iommu_prepare(struct pci_dev *pdev)
 	if (gdev->reset_depth++)
 		return 0;
 
-	ret = __iommu_group_alloc_blocking_domain(group);
-	if (ret) {
+	ret = __iommu_group_block_device(gdev);
+	if (ret)
 		gdev->reset_depth--;
-		return ret;
-	}
-
-	/* Stage RID domain at blocking_domain while retaining group->domain */
-	if (group->domain != group->blocking_domain) {
-		ret = __iommu_attach_device(group->blocking_domain, &pdev->dev,
-					    group->domain);
-		if (ret) {
-			gdev->reset_depth--;
-			return ret;
-		}
-	}
-
-	/*
-	 * Update gdev->blocked upon the domain change, as it is used to return
-	 * the correct domain in iommu_driver_get_domain_for_dev() that might be
-	 * called in a set_dev_pasid callback function.
-	 */
-	gdev->blocked = true;
-
-	/*
-	 * Stage PASID domains at blocking_domain while retaining pasid_array.
-	 *
-	 * The pasid_array is mostly fenced by group->mutex, except one reader
-	 * in iommu_attach_handle_get(), so it's safe to read without xa_lock.
-	 */
-	if (pdev->dev.iommu->max_pasids > 0) {
-		xa_for_each_start(&group->pasid_array, pasid, entry, 1) {
-			struct iommu_domain *pasid_dom =
-				pasid_array_entry_to_domain(entry);
-
-			iommu_remove_dev_pasid(&pdev->dev, pasid, pasid_dom);
-		}
-	}
-
-	group->recovery_cnt++;
 	return ret;
 }
 EXPORT_SYMBOL_GPL(pci_dev_reset_iommu_prepare);
