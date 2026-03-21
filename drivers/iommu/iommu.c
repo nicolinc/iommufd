@@ -97,8 +97,10 @@ struct group_device {
 
 /* Iterate over each struct group_device in a struct iommu_group */
 #define for_each_group_device(group, pos) \
-	list_for_each_entry(pos, &(group)->devices, list)
+	list_for_each_entry_rcu(pos, &(group)->devices, list, \
+				lockdep_is_held(&(group)->mutex))
 
+/* Caller must hold dev->iommu_group->mutex. */
 static struct group_device *__dev_to_gdev(struct device *dev)
 {
 	struct iommu_group *group = dev->iommu_group;
@@ -688,7 +690,7 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 	 * The gdev must be in the list before calling
 	 * iommu_setup_default_domain()
 	 */
-	list_add_tail(&gdev->list, &group->devices);
+	list_add_tail_rcu(&gdev->list, &group->devices);
 	WARN_ON(group->default_domain && !group->domain);
 	if (group->default_domain)
 		iommu_create_device_direct_mappings(group->default_domain, dev);
@@ -719,7 +721,7 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 	return 0;
 
 err_remove_gdev:
-	list_del(&gdev->list);
+	list_del_rcu(&gdev->list);
 	__iommu_group_empty_assert_owner_cnt(group);
 err_put_group:
 	iommu_deinit_device(dev);
@@ -762,6 +764,10 @@ static void __iommu_group_free_device(struct iommu_group *group,
 	trace_remove_device_from_group(group->id, dev);
 
 	kfree(grp_dev->name);
+
+	/* Wait for any in-flight reader to drop the reference to gdev->dev */
+	synchronize_rcu();
+	put_device(grp_dev->dev);
 	kfree(grp_dev);
 }
 
@@ -779,7 +785,7 @@ static void __iommu_group_remove_device(struct device *dev)
 		/* Must drop the recovery_cnt when removing a blocked device */
 		if (device->blocked && !WARN_ON(group->recovery_cnt == 0))
 			group->recovery_cnt--;
-		list_del(&device->list);
+		list_del_rcu(&device->list);
 		__iommu_group_empty_assert_owner_cnt(group);
 		if (dev_has_iommu(dev))
 			iommu_deinit_device(dev);
@@ -1298,6 +1304,8 @@ static struct group_device *iommu_group_alloc_device(struct iommu_group *group,
 		return ERR_PTR(-ENOMEM);
 
 	device->dev = dev;
+	/* Keep dev alive for any in-flight RCU reader of grp_dev->dev. */
+	get_device(dev);
 
 	ret = sysfs_create_link(&dev->kobj, &group->kobj, "iommu_group");
 	if (ret)
@@ -1337,6 +1345,7 @@ err_free_name:
 err_remove_link:
 	sysfs_remove_link(&dev->kobj, "iommu_group");
 err_free_device:
+	put_device(dev);
 	kfree(device);
 	dev_err(dev, "Failed to add to iommu group %d: %d\n", group->id, ret);
 	return ERR_PTR(ret);
@@ -1362,7 +1371,7 @@ int iommu_group_add_device(struct iommu_group *group, struct device *dev)
 	rcu_assign_pointer(dev_iommu_group_rcu(dev), group);
 
 	mutex_lock(&group->mutex);
-	list_add_tail(&gdev->list, &group->devices);
+	list_add_tail_rcu(&gdev->list, &group->devices);
 	mutex_unlock(&group->mutex);
 	return 0;
 }
@@ -2011,9 +2020,11 @@ static int bus_iommu_probe(const struct bus_type *bus)
 		 * FIXME: Mis-locked because the ops->probe_finalize() call-back
 		 * of some IOMMU drivers calls arm_iommu_attach_device() which
 		 * in-turn might call back into IOMMU core code, where it tries
-		 * to take group->mutex, resulting in a deadlock.
+		 * to take group->mutex, resulting in a deadlock. Unfortunately,
+		 * as iommu_group_do_probe_finalize() can sleep, rcu_read_lock()
+		 * cannot be held to mitigate this.
 		 */
-		for_each_group_device(group, gdev)
+		list_for_each_entry(gdev, &group->devices, list)
 			iommu_group_do_probe_finalize(gdev->dev);
 	}
 
