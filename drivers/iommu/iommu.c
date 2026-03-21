@@ -655,6 +655,19 @@ static struct iommu_domain *pasid_array_entry_to_domain(void *entry)
 
 DEFINE_MUTEX(iommu_probe_device_lock);
 
+static void __iommu_group_empty_assert_owner_cnt(struct iommu_group *group)
+{
+	lockdep_assert_held(&group->mutex);
+	/*
+	 * If the group has become empty, the ownership must have been released,
+	 * and the current domain must be set back to the default domain (which
+	 * itself can be NULL).
+	 */
+	if (list_empty(&group->devices))
+		WARN_ON(group->owner_cnt ||
+			group->domain != group->default_domain);
+}
+
 static int __iommu_probe_device(struct device *dev, struct list_head *group_list)
 {
 	struct iommu_group *group;
@@ -728,10 +741,12 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 
 err_remove_gdev:
 	list_del_rcu(&gdev->list);
-	__iommu_group_free_device(group, gdev);
+	__iommu_group_empty_assert_owner_cnt(group);
 err_put_group:
 	iommu_deinit_device(dev);
 	mutex_unlock(&group->mutex);
+	if (!IS_ERR(gdev))
+		__iommu_group_free_device(group, gdev);
 	iommu_group_put(group);
 
 	return ret;
@@ -769,19 +784,12 @@ static void __iommu_group_free_device(struct iommu_group *group,
 {
 	struct device *dev = grp_dev->dev;
 
+	lockdep_assert_not_held(&group->mutex);
+
 	sysfs_remove_link(group->devices_kobj, grp_dev->name);
 	sysfs_remove_link(&dev->kobj, "iommu_group");
 
 	trace_remove_device_from_group(group->id, dev);
-
-	/*
-	 * If the group has become empty then ownership must have been
-	 * released, and the current domain must be set back to NULL or
-	 * the default domain.
-	 */
-	if (list_empty(&group->devices))
-		WARN_ON(group->owner_cnt ||
-			group->domain != group->default_domain);
 
 	kfree(grp_dev->name);
 	call_rcu(&grp_dev->rcu, __iommu_group_free_device_rcu);
@@ -791,7 +799,7 @@ static void __iommu_group_free_device(struct iommu_group *group,
 static void __iommu_group_remove_device(struct device *dev)
 {
 	struct iommu_group *group = dev->iommu_group;
-	struct group_device *device;
+	struct group_device *device, *to_free = NULL;
 
 	mutex_lock(&group->mutex);
 	for_each_group_device(group, device) {
@@ -802,15 +810,18 @@ static void __iommu_group_remove_device(struct device *dev)
 		if (device->blocked && !WARN_ON(group->recovery_cnt == 0))
 			group->recovery_cnt--;
 		list_del_rcu(&device->list);
-		__iommu_group_free_device(group, device);
+		__iommu_group_empty_assert_owner_cnt(group);
 		if (dev_has_iommu(dev))
 			iommu_deinit_device(dev);
 		else
 			rcu_assign_pointer(dev_iommu_group_rcu(dev), NULL);
+		to_free = device;
 		break;
 	}
 	mutex_unlock(&group->mutex);
 
+	if (to_free)
+		__iommu_group_free_device(group, to_free);
 	/*
 	 * Pairs with the get in iommu_init_device() or
 	 * iommu_group_add_device()
