@@ -84,18 +84,20 @@ struct group_device {
 	 */
 	bool blocked;
 	unsigned int reset_depth;
+	struct rcu_head rcu;
 };
 
 /* Iterate over each struct group_device in a struct iommu_group */
 #define for_each_group_device(group, pos) \
-	list_for_each_entry(pos, &(group)->devices, list)
+	list_for_each_entry_rcu(pos, &(group)->devices, list, \
+				lockdep_is_held(&(group)->mutex))
 
 static struct group_device *__dev_to_gdev(struct device *dev)
 {
 	struct iommu_group *group = dev->iommu_group;
 	struct group_device *gdev;
 
-	lockdep_assert_held(&group->mutex);
+	lockdep_assert(lockdep_is_held(&group->mutex) || rcu_read_lock_held());
 
 	for_each_group_device(group, gdev) {
 		if (gdev->dev == dev)
@@ -666,7 +668,7 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 	 * The gdev must be in the list before calling
 	 * iommu_setup_default_domain()
 	 */
-	list_add_tail(&gdev->list, &group->devices);
+	list_add_tail_rcu(&gdev->list, &group->devices);
 	WARN_ON(group->default_domain && !group->domain);
 	if (group->default_domain)
 		iommu_create_device_direct_mappings(group->default_domain, dev);
@@ -697,7 +699,7 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 	return 0;
 
 err_remove_gdev:
-	list_del(&gdev->list);
+	list_del_rcu(&gdev->list);
 	__iommu_group_free_device(group, gdev);
 err_put_group:
 	iommu_deinit_device(dev);
@@ -745,7 +747,7 @@ static void __iommu_group_free_device(struct iommu_group *group,
 			group->domain != group->default_domain);
 
 	kfree(grp_dev->name);
-	kfree(grp_dev);
+	kfree_rcu(grp_dev, rcu);
 }
 
 /* Remove the iommu_group from the struct device. */
@@ -759,7 +761,7 @@ static void __iommu_group_remove_device(struct device *dev)
 		if (device->dev != dev)
 			continue;
 
-		list_del(&device->list);
+		list_del_rcu(&device->list);
 		__iommu_group_free_device(group, device);
 		if (dev_has_iommu(dev))
 			iommu_deinit_device(dev);
@@ -1335,7 +1337,7 @@ int iommu_group_add_device(struct iommu_group *group, struct device *dev)
 	dev->iommu_group = group;
 
 	mutex_lock(&group->mutex);
-	list_add_tail(&gdev->list, &group->devices);
+	list_add_tail_rcu(&gdev->list, &group->devices);
 	mutex_unlock(&group->mutex);
 	return 0;
 }
