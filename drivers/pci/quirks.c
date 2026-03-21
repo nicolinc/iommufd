@@ -3955,7 +3955,7 @@ static int reset_intel_82599_sfp_virtfn(struct pci_dev *dev, bool probe)
 	 * supported.
 	 */
 	if (!probe)
-		pcie_flr(dev);
+		return pcie_flr(dev);
 	return 0;
 }
 
@@ -4013,6 +4013,7 @@ static int reset_chelsio_generic_dev(struct pci_dev *dev, bool probe)
 {
 	u16 old_command;
 	u16 msix_flags;
+	int ret;
 
 	/*
 	 * If this isn't a Chelsio T4-based device, return -ENOTTY indicating
@@ -4058,16 +4059,15 @@ static int reset_chelsio_generic_dev(struct pci_dev *dev, bool probe)
 				      PCI_MSIX_FLAGS_ENABLE |
 				      PCI_MSIX_FLAGS_MASKALL);
 
-	pcie_flr(dev);
+	ret = pcie_flr(dev);
 
 	/*
 	 * Restore the configuration information (BAR values, etc.) including
-	 * the original PCI Configuration Space Command word, and return
-	 * success.
+	 * the original PCI Configuration Space Command word.
 	 */
 	pci_restore_state(dev);
 	pci_write_config_word(dev, PCI_COMMAND, old_command);
-	return 0;
+	return ret;
 }
 
 #define PCI_DEVICE_ID_INTEL_82599_SFP_VF   0x10ed
@@ -4150,9 +4150,7 @@ static int nvme_disable_and_flr(struct pci_dev *dev, bool probe)
 
 	pci_iounmap(dev, bar);
 
-	pcie_flr(dev);
-
-	return 0;
+	return pcie_flr(dev);
 }
 
 /*
@@ -4164,14 +4162,17 @@ static int nvme_disable_and_flr(struct pci_dev *dev, bool probe)
  */
 static int delay_250ms_after_flr(struct pci_dev *dev, bool probe)
 {
+	int ret;
+
 	if (probe)
 		return pcie_reset_flr(dev, PCI_RESET_PROBE);
 
-	pcie_reset_flr(dev, PCI_RESET_DO_RESET);
+	ret = pcie_reset_flr(dev, PCI_RESET_DO_RESET);
 
+	/* Settle the device even on a failed FLR */
 	msleep(250);
 
-	return 0;
+	return ret;
 }
 
 #define PCI_DEVICE_ID_HINIC_VF      0x375E
@@ -4187,6 +4188,7 @@ static int reset_hinic_vf_dev(struct pci_dev *pdev, bool probe)
 	unsigned long timeout;
 	void __iomem *bar;
 	u32 val;
+	int ret;
 
 	if (probe)
 		return 0;
@@ -4207,12 +4209,13 @@ static int reset_hinic_vf_dev(struct pci_dev *pdev, bool probe)
 	val = val | HINIC_VF_FLR_PROC_BIT;
 	iowrite32be(val, bar + HINIC_VF_OP);
 
-	pcie_flr(pdev);
+	ret = pcie_flr(pdev);
 
 	/*
 	 * The device must recapture its Bus and Device Numbers after FLR
 	 * in order generate Completions.  Issue a config write to let the
-	 * device capture this information.
+	 * device capture this information. Note that pcie_flr() can fail
+	 * after the reset is asserted. So, recapture it unconditionally.
 	 */
 	pci_write_config_word(pdev, PCI_VENDOR_ID, 0);
 
@@ -4230,11 +4233,12 @@ static int reset_hinic_vf_dev(struct pci_dev *pdev, bool probe)
 		goto reset_complete;
 
 	pci_warn(pdev, "Reset dev timeout, FLR ack reg: %#010x\n", val);
+	ret = -ETIMEDOUT;
 
 reset_complete:
 	pci_iounmap(pdev, bar);
 
-	return 0;
+	return ret;
 }
 
 static const struct pci_dev_reset_methods pci_dev_reset_methods[] = {
