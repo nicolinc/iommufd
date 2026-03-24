@@ -884,6 +884,7 @@ struct arm_smmu_device {
 	unsigned int			sid_bits;
 
 	struct arm_smmu_strtab_cfg	strtab_cfg;
+	bool				strtab_adopted;
 
 	/* IOMMU core code handle */
 	struct iommu_device		iommu;
