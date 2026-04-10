@@ -3212,6 +3212,99 @@ static void arm_smmu_disable_iopf(struct arm_smmu_master *master,
 		iopf_queue_remove_device(master->smmu->evtq.iopf, master->dev);
 }
 
+static int arm_smmu_domain_find_iotlb_tag(struct arm_smmu_domain *smmu_domain,
+					  struct arm_smmu_inv *tag)
+{
+	struct arm_smmu_invs *invs = rcu_dereference_protected(
+		smmu_domain->invs, lockdep_is_held(&arm_smmu_asid_lock));
+	size_t i;
+
+	arm_smmu_inv_assert_iotlb_tag(tag);
+
+	for (i = 0; i != invs->num_invs; i++) {
+		if (invs->inv[i].type == tag->type &&
+		    invs->inv[i].smmu == tag->smmu && invs->inv[i].users) {
+			*tag = invs->inv[i];
+			return 0;
+		}
+	}
+
+	return -ENOENT;
+}
+
+/*
+ * arm_smmu_find_iotlb_tag - Find an IOTLB cache tag in smmu_domain->invs
+ * @smmu: target SMMU instance
+ * @domain: domain that holds an invalidation array to find
+ * @tag: tag to return
+ *
+ * Return: 0 on success, or an error. Note that the returned tag's "users"
+ * counter > 0.
+ *
+ * Caller must hold arm_smmu_asid_lock.
+ */
+int arm_smmu_find_iotlb_tag(struct arm_smmu_device *smmu,
+			    struct iommu_domain *domain,
+			    struct arm_smmu_inv *tag)
+{
+	struct arm_smmu_domain *smmu_domain = to_smmu_domain_devices(domain);
+
+	lockdep_assert_held(&arm_smmu_asid_lock);
+
+	if (WARN_ON(!smmu_domain))
+		return -EINVAL;
+
+	/* Decide the type of the iotlb cache tag */
+	switch (smmu_domain->stage) {
+	case ARM_SMMU_DOMAIN_SVA:
+	case ARM_SMMU_DOMAIN_S1:
+		tag->type = INV_TYPE_S1_ASID;
+		break;
+	case ARM_SMMU_DOMAIN_S2:
+		tag->type = INV_TYPE_S2_VMID;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	tag->smmu = smmu;
+
+	return arm_smmu_domain_find_iotlb_tag(smmu_domain, tag);
+}
+
+/*
+ * arm_smmu_get_iotlb_tag - Find or allocate an IOTLB cache tag
+ * @smmu: target SMMU instance
+ * @domain: domain that holds an invalidation array to find
+ * @tag: tag to return
+ *
+ * Return: 0 on success, or an error. Note that the returned tag's "users"
+ * counter > 0 if tag is found, or "users" counter = 0 if tag is allocated.
+ *
+ * Caller must hold arm_smmu_asid_lock.
+ */
+static int arm_smmu_get_iotlb_tag(struct arm_smmu_device *smmu,
+				  struct iommu_domain *domain,
+				  struct arm_smmu_inv *tag)
+{
+	struct arm_smmu_domain *smmu_domain = to_smmu_domain_devices(domain);
+	int ret;
+
+	lockdep_assert_held(&arm_smmu_asid_lock);
+
+	/* Return existing tag if one is already allocated */
+	ret = arm_smmu_find_iotlb_tag(smmu, domain, tag);
+	if (!ret || ret != -ENOENT)
+		return ret;
+
+	if (tag->type == INV_TYPE_S1_ASID)
+		tag->id = smmu_domain->cd.asid;
+	else
+		tag->id = smmu_domain->s2_cfg.vmid;
+
+	return 0;
+}
+
 static struct arm_smmu_inv *
 arm_smmu_master_build_inv(struct arm_smmu_master *master,
 			  enum arm_smmu_inv_type type, u32 id, ioasid_t ssid,
@@ -3377,7 +3470,9 @@ static int arm_smmu_attach_prepare_invs(struct arm_smmu_attach_state *state,
 	struct arm_smmu_domain *new_smmu_domain =
 		to_smmu_domain_devices(new_domain);
 	struct arm_smmu_master *master = state->master;
+	struct arm_smmu_device *smmu = master->smmu;
 	ioasid_t ssid = state->ssid;
+	int ret;
 
 	/*
 	 * At this point a NULL domain indicates the domain doesn't use the
@@ -3391,6 +3486,11 @@ static int arm_smmu_attach_prepare_invs(struct arm_smmu_attach_state *state,
 		invst->old_invs = rcu_dereference_protected(
 			new_smmu_domain->invs,
 			lockdep_is_held(&arm_smmu_asid_lock));
+
+		ret = arm_smmu_get_iotlb_tag(smmu, new_domain, &invst->tag);
+		if (ret)
+			return ret;
+
 		build_invs = arm_smmu_master_build_invs(
 			master, state->ats_enabled, ssid, new_smmu_domain);
 		if (!build_invs)
@@ -3413,6 +3513,12 @@ static int arm_smmu_attach_prepare_invs(struct arm_smmu_attach_state *state,
 			invst->old_invs = rcu_dereference_protected(
 				old_smmu_domain->invs,
 				lockdep_is_held(&arm_smmu_asid_lock));
+
+		ret = arm_smmu_find_iotlb_tag(smmu, state->old_domain,
+					      &invst->tag);
+		if (WARN_ON(ret))
+			return ret;
+
 		/* For old_smmu_domain, new_invs points to master->build_invs */
 		invst->new_invs = arm_smmu_master_build_invs(
 			master, master->ats_enabled, ssid, old_smmu_domain);
