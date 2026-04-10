@@ -2939,7 +2939,6 @@ static int arm_smmu_domain_finalise(struct arm_smmu_domain *smmu_domain,
 	if (enable_dirty && smmu_domain->stage == ARM_SMMU_DOMAIN_S1)
 		smmu_domain->domain.dirty_ops = &arm_smmu_dirty_ops;
 	smmu_domain->pgtbl_ops = pgtbl_ops;
-	smmu_domain->smmu = smmu;
 	return 0;
 }
 
@@ -4141,10 +4140,7 @@ static size_t arm_smmu_unmap_pages(struct iommu_domain *domain, unsigned long io
 
 static void arm_smmu_flush_iotlb_all(struct iommu_domain *domain)
 {
-	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
-
-	if (smmu_domain->smmu)
-		arm_smmu_tlb_inv_context(smmu_domain);
+	arm_smmu_domain_inv(to_smmu_domain(domain));
 }
 
 static void arm_smmu_iotlb_sync(struct iommu_domain *domain,

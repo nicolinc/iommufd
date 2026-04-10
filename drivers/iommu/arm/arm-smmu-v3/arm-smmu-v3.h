@@ -959,8 +959,6 @@ enum arm_smmu_domain_stage {
 };
 
 struct arm_smmu_domain {
-	struct arm_smmu_device		*smmu;
-
 	struct io_pgtable_ops		*pgtbl_ops;
 	atomic_t			nr_ats_masters;
 
