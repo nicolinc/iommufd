@@ -3316,12 +3316,42 @@ static int arm_smmu_get_iotlb_tag(struct arm_smmu_device *smmu,
 	if (!ret || ret != -ENOENT)
 		return ret;
 
-	if (tag->type == INV_TYPE_S1_ASID)
-		tag->id = smmu_domain->cd.asid;
-	else
-		tag->id = smmu_domain->s2_cfg.vmid;
+	if (tag->type == INV_TYPE_S1_ASID) {
+		ret = xa_alloc(&arm_smmu_asid_xa, &tag->id, smmu_domain,
+			       XA_LIMIT(1, (1 << smmu->asid_bits) - 1),
+			       GFP_KERNEL);
+	} else {
+		ret = ida_alloc_range(&smmu->vmid_map, 1,
+				      (1 << smmu->vmid_bits) - 1, GFP_KERNEL);
+		if (ret > 0) {
+			tag->id = ret; /* int is good for 16-bit VMID */
+			ret = 0;
+		}
+	}
 
-	return 0;
+	return ret;
+}
+
+static void arm_smmu_iotlb_tag_free(struct arm_smmu_inv *tag)
+{
+	struct arm_smmu_cmdq_ent cmd = {
+		.opcode = tag->nsize_opcode,
+	};
+
+	arm_smmu_inv_assert_iotlb_tag(tag);
+
+	if (tag->type == INV_TYPE_S1_ASID)
+		cmd.tlbi.asid = tag->id;
+	else
+		cmd.tlbi.vmid = tag->id;
+	arm_smmu_cmdq_issue_cmd_with_sync(tag->smmu, &cmd);
+
+	if (tag->type == INV_TYPE_S1_ASID)
+		xa_erase(&arm_smmu_asid_xa, tag->id);
+	else if (tag->type == INV_TYPE_S2_VMID)
+		ida_free(&tag->smmu->vmid_map, tag->id);
+
+	/* Keep INV_TYPE_S2_VMID_VSMMU. vSMMU will free it */
 }
 
 static struct arm_smmu_inv *
@@ -3549,26 +3579,6 @@ arm_smmu_install_new_domain_invs(struct arm_smmu_attach_state *state)
 	kfree_rcu(invst->old_invs, rcu);
 }
 
-static void arm_smmu_inv_flush_iotlb_tag(struct arm_smmu_inv *inv)
-{
-	struct arm_smmu_cmdq_ent cmd = {};
-
-	switch (inv->type) {
-	case INV_TYPE_S1_ASID:
-		cmd.tlbi.asid = inv->id;
-		break;
-	case INV_TYPE_S2_VMID:
-		/* S2_VMID using nsize_opcode covers S2_VMID_S1_CLEAR */
-		cmd.tlbi.vmid = inv->id;
-		break;
-	default:
-		return;
-	}
-
-	cmd.opcode = inv->nsize_opcode;
-	arm_smmu_cmdq_issue_cmd_with_sync(inv->smmu, &cmd);
-}
-
 /* Should be installed after arm_smmu_install_ste_for_dev() */
 static void
 arm_smmu_install_old_domain_invs(struct arm_smmu_attach_state *state)
@@ -3589,8 +3599,8 @@ arm_smmu_install_old_domain_invs(struct arm_smmu_attach_state *state)
 	 * must be cleaned right now. The rule is that any ASID/VMID not in an invs
 	 * array must be left cleared in the IOTLB.
 	 */
-	if (!READ_ONCE(invst->new_invs->inv[0].users))
-		arm_smmu_inv_flush_iotlb_tag(&invst->new_invs->inv[0]);
+	if (!invst->new_invs->inv[0].users)
+		arm_smmu_iotlb_tag_free(&invst->tag);
 
 	new_invs = arm_smmu_invs_purge(old_invs);
 	if (!new_invs)
@@ -3736,6 +3746,8 @@ err_free_master_domain:
 err_free_vmaster:
 	kfree(state->vmaster);
 err_unprepare_invs:
+	if (!state->new_domain_invst.tag.users)
+		arm_smmu_iotlb_tag_free(&state->new_domain_invst.tag);
 	kfree(state->new_domain_invst.new_invs);
 	return ret;
 }
