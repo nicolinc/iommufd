@@ -162,8 +162,11 @@ static void arm_smmu_mm_release(struct mmu_notifier *mn, struct mm_struct *mm)
 		cdptr = arm_smmu_get_cd_ptr(master, master_domain->ssid);
 		if (WARN_ON(!cdptr))
 			continue;
-		arm_smmu_make_sva_cd(&target, master, NULL,
-				     smmu_domain->cd.asid);
+		/*
+		 * EPD0/1 are set in the disabled CD, and HW will not use ASID.
+		 * Pass asid=0 to avoid needing arm_smmu_asid_lock.
+		 */
+		arm_smmu_make_sva_cd(&target, master, NULL, 0);
 		arm_smmu_write_cd_entry(master, master_domain->ssid, cdptr,
 					&target);
 	}
