@@ -3387,7 +3387,7 @@ arm_smmu_master_build_invs(struct arm_smmu_master *master, bool ats_enabled,
 			   ioasid_t ssid, struct arm_smmu_domain *smmu_domain,
 			   struct arm_smmu_inv *tag)
 {
-	const bool nesting = smmu_domain->nest_parent;
+	const bool nesting = tag->type == INV_TYPE_S2_VMID_VSMMU;
 	size_t pgsize = 0, i;
 
 	iommu_group_mutex_assert(master->dev);
@@ -4104,7 +4104,6 @@ arm_smmu_domain_alloc_paging_flags(struct device *dev, u32 flags,
 			goto err_free;
 		}
 		smmu_domain->stage = ARM_SMMU_DOMAIN_S2;
-		smmu_domain->nest_parent = true;
 		break;
 	case IOMMU_HWPT_ALLOC_DIRTY_TRACKING:
 	case IOMMU_HWPT_ALLOC_DIRTY_TRACKING | IOMMU_HWPT_ALLOC_PASID:
