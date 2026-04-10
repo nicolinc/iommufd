@@ -1036,7 +1036,7 @@ arm_smmu_invs_iter_next(struct arm_smmu_invs *invs, size_t next, size_t *idx)
 			*idx = next;
 			return NULL;
 		}
-		if (!READ_ONCE(invs->inv[next].users)) {
+		if (!invs->inv[next].users) {
 			next++;
 			continue;
 		}
@@ -1155,10 +1155,10 @@ struct arm_smmu_invs *arm_smmu_invs_merge(struct arm_smmu_invs *invs,
 			*new = invs->inv[i];
 		} else if (cmp == 0) {
 			*new = invs->inv[i];
-			WRITE_ONCE(new->users, READ_ONCE(new->users) + 1);
+			new->users++;
 		} else {
 			*new = to_merge->inv[j];
-			WRITE_ONCE(new->users, 1);
+			new->users = 1;
 		}
 
 		/*
@@ -1201,6 +1201,9 @@ EXPORT_SYMBOL_IF_KUNIT(arm_smmu_invs_merge);
  * Note that the final @invs->num_invs might not reflect the actual number of
  * invalidations due to trash entries. Any reader should take the read lock to
  * iterate each entry and check its users counter till the last entry.
+ *
+ * Since __arm_smmu_domain_inv_range() can read the users counter concurrently,
+ * all the writes in this function must use WRITE_ONCE().
  */
 VISIBLE_IF_KUNIT
 void arm_smmu_invs_unref(struct arm_smmu_invs *invs,
@@ -1216,7 +1219,7 @@ void arm_smmu_invs_unref(struct arm_smmu_invs *invs,
 			/* not found in to_unref, leave alone */
 			num_invs = i + 1;
 		} else if (cmp == 0) {
-			int users = READ_ONCE(invs->inv[i].users) - 1;
+			int users = invs->inv[i].users - 1;
 
 			if (WARN_ON(users < 0))
 				continue;
@@ -2643,6 +2646,10 @@ static inline bool arm_smmu_invs_end_batch(struct arm_smmu_inv *cur,
 	return false;
 }
 
+/*
+ * Must use READ_ONCE() for any users counter, because arm_smmu_invs_unref()
+ * might write users concurrently.
+ */
 static void __arm_smmu_domain_inv_range(struct arm_smmu_invs *invs,
 					unsigned long iova, size_t size,
 					unsigned int granule, bool leaf)
