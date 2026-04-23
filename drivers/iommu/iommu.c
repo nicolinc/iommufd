@@ -73,6 +73,7 @@ struct iommu_group {
 };
 
 struct group_device {
+	struct iommu_group *group;
 	struct list_head list;
 	struct device *dev;
 	char *name;
@@ -168,8 +169,7 @@ static ssize_t iommu_group_store_type(struct iommu_group *group,
 				      const char *buf, size_t count);
 static struct group_device *iommu_group_alloc_device(struct iommu_group *group,
 						     struct device *dev);
-static void __iommu_group_free_device(struct iommu_group *group,
-				      struct group_device *grp_dev);
+static void __iommu_group_free_device(struct group_device *grp_dev);
 static void iommu_domain_init(struct iommu_domain *domain, unsigned int type,
 			      const struct iommu_ops *ops);
 
@@ -718,7 +718,7 @@ err_put_group:
 	iommu_deinit_device(dev);
 	mutex_unlock(&group->mutex);
 	if (!IS_ERR(gdev))
-		__iommu_group_free_device(group, gdev);
+		__iommu_group_free_device(gdev);
 	iommu_group_put(group);
 
 	return ret;
@@ -742,9 +742,9 @@ int iommu_probe_device(struct device *dev)
 	return 0;
 }
 
-static void __iommu_group_free_device(struct iommu_group *group,
-				      struct group_device *grp_dev)
+static void __iommu_group_free_device(struct group_device *grp_dev)
 {
+	struct iommu_group *group = grp_dev->group;
 	struct device *dev = grp_dev->dev;
 
 	lockdep_assert_not_held(&group->mutex);
@@ -781,7 +781,7 @@ static void __iommu_group_remove_device(struct device *dev)
 	mutex_unlock(&group->mutex);
 
 	if (to_free)
-		__iommu_group_free_device(group, to_free);
+		__iommu_group_free_device(to_free);
 	/*
 	 * Pairs with the get in iommu_init_device() or
 	 * iommu_group_add_device()
@@ -1284,6 +1284,7 @@ static struct group_device *iommu_group_alloc_device(struct iommu_group *group,
 		return ERR_PTR(-ENOMEM);
 
 	device->dev = dev;
+	device->group = group;
 
 	ret = sysfs_create_link(&dev->kobj, &group->kobj, "iommu_group");
 	if (ret)
@@ -4086,9 +4087,9 @@ static int group_device_cmp_dma_alias(struct pci_dev *dev, u16 alias,
 				      &alias);
 }
 
-static bool group_device_dma_alias_is_blocked(struct iommu_group *group,
-					      struct group_device *gdev)
+static bool group_device_dma_alias_is_blocked(struct group_device *gdev)
 {
+	struct iommu_group *group = gdev->group;
 	struct group_device *sibling;
 
 	lockdep_assert_held(&group->mutex);
@@ -4153,7 +4154,7 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev, bool reset_succeeds)
 	if (WARN_ON(!group->blocking_domain))
 		return;
 
-	if (group_device_dma_alias_is_blocked(group, gdev)) {
+	if (group_device_dma_alias_is_blocked(gdev)) {
 		/*
 		 * FIXME: DMA aliased devices share the same RID, which would be
 		 * convoluted to handle, as "gdev->blocked" is not sufficient:
