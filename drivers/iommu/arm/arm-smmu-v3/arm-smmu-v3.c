@@ -992,10 +992,13 @@ static int arm_smmu_cmdq_issue_cmd_with_sync(struct arm_smmu_device *smmu,
 
 static void arm_smmu_cmdq_batch_init(struct arm_smmu_device *smmu,
 				     struct arm_smmu_cmdq_batch *cmds,
-				     struct arm_smmu_cmdq_ent *ent)
+				     struct arm_smmu_cmdq_ent *ent,
+				     struct arm_smmu_invs *invs)
 {
 	cmds->num = 0;
 	cmds->cmdq = arm_smmu_get_cmdq(smmu, ent);
+	cmds->invs = invs;
+	cmds->has_ats = false;
 }
 
 static void arm_smmu_cmdq_batch_add(struct arm_smmu_device *smmu,
@@ -1010,13 +1013,13 @@ static void arm_smmu_cmdq_batch_add(struct arm_smmu_device *smmu,
 	if (force_sync || unsupported_cmd) {
 		arm_smmu_cmdq_issue_cmdlist(smmu, cmds->cmdq, cmds->cmds,
 					    cmds->num, true);
-		arm_smmu_cmdq_batch_init(smmu, cmds, cmd);
+		arm_smmu_cmdq_batch_init(smmu, cmds, cmd, cmds->invs);
 	}
 
 	if (cmds->num == CMDQ_BATCH_ENTRIES) {
 		arm_smmu_cmdq_issue_cmdlist(smmu, cmds->cmdq, cmds->cmds,
 					    cmds->num, false);
-		arm_smmu_cmdq_batch_init(smmu, cmds, cmd);
+		arm_smmu_cmdq_batch_init(smmu, cmds, cmd, cmds->invs);
 	}
 
 	index = cmds->num * CMDQ_ENT_DWORDS;
@@ -1026,6 +1029,8 @@ static void arm_smmu_cmdq_batch_add(struct arm_smmu_device *smmu,
 		return;
 	}
 
+	if (cmd->opcode == CMDQ_OP_ATC_INV)
+		cmds->has_ats = true;
 	cmds->num++;
 }
 
@@ -1593,7 +1598,7 @@ static void arm_smmu_sync_cd(struct arm_smmu_master *master,
 		},
 	};
 
-	arm_smmu_cmdq_batch_init(smmu, &cmds, &cmd);
+	arm_smmu_cmdq_batch_init(smmu, &cmds, &cmd, NULL);
 	for (i = 0; i < master->num_streams; i++) {
 		cmd.cfgi.sid = master->streams[i].id;
 		arm_smmu_cmdq_batch_add(smmu, &cmds, &cmd);
@@ -2546,7 +2551,7 @@ static int arm_smmu_atc_inv_master(struct arm_smmu_master *master,
 
 	arm_smmu_atc_inv_to_cmd(ssid, 0, 0, &cmd);
 
-	arm_smmu_cmdq_batch_init(master->smmu, &cmds, &cmd);
+	arm_smmu_cmdq_batch_init(master->smmu, &cmds, &cmd, NULL);
 	for (i = 0; i < master->num_streams; i++) {
 		cmd.atc.sid = master->streams[i].id;
 		arm_smmu_cmdq_batch_add(master->smmu, &cmds, &cmd);
@@ -2726,7 +2731,7 @@ static void __arm_smmu_domain_inv_range(struct arm_smmu_invs *invs,
 		struct arm_smmu_inv *next;
 
 		if (!cmds.num)
-			arm_smmu_cmdq_batch_init(smmu, &cmds, &cmd);
+			arm_smmu_cmdq_batch_init(smmu, &cmds, &cmd, invs);
 
 		switch (cur->type) {
 		case INV_TYPE_S1_ASID:
