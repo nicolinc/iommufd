@@ -721,6 +721,10 @@ static inline bool arm_smmu_cmdq_supports_cmd(struct arm_smmu_cmdq *cmdq,
 struct arm_smmu_cmdq_batch {
 	struct arm_smmu_cmd		cmds[CMDQ_BATCH_ENTRIES];
 	struct arm_smmu_cmdq		*cmdq;
+	/* Per-domain invalidation array, for sub-batch retry-on-EIO lookup */
+	struct arm_smmu_invs		*invs;
+	/* Set when an ATC_INV is queued; gates the retry-aware sync decision */
+	bool				has_ats;
 	int				num;
 };
 
