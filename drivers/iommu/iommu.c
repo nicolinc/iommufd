@@ -72,16 +72,20 @@ struct iommu_group {
 	void *owner;
 };
 
+enum gdev_blocked {
+	BLOCKED_NO = 0, /* Not blocked */
+	BLOCKED_RESETTING, /* PCI reset in flight */
+};
+
 struct group_device {
 	struct list_head list;
 	struct device *dev;
 	char *name;
 	/*
 	 * Device is blocked for a pending recovery while its group->domain is
-	 * retained. This can happen when:
-	 *  - Device is undergoing a reset
+	 * retained.
 	 */
-	bool blocked;
+	enum gdev_blocked blocked;
 	unsigned int reset_depth;
 };
 
@@ -4035,7 +4039,7 @@ int pci_dev_reset_iommu_prepare(struct pci_dev *pdev)
 	 * the correct domain in iommu_driver_get_domain_for_dev() that might be
 	 * called in a set_dev_pasid callback function.
 	 */
-	gdev->blocked = true;
+	gdev->blocked = BLOCKED_RESETTING;
 
 	/*
 	 * Stage PASID domains at blocking_domain while retaining pasid_array.
@@ -4163,7 +4167,7 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev,
 	 * the correct domain in iommu_driver_get_domain_for_dev() that might be
 	 * called in a set_dev_pasid callback function.
 	 */
-	gdev->blocked = false;
+	gdev->blocked = BLOCKED_NO;
 
 	/*
 	 * Re-attach PASID domains back to the domains retained in pasid_array.
