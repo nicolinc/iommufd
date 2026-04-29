@@ -70,7 +70,11 @@ struct iommu_group {
 	 */
 	unsigned int recovery_cnt;
 	void *owner;
+	struct rcu_head rcu;
 };
+
+#define dev_iommu_group_rcu(dev) \
+	(*((struct iommu_group __rcu __force **)&(dev)->iommu_group))
 
 enum gdev_blocked {
 	BLOCKED_NO = 0, /* Not blocked */
@@ -530,7 +534,7 @@ static int iommu_init_device(struct device *dev)
 		ret = PTR_ERR(group);
 		goto err_unlink;
 	}
-	dev->iommu_group = group;
+	rcu_assign_pointer(dev_iommu_group_rcu(dev), group);
 
 	dev->iommu->max_pasids = dev_iommu_get_max_pasids(dev);
 	if (ops->is_attach_deferred)
@@ -612,7 +616,7 @@ static void iommu_deinit_device(struct device *dev)
 	}
 
 	/* Caller must put iommu_group */
-	dev->iommu_group = NULL;
+	rcu_assign_pointer(dev_iommu_group_rcu(dev), NULL);
 	module_put(ops->owner);
 	dev_iommu_free(dev);
 #ifdef CONFIG_IOMMU_DMA
@@ -771,7 +775,7 @@ static void __iommu_group_remove_device(struct device *dev)
 		if (dev_has_iommu(dev))
 			iommu_deinit_device(dev);
 		else
-			dev->iommu_group = NULL;
+			rcu_assign_pointer(dev_iommu_group_rcu(dev), NULL);
 		break;
 	}
 	mutex_unlock(&group->mutex);
@@ -1058,7 +1062,7 @@ static void iommu_group_release(struct kobject *kobj)
 	WARN_ON(group->blocking_domain);
 
 	kfree(group->name);
-	kfree(group);
+	kfree_rcu(group, rcu);
 }
 
 static const struct kobj_type iommu_group_ktype = {
@@ -1339,7 +1343,7 @@ int iommu_group_add_device(struct iommu_group *group, struct device *dev)
 		return PTR_ERR(gdev);
 
 	iommu_group_ref_get(group);
-	dev->iommu_group = group;
+	rcu_assign_pointer(dev_iommu_group_rcu(dev), group);
 
 	mutex_lock(&group->mutex);
 	list_add_tail(&gdev->list, &group->devices);
