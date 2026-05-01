@@ -2407,21 +2407,28 @@ arm_smmu_atc_inv_to_cmd(u32 sid, int ssid, unsigned long iova, size_t size)
 static int arm_smmu_atc_inv_master(struct arm_smmu_master *master,
 				   ioasid_t ssid)
 {
-	int i;
+	struct arm_smmu_invs *invs = master->ats_invs;
 	struct arm_smmu_cmd cmd;
 	struct arm_smmu_cmdq_batch cmds;
+	struct arm_smmu_inv *inv;
+	size_t i;
+
+	/* No concurrent user on master->ats_invs */
+	iommu_group_mutex_assert(master->dev);
 
 	/* Do not issue ATC_INV that will definitely time out */
 	if (READ_ONCE(master->ats_broken))
 		return 0;
 
 	cmd = arm_smmu_make_cmd_atc_inv_all(0, IOMMU_NO_PASID);
-	arm_smmu_cmdq_batch_init_cmd(master->smmu, &cmds, &cmd, NULL);
-	for (i = 0; i < master->num_streams; i++)
+	arm_smmu_cmdq_batch_init_cmd(master->smmu, &cmds, &cmd, invs);
+
+	arm_smmu_invs_for_each_entry(invs, i, inv) {
+		inv->ssid = ssid;
 		arm_smmu_cmdq_batch_add_cmd(
 			master->smmu, &cmds,
-			arm_smmu_make_cmd_atc_inv_all(master->streams[i].id,
-						      ssid));
+			arm_smmu_make_cmd_atc_inv_all(inv->id, ssid));
+	}
 
 	return arm_smmu_cmdq_batch_submit(master->smmu, &cmds);
 }
@@ -4087,6 +4094,18 @@ static int arm_smmu_stream_id_cmp(const void *_l, const void *_r)
 	return cmp_int(*l, *r);
 }
 
+static void arm_smmu_master_init_ats_inv(struct arm_smmu_master *master,
+					 struct arm_smmu_inv *inv, u32 sid)
+{
+	inv->id = sid;
+	inv->users = 1;
+	inv->master = master;
+	inv->smmu = master->smmu;
+	inv->type = INV_TYPE_ATS;
+	inv->size_opcode = CMDQ_OP_ATC_INV;
+	inv->nsize_opcode = CMDQ_OP_ATC_INV;
+}
+
 static int arm_smmu_insert_master(struct arm_smmu_device *smmu,
 				  struct arm_smmu_master *master)
 {
@@ -4105,11 +4124,19 @@ static int arm_smmu_insert_master(struct arm_smmu_device *smmu,
 		/* Base case has 1 ASID entry or maximum 2 VMID entries */
 		master->build_invs = arm_smmu_invs_alloc(2);
 	} else {
+		master->ats_invs = arm_smmu_invs_alloc(fwspec->num_ids);
+		if (!master->ats_invs) {
+			kfree(master->streams);
+			return -ENOMEM;
+		}
+		master->ats_invs->has_ats = true;
+
 		/* ATS case adds num_ids of entries, on top of the base case */
 		master->build_invs = arm_smmu_invs_alloc(2 + fwspec->num_ids);
 	}
 	if (!master->build_invs) {
 		kfree(master->streams);
+		kfree(master->ats_invs);
 		return -ENOMEM;
 	}
 
@@ -4124,6 +4151,13 @@ static int arm_smmu_insert_master(struct arm_smmu_device *smmu,
 	sort_nonatomic(master->streams, master->num_streams,
 		       sizeof(master->streams[0]), arm_smmu_stream_id_cmp,
 		       NULL);
+
+	if (master->ats_invs) {
+		for (i = 0; i < fwspec->num_ids; i++)
+			arm_smmu_master_init_ats_inv(master,
+						     &master->ats_invs->inv[i],
+						     master->streams[i].id);
+	}
 
 	mutex_lock(&smmu->streams_mutex);
 	for (i = 0; i < fwspec->num_ids; i++) {
@@ -4159,6 +4193,7 @@ static int arm_smmu_insert_master(struct arm_smmu_device *smmu,
 		for (i--; i >= 0; i--)
 			rb_erase(&master->streams[i].node, &smmu->streams);
 		kfree(master->streams);
+		kfree(master->ats_invs);
 		kfree(master->build_invs);
 	}
 	mutex_unlock(&smmu->streams_mutex);
@@ -4261,6 +4296,7 @@ static void arm_smmu_release_device(struct device *dev)
 	 */
 	synchronize_rcu();
 	kfree(master->streams);
+	kfree(master->ats_invs);
 	kfree(master->build_invs);
 	kfree(master);
 }
