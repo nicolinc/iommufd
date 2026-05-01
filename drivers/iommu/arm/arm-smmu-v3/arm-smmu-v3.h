@@ -971,6 +971,8 @@ struct arm_smmu_master {
 	 * iommu_group mutex.
 	 */
 	struct arm_smmu_invs		*build_invs;
+	/* Scratch memory for arm_smmu_atc_inv_master() to build an ATS array */
+	struct arm_smmu_invs		*ats_invs;
 	struct arm_smmu_vmaster		*vmaster; /* use smmu->streams_mutex */
 	/* Locked by the iommu core using the group mutex */
 	struct arm_smmu_ctx_desc_cfg	cd_table;

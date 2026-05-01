@@ -2518,9 +2518,14 @@ arm_smmu_atc_inv_to_cmd(int ssid, unsigned long iova, size_t size,
 static int arm_smmu_atc_inv_master(struct arm_smmu_master *master,
 				   ioasid_t ssid)
 {
-	int i;
+	struct arm_smmu_invs *invs = master->ats_invs;
 	struct arm_smmu_cmdq_ent cmd;
 	struct arm_smmu_cmdq_batch cmds;
+	struct arm_smmu_inv *inv;
+	size_t i;
+
+	/* No concurrent user on master->ats_invs */
+	iommu_group_mutex_assert(master->dev);
 
 	/* Do not issue ATC_INV that will definitely time out */
 	if (READ_ONCE(master->ats_broken))
@@ -2528,9 +2533,11 @@ static int arm_smmu_atc_inv_master(struct arm_smmu_master *master,
 
 	arm_smmu_atc_inv_to_cmd(ssid, 0, 0, &cmd);
 
-	arm_smmu_cmdq_batch_init(master->smmu, &cmds, &cmd, NULL);
-	for (i = 0; i < master->num_streams; i++) {
-		cmd.atc.sid = master->streams[i].id;
+	arm_smmu_cmdq_batch_init(master->smmu, &cmds, &cmd, invs);
+
+	arm_smmu_invs_for_each_entry(invs, i, inv) {
+		inv->ssid = ssid;
+		cmd.atc.sid = inv->id;
 		arm_smmu_cmdq_batch_add(master->smmu, &cmds, &cmd);
 	}
 
@@ -4177,6 +4184,18 @@ static int arm_smmu_stream_id_cmp(const void *_l, const void *_r)
 	return cmp_int(*l, *r);
 }
 
+static void arm_smmu_master_init_ats_inv(struct arm_smmu_master *master,
+					 struct arm_smmu_inv *inv, u32 sid)
+{
+	inv->id = sid;
+	inv->users = 1;
+	inv->master = master;
+	inv->smmu = master->smmu;
+	inv->type = INV_TYPE_ATS;
+	inv->size_opcode = CMDQ_OP_ATC_INV;
+	inv->nsize_opcode = CMDQ_OP_ATC_INV;
+}
+
 static int arm_smmu_insert_master(struct arm_smmu_device *smmu,
 				  struct arm_smmu_master *master)
 {
@@ -4195,17 +4214,30 @@ static int arm_smmu_insert_master(struct arm_smmu_device *smmu,
 		/* Base case has 1 ASID entry or maximum 2 VMID entries */
 		master->build_invs = arm_smmu_invs_alloc(2);
 	} else {
+		master->ats_invs = arm_smmu_invs_alloc(fwspec->num_ids);
+		if (!master->ats_invs) {
+			kfree(master->streams);
+			return -ENOMEM;
+		}
+		master->ats_invs->has_ats = true;
+
 		/* ATS case adds num_ids of entries, on top of the base case */
 		master->build_invs = arm_smmu_invs_alloc(2 + fwspec->num_ids);
 	}
 	if (!master->build_invs) {
 		kfree(master->streams);
+		kfree(master->ats_invs);
 		return -ENOMEM;
 	}
 
 	for (i = 0; i < fwspec->num_ids; i++) {
 		struct arm_smmu_stream *new_stream = &master->streams[i];
+		struct arm_smmu_invs *invs = master->ats_invs;
 
+		if (invs) {
+			arm_smmu_master_init_ats_inv(master, &invs->inv[i],
+						     fwspec->ids[i]);
+		}
 		new_stream->id = fwspec->ids[i];
 		new_stream->master = master;
 	}
@@ -4249,6 +4281,7 @@ static int arm_smmu_insert_master(struct arm_smmu_device *smmu,
 		for (i--; i >= 0; i--)
 			rb_erase(&master->streams[i].node, &smmu->streams);
 		kfree(master->streams);
+		kfree(master->ats_invs);
 		kfree(master->build_invs);
 	}
 	mutex_unlock(&smmu->streams_mutex);
@@ -4351,6 +4384,7 @@ static void arm_smmu_release_device(struct device *dev)
 	 */
 	synchronize_rcu();
 	kfree(master->streams);
+	kfree(master->ats_invs);
 	kfree(master->build_invs);
 	kfree(master);
 }
