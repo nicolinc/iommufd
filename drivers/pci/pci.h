@@ -4,6 +4,7 @@
 
 #include <linux/align.h>
 #include <linux/bitfield.h>
+#include <linux/iommu.h>
 #include <linux/pci.h>
 #include <trace/events/pci.h>
 
@@ -1132,19 +1133,27 @@ static inline void pcie_reset_lbms(struct pci_dev *port) {}
 struct pci_dev_reset_methods {
 	u16 vendor;
 	u16 device;
-	int (*reset)(struct pci_dev *dev, bool probe);
+	int (*reset)(struct pci_dev *dev, bool probe,
+		     enum pci_reset_result *result);
 };
 
 struct pci_reset_fn_method {
-	int (*reset_fn)(struct pci_dev *pdev, bool probe);
+	int (*reset_fn)(struct pci_dev *pdev, bool probe,
+			enum pci_reset_result *result);
 	char *name;
 };
 extern const struct pci_reset_fn_method pci_reset_fn_methods[];
 
+int __pcie_flr(struct pci_dev *dev, enum pci_reset_result *result);
+int __pcie_reset_flr(struct pci_dev *dev, bool probe,
+		     enum pci_reset_result *result);
+
 #ifdef CONFIG_PCI_QUIRKS
-int pci_dev_specific_reset(struct pci_dev *dev, bool probe);
+int pci_dev_specific_reset(struct pci_dev *dev, bool probe,
+			   enum pci_reset_result *result);
 #else
-static inline int pci_dev_specific_reset(struct pci_dev *dev, bool probe)
+static inline int pci_dev_specific_reset(struct pci_dev *dev, bool probe,
+					 enum pci_reset_result *result)
 {
 	return -ENOTTY;
 }
@@ -1303,7 +1312,8 @@ bool pci_acpi_preserve_config(struct pci_host_bridge *bridge);
 int pci_acpi_program_hp_params(struct pci_dev *dev);
 extern const struct attribute_group pci_dev_acpi_attr_group;
 void pci_set_acpi_fwnode(struct pci_dev *dev);
-int pci_dev_acpi_reset(struct pci_dev *dev, bool probe);
+int pci_dev_acpi_reset(struct pci_dev *dev, bool probe,
+		       enum pci_reset_result *result);
 bool acpi_pci_power_manageable(struct pci_dev *dev);
 bool acpi_pci_bridge_d3(struct pci_dev *dev);
 int acpi_pci_set_power_state(struct pci_dev *dev, pci_power_t state);
@@ -1317,7 +1327,8 @@ static inline bool pci_acpi_preserve_config(struct pci_host_bridge *bridge)
 {
 	return false;
 }
-static inline int pci_dev_acpi_reset(struct pci_dev *dev, bool probe)
+static inline int pci_dev_acpi_reset(struct pci_dev *dev, bool probe,
+				     enum pci_reset_result *result)
 {
 	return -ENOTTY;
 }

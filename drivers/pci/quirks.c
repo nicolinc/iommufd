@@ -3946,7 +3946,8 @@ DECLARE_PCI_FIXUP_SUSPEND_LATE(PCI_VENDOR_ID_INTEL,
  * reset a single function if other methods (e.g. FLR, PM D0->D3) are
  * not available.
  */
-static int reset_intel_82599_sfp_virtfn(struct pci_dev *dev, bool probe)
+static int reset_intel_82599_sfp_virtfn(struct pci_dev *dev, bool probe,
+					enum pci_reset_result *result)
 {
 	/*
 	 * http://www.intel.com/content/dam/doc/datasheet/82599-10-gbe-controller-datasheet.pdf
@@ -3957,7 +3958,7 @@ static int reset_intel_82599_sfp_virtfn(struct pci_dev *dev, bool probe)
 	 * supported.
 	 */
 	if (!probe)
-		pcie_flr(dev);
+		__pcie_flr(dev, result);
 	return 0;
 }
 
@@ -3968,7 +3969,8 @@ static int reset_intel_82599_sfp_virtfn(struct pci_dev *dev, bool probe)
 #define NSDE_PWR_STATE		0xd0100
 #define IGD_OPERATION_TIMEOUT	10000     /* set timeout 10 seconds */
 
-static int reset_ivb_igd(struct pci_dev *dev, bool probe)
+static int reset_ivb_igd(struct pci_dev *dev, bool probe,
+			 enum pci_reset_result *result)
 {
 	void __iomem *mmio_base;
 	unsigned long timeout;
@@ -4011,7 +4013,8 @@ reset_complete:
 }
 
 /* Device-specific reset method for Chelsio T4-based adapters */
-static int reset_chelsio_generic_dev(struct pci_dev *dev, bool probe)
+static int reset_chelsio_generic_dev(struct pci_dev *dev, bool probe,
+				     enum pci_reset_result *result)
 {
 	u16 old_command;
 	u16 msix_flags;
@@ -4060,7 +4063,7 @@ static int reset_chelsio_generic_dev(struct pci_dev *dev, bool probe)
 				      PCI_MSIX_FLAGS_ENABLE |
 				      PCI_MSIX_FLAGS_MASKALL);
 
-	pcie_flr(dev);
+	__pcie_flr(dev, result);
 
 	/*
 	 * Restore the configuration information (BAR values, etc.) including
@@ -4089,7 +4092,8 @@ static int reset_chelsio_generic_dev(struct pci_dev *dev, bool probe)
  *    Chapter 3: NVMe control registers
  *    Chapter 7.3: Reset behavior
  */
-static int nvme_disable_and_flr(struct pci_dev *dev, bool probe)
+static int nvme_disable_and_flr(struct pci_dev *dev, bool probe,
+				enum pci_reset_result *result)
 {
 	void __iomem *bar;
 	u16 cmd;
@@ -4152,7 +4156,7 @@ static int nvme_disable_and_flr(struct pci_dev *dev, bool probe)
 
 	pci_iounmap(dev, bar);
 
-	pcie_flr(dev);
+	__pcie_flr(dev, result);
 
 	return 0;
 }
@@ -4164,12 +4168,13 @@ static int nvme_disable_and_flr(struct pci_dev *dev, bool probe)
  * FLR has heuristically proven to produce reliably working results for device
  * assignment cases.
  */
-static int delay_250ms_after_flr(struct pci_dev *dev, bool probe)
+static int delay_250ms_after_flr(struct pci_dev *dev, bool probe,
+				 enum pci_reset_result *result)
 {
 	if (probe)
 		return pcie_reset_flr(dev, PCI_RESET_PROBE);
 
-	pcie_reset_flr(dev, PCI_RESET_DO_RESET);
+	__pcie_reset_flr(dev, PCI_RESET_DO_RESET, result);
 
 	msleep(250);
 
@@ -4184,7 +4189,8 @@ static int delay_250ms_after_flr(struct pci_dev *dev, bool probe)
 #define HINIC_OPERATION_TIMEOUT     15000	/* 15 seconds */
 
 /* Device-specific reset method for Huawei Intelligent NIC virtual functions */
-static int reset_hinic_vf_dev(struct pci_dev *pdev, bool probe)
+static int reset_hinic_vf_dev(struct pci_dev *pdev, bool probe,
+			      enum pci_reset_result *result)
 {
 	unsigned long timeout;
 	void __iomem *bar;
@@ -4209,7 +4215,7 @@ static int reset_hinic_vf_dev(struct pci_dev *pdev, bool probe)
 	val = val | HINIC_VF_FLR_PROC_BIT;
 	iowrite32be(val, bar + HINIC_VF_OP);
 
-	pcie_flr(pdev);
+	__pcie_flr(pdev, result);
 
 	/*
 	 * The device must recapture its Bus and Device Numbers after FLR
@@ -4258,7 +4264,8 @@ static const struct pci_dev_reset_methods pci_dev_reset_methods[] = {
 };
 
 static int __pci_dev_specific_reset(struct pci_dev *dev, bool probe,
-				    const struct pci_dev_reset_methods *i)
+				    const struct pci_dev_reset_methods *i,
+				    enum pci_reset_result *result)
 {
 	int ret;
 
@@ -4270,9 +4277,9 @@ static int __pci_dev_specific_reset(struct pci_dev *dev, bool probe,
 		}
 	}
 
-	ret = i->reset(dev, probe);
+	ret = i->reset(dev, probe, result);
 	if (!probe)
-		pci_dev_reset_iommu_done(dev);
+		pci_dev_reset_iommu_done(dev, *result);
 	return ret;
 }
 
@@ -4281,7 +4288,8 @@ static int __pci_dev_specific_reset(struct pci_dev *dev, bool probe,
  * because when a host assigns a device to a guest VM, the host may need
  * to reset the device but probably doesn't have a driver for it.
  */
-int pci_dev_specific_reset(struct pci_dev *dev, bool probe)
+int pci_dev_specific_reset(struct pci_dev *dev, bool probe,
+			   enum pci_reset_result *result)
 {
 	const struct pci_dev_reset_methods *i;
 
@@ -4290,7 +4298,7 @@ int pci_dev_specific_reset(struct pci_dev *dev, bool probe)
 		     i->vendor == (u16)PCI_ANY_ID) &&
 		    (i->device == dev->device ||
 		     i->device == (u16)PCI_ANY_ID))
-			return __pci_dev_specific_reset(dev, probe, i);
+			return __pci_dev_specific_reset(dev, probe, i, result);
 	}
 
 	return -ENOTTY;

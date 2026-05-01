@@ -4095,6 +4095,7 @@ static bool group_device_dma_alias_is_blocked(struct iommu_group *group,
 /**
  * pci_dev_reset_iommu_done() - Restore IOMMU after a PCI device reset is done
  * @pdev: PCI device that has finished a reset routine
+ * @result: Outcome of the reset routine. Decoded by following its definition
  *
  * After a PCIe device finishes a reset routine, it wants to restore its IOMMU
  * activity, including new translation and cache invalidation, by re-attaching
@@ -4106,7 +4107,8 @@ static bool group_device_dma_alias_is_blocked(struct iommu_group *group,
  * Note that, although unlikely, there is a risk that re-attaching domains might
  * fail due to some unexpected happening like OOM.
  */
-void pci_dev_reset_iommu_done(struct pci_dev *pdev)
+void pci_dev_reset_iommu_done(struct pci_dev *pdev,
+			      enum pci_reset_result result)
 {
 	struct iommu_group *group = pdev->dev.iommu_group;
 	struct group_device *gdev;

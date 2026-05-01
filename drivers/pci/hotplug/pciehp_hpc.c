@@ -936,7 +936,8 @@ int pciehp_slot_reset(struct pcie_device *dev)
  * momentarily, if we see that they could interfere. Also, clear any spurious
  * events after.
  */
-int pciehp_reset_slot(struct hotplug_slot *hotplug_slot, bool probe)
+int pciehp_reset_slot(struct hotplug_slot *hotplug_slot, bool probe,
+		      enum pci_reset_result *result)
 {
 	struct controller *ctrl = to_ctrl(hotplug_slot);
 	struct pci_dev *pdev = ctrl_dev(ctrl);

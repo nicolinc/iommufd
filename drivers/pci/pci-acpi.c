@@ -954,8 +954,10 @@ void pci_set_acpi_fwnode(struct pci_dev *dev)
  * pci_dev_acpi_reset - do a function level reset using _RST method
  * @dev: device to reset
  * @probe: if true, return 0 if device supports _RST
+ * @result: Outcome of the reset routine
  */
-int pci_dev_acpi_reset(struct pci_dev *dev, bool probe)
+int pci_dev_acpi_reset(struct pci_dev *dev, bool probe,
+		       enum pci_reset_result *result)
 {
 	acpi_handle handle = ACPI_HANDLE(&dev->dev);
 	int ret;
@@ -977,7 +979,7 @@ int pci_dev_acpi_reset(struct pci_dev *dev, bool probe)
 		ret = -ENOTTY;
 	}
 
-	pci_dev_reset_iommu_done(dev);
+	pci_dev_reset_iommu_done(dev, *result);
 	return ret;
 }
 

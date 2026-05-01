@@ -337,6 +337,24 @@ struct iommu_pages_list {
 #define IOMMU_PAGES_LIST_INIT(name) \
 	((struct iommu_pages_list){ .pages = LIST_HEAD_INIT(name.pages) })
 
+/**
+ * enum pci_reset_result - Outcome of a PCI device reset, as reported to
+ *                         pci_dev_reset_iommu_done()
+ * @PCI_RESET_SUCCEEDED: Hardware reset succeeded. Restore IOMMU domains.
+ * @PCI_RESET_SKIPPED:   Hardware reset was skipped; no hardware state changed.
+ *                       e.g. ACPI _RST returned without effect, or no reset
+ *                       method was available (-ENOTTY). Revert prepare() but
+ *                       keep any pre-existing blocked state intact.
+ * @PCI_RESET_FAILED:    Hardware reset was tried and failed. Keep the device
+ *                       blocked to protect system memory until a subsequent
+ *                       successful reset.
+ */
+enum pci_reset_result {
+	PCI_RESET_SUCCEEDED,
+	PCI_RESET_SKIPPED,
+	PCI_RESET_FAILED,
+};
+
 #ifdef CONFIG_IOMMU_API
 
 /**
@@ -1191,7 +1209,8 @@ void iommu_free_global_pasid(ioasid_t pasid);
 
 /* PCI device reset functions */
 int pci_dev_reset_iommu_prepare(struct pci_dev *pdev);
-void pci_dev_reset_iommu_done(struct pci_dev *pdev);
+void pci_dev_reset_iommu_done(struct pci_dev *pdev,
+			      enum pci_reset_result result);
 #else /* CONFIG_IOMMU_API */
 
 struct iommu_ops {};
@@ -1521,7 +1540,8 @@ static inline int pci_dev_reset_iommu_prepare(struct pci_dev *pdev)
 	return 0;
 }
 
-static inline void pci_dev_reset_iommu_done(struct pci_dev *pdev)
+static inline void pci_dev_reset_iommu_done(struct pci_dev *pdev,
+					    enum pci_reset_result result)
 {
 }
 #endif /* CONFIG_IOMMU_API */

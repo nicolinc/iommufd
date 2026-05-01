@@ -70,7 +70,8 @@ out:
 	return rc;
 }
 
-static int reset_slot(struct hotplug_slot *hotplug_slot, bool probe)
+static int reset_slot(struct hotplug_slot *hotplug_slot, bool probe,
+		      enum pci_reset_result *result)
 {
 	struct zpci_dev *zdev = container_of(hotplug_slot, struct zpci_dev,
 					     hotplug_slot);

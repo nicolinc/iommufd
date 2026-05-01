@@ -4323,14 +4323,7 @@ int pci_wait_for_pending_transaction(struct pci_dev *dev)
 }
 EXPORT_SYMBOL(pci_wait_for_pending_transaction);
 
-/**
- * pcie_flr - initiate a PCIe function level reset
- * @dev: device to reset
- *
- * Initiate a function level reset unconditionally on @dev without
- * checking any flags and DEVCAP
- */
-int pcie_flr(struct pci_dev *dev)
+int __pcie_flr(struct pci_dev *dev, enum pci_reset_result *result)
 {
 	int ret;
 
@@ -4358,19 +4351,27 @@ int pcie_flr(struct pci_dev *dev)
 
 	ret = pci_dev_wait(dev, "FLR", PCIE_RESET_READY_POLL_MS);
 done:
-	pci_dev_reset_iommu_done(dev);
+	pci_dev_reset_iommu_done(dev, *result);
 	return ret;
+}
+
+/**
+ * pcie_flr - initiate a PCIe function level reset
+ * @dev: device to reset
+ *
+ * Initiate a function level reset unconditionally on @dev without
+ * checking any flags and DEVCAP.
+ */
+int pcie_flr(struct pci_dev *dev)
+{
+	enum pci_reset_result result = PCI_RESET_SKIPPED;
+
+	return __pcie_flr(dev, &result);
 }
 EXPORT_SYMBOL_GPL(pcie_flr);
 
-/**
- * pcie_reset_flr - initiate a PCIe function level reset
- * @dev: device to reset
- * @probe: if true, return 0 if device can be reset this way
- *
- * Initiate a function level reset on @dev.
- */
-int pcie_reset_flr(struct pci_dev *dev, bool probe)
+int __pcie_reset_flr(struct pci_dev *dev, bool probe,
+		     enum pci_reset_result *result)
 {
 	if (dev->dev_flags & PCI_DEV_FLAGS_NO_FLR_RESET)
 		return -ENOTTY;
@@ -4381,11 +4382,26 @@ int pcie_reset_flr(struct pci_dev *dev, bool probe)
 	if (probe)
 		return 0;
 
-	return pcie_flr(dev);
+	return __pcie_flr(dev, result);
+}
+
+/**
+ * pcie_reset_flr - initiate a PCIe function level reset
+ * @dev: device to reset
+ * @probe: if true, return 0 if device can be reset this way
+ *
+ * Initiate a function level reset on @dev.
+ */
+int pcie_reset_flr(struct pci_dev *dev, bool probe)
+{
+	enum pci_reset_result result = PCI_RESET_SKIPPED;
+
+	return __pcie_reset_flr(dev, probe, &result);
 }
 EXPORT_SYMBOL_GPL(pcie_reset_flr);
 
-static int pci_af_flr(struct pci_dev *dev, bool probe)
+static int pci_af_flr(struct pci_dev *dev, bool probe,
+		      enum pci_reset_result *result)
 {
 	int ret;
 	int pos;
@@ -4436,7 +4452,7 @@ static int pci_af_flr(struct pci_dev *dev, bool probe)
 
 	ret = pci_dev_wait(dev, "AF_FLR", PCIE_RESET_READY_POLL_MS);
 done:
-	pci_dev_reset_iommu_done(dev);
+	pci_dev_reset_iommu_done(dev, *result);
 	return ret;
 }
 
@@ -4444,6 +4460,7 @@ done:
  * pci_pm_reset - Put device into PCI_D3 and back into PCI_D0.
  * @dev: Device to reset.
  * @probe: if true, return 0 if the device can be reset this way.
+ * @result: Outcome of the reset routine
  *
  * If @dev supports native PCI PM and its PCI_PM_CTRL_NO_SOFT_RESET flag is
  * unset, it will be reinitialized internally when going from PCI_D3hot to
@@ -4455,7 +4472,8 @@ done:
  * by default (i.e. unless the @dev's d3hot_delay field has a different value).
  * Moreover, only devices in D0 can be reset by this function.
  */
-static int pci_pm_reset(struct pci_dev *dev, bool probe)
+static int pci_pm_reset(struct pci_dev *dev, bool probe,
+			enum pci_reset_result *result)
 {
 	u16 csr;
 	int ret;
@@ -4490,7 +4508,7 @@ static int pci_pm_reset(struct pci_dev *dev, bool probe)
 	pci_dev_d3_sleep(dev);
 
 	ret = pci_dev_wait(dev, "PM D3hot->D0", PCIE_RESET_READY_POLL_MS);
-	pci_dev_reset_iommu_done(dev);
+	pci_dev_reset_iommu_done(dev, *result);
 	return ret;
 }
 
@@ -4833,7 +4851,8 @@ int pci_bridge_secondary_bus_reset(struct pci_dev *dev)
 }
 EXPORT_SYMBOL_GPL(pci_bridge_secondary_bus_reset);
 
-static int pci_parent_bus_reset(struct pci_dev *dev, bool probe)
+static int pci_parent_bus_reset(struct pci_dev *dev, bool probe,
+				enum pci_reset_result *result)
 {
 	struct pci_dev *pdev;
 
@@ -4851,7 +4870,8 @@ static int pci_parent_bus_reset(struct pci_dev *dev, bool probe)
 	return pci_bridge_secondary_bus_reset(dev->bus->self);
 }
 
-static int pci_reset_hotplug_slot(struct hotplug_slot *hotplug, bool probe)
+static int pci_reset_hotplug_slot(struct hotplug_slot *hotplug, bool probe,
+				  enum pci_reset_result *result)
 {
 	int rc = -ENOTTY;
 
@@ -4859,20 +4879,21 @@ static int pci_reset_hotplug_slot(struct hotplug_slot *hotplug, bool probe)
 		return rc;
 
 	if (hotplug->ops->reset_slot)
-		rc = hotplug->ops->reset_slot(hotplug, probe);
+		rc = hotplug->ops->reset_slot(hotplug, probe, result);
 
 	module_put(hotplug->owner);
 
 	return rc;
 }
 
-static int pci_dev_reset_slot_function(struct pci_dev *dev, bool probe)
+static int pci_dev_reset_slot_function(struct pci_dev *dev, bool probe,
+				       enum pci_reset_result *result)
 {
 	if (dev->multifunction || dev->subordinate || !dev->slot ||
 	    dev->dev_flags & PCI_DEV_FLAGS_NO_BUS_RESET)
 		return -ENOTTY;
 
-	return pci_reset_hotplug_slot(dev->slot->hotplug, probe);
+	return pci_reset_hotplug_slot(dev->slot->hotplug, probe, result);
 }
 
 static u16 cxl_port_dvsec(struct pci_dev *dev)
@@ -4905,7 +4926,8 @@ static bool cxl_sbr_masked(struct pci_dev *dev)
 	return true;
 }
 
-static int pci_reset_bus_function(struct pci_dev *dev, bool probe)
+static int __pci_reset_bus_function(struct pci_dev *dev, bool probe,
+				    enum pci_reset_result *result)
 {
 	struct pci_dev *bridge = pci_upstream_bridge(dev);
 	int rc;
@@ -4929,18 +4951,25 @@ static int pci_reset_bus_function(struct pci_dev *dev, bool probe)
 		}
 	}
 
-	rc = pci_dev_reset_slot_function(dev, probe);
+	rc = pci_dev_reset_slot_function(dev, probe, result);
 	if (rc != -ENOTTY)
 		goto done;
 
-	rc = pci_parent_bus_reset(dev, probe);
+	rc = pci_parent_bus_reset(dev, probe, result);
 done:
 	if (!probe)
-		pci_dev_reset_iommu_done(dev);
+		pci_dev_reset_iommu_done(dev, *result);
 	return rc;
 }
 
-static int cxl_reset_bus_function(struct pci_dev *dev, bool probe)
+static int pci_reset_bus_function(struct pci_dev *dev, bool probe,
+				  enum pci_reset_result *result)
+{
+	return __pci_reset_bus_function(dev, probe, result);
+}
+
+static int cxl_reset_bus_function(struct pci_dev *dev, bool probe,
+				  enum pci_reset_result *result)
 {
 	struct pci_dev *bridge;
 	u16 dvsec, reg, val;
@@ -4975,13 +5004,13 @@ static int cxl_reset_bus_function(struct pci_dev *dev, bool probe)
 				      val);
 	}
 
-	rc = pci_reset_bus_function(dev, probe);
+	rc = __pci_reset_bus_function(dev, probe, result);
 
 	if (reg != val)
 		pci_write_config_word(bridge, dvsec + PCI_DVSEC_CXL_PORT_CTL,
 				      reg);
 
-	pci_dev_reset_iommu_done(dev);
+	pci_dev_reset_iommu_done(dev, *result);
 	return rc;
 }
 
@@ -5070,7 +5099,7 @@ const struct pci_reset_fn_method pci_reset_fn_methods[] = {
 	{ },
 	{ pci_dev_specific_reset, .name = "device_specific" },
 	{ pci_dev_acpi_reset, .name = "acpi" },
-	{ pcie_reset_flr, .name = "flr" },
+	{ __pcie_reset_flr, .name = "flr" },
 	{ pci_af_flr, .name = "af_flr" },
 	{ pci_pm_reset, .name = "pm" },
 	{ pci_reset_bus_function, .name = "bus" },
@@ -5101,6 +5130,7 @@ const struct pci_reset_fn_method pci_reset_fn_methods[] = {
  */
 int __pci_reset_function_locked(struct pci_dev *dev)
 {
+	enum pci_reset_result result = PCI_RESET_SKIPPED;
 	int i, m, rc;
 	const struct pci_reset_fn_method *method;
 
@@ -5122,7 +5152,7 @@ int __pci_reset_function_locked(struct pci_dev *dev)
 
 		method = &pci_reset_fn_methods[m];
 		pci_dbg(dev, "reset via %s\n", method->name);
-		rc = method->reset_fn(dev, PCI_RESET_DO_RESET);
+		rc = method->reset_fn(dev, PCI_RESET_DO_RESET, &result);
 		if (!rc)
 			return 0;
 
@@ -5149,6 +5179,7 @@ EXPORT_SYMBOL_GPL(__pci_reset_function_locked);
  */
 void pci_init_reset_methods(struct pci_dev *dev)
 {
+	enum pci_reset_result result = PCI_RESET_SKIPPED;
 	int m, i, rc;
 
 	BUILD_BUG_ON(ARRAY_SIZE(pci_reset_fn_methods) != PCI_NUM_RESET_METHODS);
@@ -5157,7 +5188,8 @@ void pci_init_reset_methods(struct pci_dev *dev)
 
 	i = 0;
 	for (m = 1; m < PCI_NUM_RESET_METHODS; m++) {
-		rc = pci_reset_fn_methods[m].reset_fn(dev, PCI_RESET_PROBE);
+		rc = pci_reset_fn_methods[m].reset_fn(dev, PCI_RESET_PROBE,
+						      &result);
 		if (!rc)
 			dev->reset_methods[i++] = m;
 		else if (rc != -ENOTTY)
@@ -5523,7 +5555,7 @@ static int pci_slot_reset(struct pci_slot *slot, bool probe)
 
 	might_sleep();
 
-	rc = pci_reset_hotplug_slot(slot->hotplug, probe);
+	rc = pci_reset_hotplug_slot(slot->hotplug, probe, NULL);
 
 	if (!probe)
 		pci_slot_unlock(slot);
@@ -5569,7 +5601,7 @@ static int __pci_reset_slot(struct pci_slot *slot)
 	if (pci_slot_trylock(slot)) {
 		pci_slot_save_and_disable_locked(slot);
 		might_sleep();
-		rc = pci_reset_hotplug_slot(slot->hotplug, PCI_RESET_DO_RESET);
+		rc = pci_reset_hotplug_slot(slot->hotplug, PCI_RESET_DO_RESET, NULL);
 		pci_slot_restore_locked(slot);
 		pci_slot_unlock(slot);
 	} else

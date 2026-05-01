@@ -1506,6 +1506,7 @@ static ssize_t reset_method_store(struct device *dev,
 				  const char *buf, size_t count)
 {
 	struct pci_dev *pdev = to_pci_dev(dev);
+	enum pci_reset_result result = PCI_RESET_SKIPPED;
 	char *tmp_options, *name;
 	int m, n;
 	u8 reset_methods[PCI_NUM_RESET_METHODS] = {};
@@ -1544,7 +1545,8 @@ static ssize_t reset_method_store(struct device *dev,
 			return -EINVAL;
 		}
 
-		if (pci_reset_fn_methods[m].reset_fn(pdev, PCI_RESET_PROBE)) {
+		if (pci_reset_fn_methods[m].reset_fn(pdev, PCI_RESET_PROBE,
+						     &result)) {
 			pci_err(pdev, "Unsupported reset method '%s'", name);
 			return -EINVAL;
 		}
@@ -1560,7 +1562,7 @@ static ssize_t reset_method_store(struct device *dev,
 	reset_methods[n] = 0;
 
 	/* Warn if dev-specific supported but not highest priority */
-	if (pci_reset_fn_methods[1].reset_fn(pdev, PCI_RESET_PROBE) == 0 &&
+	if (pci_reset_fn_methods[1].reset_fn(pdev, PCI_RESET_PROBE, &result) == 0 &&
 	    reset_methods[0] != 1)
 		pci_warn(pdev, "Device-specific reset disabled/de-prioritized by user");
 	memcpy(pdev->reset_methods, reset_methods, sizeof(pdev->reset_methods));
