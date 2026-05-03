@@ -4334,6 +4334,7 @@ int __pcie_flr(struct pci_dev *dev, enum pci_reset_result *result)
 	ret = pci_dev_reset_iommu_prepare(dev);
 	if (ret) {
 		pci_err(dev, "failed to stop IOMMU for a PCI reset: %d\n", ret);
+		*result = PCI_RESET_SKIPPED;
 		return ret;
 	}
 
@@ -4351,6 +4352,7 @@ int __pcie_flr(struct pci_dev *dev, enum pci_reset_result *result)
 
 	ret = pci_dev_wait(dev, "FLR", PCIE_RESET_READY_POLL_MS);
 done:
+	*result = ret ? PCI_RESET_FAILED : PCI_RESET_SUCCEEDED;
 	pci_dev_reset_iommu_done(dev, *result);
 	return ret;
 }
@@ -4373,11 +4375,15 @@ EXPORT_SYMBOL_GPL(pcie_flr);
 int __pcie_reset_flr(struct pci_dev *dev, bool probe,
 		     enum pci_reset_result *result)
 {
-	if (dev->dev_flags & PCI_DEV_FLAGS_NO_FLR_RESET)
+	if (dev->dev_flags & PCI_DEV_FLAGS_NO_FLR_RESET) {
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
+	}
 
-	if (!(dev->devcap & PCI_EXP_DEVCAP_FLR))
+	if (!(dev->devcap & PCI_EXP_DEVCAP_FLR)) {
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
+	}
 
 	if (probe)
 		return 0;
@@ -4408,15 +4414,21 @@ static int pci_af_flr(struct pci_dev *dev, bool probe,
 	u8 cap;
 
 	pos = pci_find_capability(dev, PCI_CAP_ID_AF);
-	if (!pos)
+	if (!pos) {
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
+	}
 
-	if (dev->dev_flags & PCI_DEV_FLAGS_NO_FLR_RESET)
+	if (dev->dev_flags & PCI_DEV_FLAGS_NO_FLR_RESET) {
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
+	}
 
 	pci_read_config_byte(dev, pos + PCI_AF_CAP, &cap);
-	if (!(cap & PCI_AF_CAP_TP) || !(cap & PCI_AF_CAP_FLR))
+	if (!(cap & PCI_AF_CAP_TP) || !(cap & PCI_AF_CAP_FLR)) {
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
+	}
 
 	if (probe)
 		return 0;
@@ -4434,6 +4446,7 @@ static int pci_af_flr(struct pci_dev *dev, bool probe,
 	ret = pci_dev_reset_iommu_prepare(dev);
 	if (ret) {
 		pci_err(dev, "failed to stop IOMMU for a PCI reset: %d\n", ret);
+		*result = PCI_RESET_SKIPPED;
 		return ret;
 	}
 
@@ -4452,6 +4465,7 @@ static int pci_af_flr(struct pci_dev *dev, bool probe,
 
 	ret = pci_dev_wait(dev, "AF_FLR", PCIE_RESET_READY_POLL_MS);
 done:
+	*result = ret ? PCI_RESET_FAILED : PCI_RESET_SUCCEEDED;
 	pci_dev_reset_iommu_done(dev, *result);
 	return ret;
 }
@@ -4478,22 +4492,29 @@ static int pci_pm_reset(struct pci_dev *dev, bool probe,
 	u16 csr;
 	int ret;
 
-	if (!dev->pm_cap || dev->dev_flags & PCI_DEV_FLAGS_NO_PM_RESET)
+	if (!dev->pm_cap || dev->dev_flags & PCI_DEV_FLAGS_NO_PM_RESET) {
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
+	}
 
 	pci_read_config_word(dev, dev->pm_cap + PCI_PM_CTRL, &csr);
-	if (csr & PCI_PM_CTRL_NO_SOFT_RESET)
+	if (csr & PCI_PM_CTRL_NO_SOFT_RESET) {
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
+	}
 
 	if (probe)
 		return 0;
 
-	if (dev->current_state != PCI_D0)
+	if (dev->current_state != PCI_D0) {
+		*result = PCI_RESET_SKIPPED;
 		return -EINVAL;
+	}
 
 	ret = pci_dev_reset_iommu_prepare(dev);
 	if (ret) {
 		pci_err(dev, "failed to stop IOMMU for a PCI reset: %d\n", ret);
+		*result = PCI_RESET_SKIPPED;
 		return ret;
 	}
 
@@ -4508,6 +4529,7 @@ static int pci_pm_reset(struct pci_dev *dev, bool probe,
 	pci_dev_d3_sleep(dev);
 
 	ret = pci_dev_wait(dev, "PM D3hot->D0", PCIE_RESET_READY_POLL_MS);
+	*result = ret ? PCI_RESET_FAILED : PCI_RESET_SUCCEEDED;
 	pci_dev_reset_iommu_done(dev, *result);
 	return ret;
 }
@@ -4855,31 +4877,49 @@ static int pci_parent_bus_reset(struct pci_dev *dev, bool probe,
 				enum pci_reset_result *result)
 {
 	struct pci_dev *pdev;
+	int rc;
 
-	if (pci_is_root_bus(dev->bus) || dev->subordinate ||
-	    !dev->bus->self || dev->dev_flags & PCI_DEV_FLAGS_NO_BUS_RESET)
+	if (pci_is_root_bus(dev->bus) || dev->subordinate || !dev->bus->self ||
+	    dev->dev_flags & PCI_DEV_FLAGS_NO_BUS_RESET) {
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
+	}
 
 	list_for_each_entry(pdev, &dev->bus->devices, bus_list)
-		if (pdev != dev)
+		if (pdev != dev) {
+			*result = PCI_RESET_SKIPPED;
 			return -ENOTTY;
+		}
 
 	if (probe)
 		return 0;
 
-	return pci_bridge_secondary_bus_reset(dev->bus->self);
+	rc = pci_bridge_secondary_bus_reset(dev->bus->self);
+	/*
+	 * At this point the reset is asserted; pci_bridge_secondary_bus_reset()
+	 * returns 0 on success or -ENOTTY when the link fails to come up. Since
+	 * we did attempt the reset, classify any non-zero outcome as FAILED.
+	 */
+	*result = rc ? PCI_RESET_FAILED : PCI_RESET_SUCCEEDED;
+	return rc;
 }
 
 static int pci_reset_hotplug_slot(struct hotplug_slot *hotplug, bool probe,
 				  enum pci_reset_result *result)
 {
+	enum pci_reset_result local = PCI_RESET_SKIPPED;
 	int rc = -ENOTTY;
 
 	if (!hotplug || !try_module_get(hotplug->owner))
 		return rc;
 
+	if (!result)
+		result = &local;
+
 	if (hotplug->ops->reset_slot)
 		rc = hotplug->ops->reset_slot(hotplug, probe, result);
+	else
+		*result = PCI_RESET_SKIPPED;
 
 	module_put(hotplug->owner);
 
@@ -4890,8 +4930,10 @@ static int pci_dev_reset_slot_function(struct pci_dev *dev, bool probe,
 				       enum pci_reset_result *result)
 {
 	if (dev->multifunction || dev->subordinate || !dev->slot ||
-	    dev->dev_flags & PCI_DEV_FLAGS_NO_BUS_RESET)
+	    dev->dev_flags & PCI_DEV_FLAGS_NO_BUS_RESET) {
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
+	}
 
 	return pci_reset_hotplug_slot(dev->slot->hotplug, probe, result);
 }
@@ -4940,6 +4982,7 @@ static int __pci_reset_bus_function(struct pci_dev *dev, bool probe,
 		if (probe)
 			return 0;
 
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
 	}
 
@@ -4947,6 +4990,7 @@ static int __pci_reset_bus_function(struct pci_dev *dev, bool probe,
 		rc = pci_dev_reset_iommu_prepare(dev);
 		if (rc) {
 			pci_err(dev, "failed to stop IOMMU for a PCI reset: %d\n", rc);
+			*result = PCI_RESET_SKIPPED;
 			return rc;
 		}
 	}
@@ -4976,23 +5020,30 @@ static int cxl_reset_bus_function(struct pci_dev *dev, bool probe,
 	int rc;
 
 	bridge = pci_upstream_bridge(dev);
-	if (!bridge)
+	if (!bridge) {
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
+	}
 
 	dvsec = cxl_port_dvsec(bridge);
-	if (!dvsec)
+	if (!dvsec) {
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
+	}
 
 	if (probe)
 		return 0;
 
 	rc = pci_read_config_word(bridge, dvsec + PCI_DVSEC_CXL_PORT_CTL, &reg);
-	if (rc)
+	if (rc) {
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
+	}
 
 	rc = pci_dev_reset_iommu_prepare(dev);
 	if (rc) {
 		pci_err(dev, "failed to stop IOMMU for a PCI reset: %d\n", rc);
+		*result = PCI_RESET_SKIPPED;
 		return rc;
 	}
 

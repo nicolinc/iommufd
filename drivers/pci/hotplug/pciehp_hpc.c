@@ -16,6 +16,7 @@
 
 #include <linux/bitfield.h>
 #include <linux/dmi.h>
+#include <linux/iommu.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/jiffies.h>
@@ -955,6 +956,9 @@ int pciehp_reset_slot(struct hotplug_slot *hotplug_slot, bool probe,
 	pci_hp_unignore_link_change(pdev);
 
 	up_write(&ctrl->reset_lock);
+
+	/* SBR was asserted; non-zero rc means the link did not come back up */
+	*result = rc ? PCI_RESET_FAILED : PCI_RESET_SUCCEEDED;
 	return rc;
 }
 

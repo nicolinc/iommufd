@@ -10,6 +10,7 @@
 
 #define pr_fmt(fmt) "zpci: " fmt
 
+#include <linux/iommu.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/pci.h>
@@ -82,12 +83,16 @@ static int reset_slot(struct hotplug_slot *hotplug_slot, bool probe,
 	 * currently undergoing a transition and we bail out - just
 	 * the same as if the device's state is not configured at all.
 	 */
-	if (!mutex_trylock(&zdev->state_lock))
+	if (!mutex_trylock(&zdev->state_lock)) {
+		*result = PCI_RESET_SKIPPED;
 		return rc;
+	}
 
 	/* We can reset only if the function is configured */
-	if (zdev->state != ZPCI_FN_STATE_CONFIGURED)
+	if (zdev->state != ZPCI_FN_STATE_CONFIGURED) {
+		*result = PCI_RESET_SKIPPED;
 		goto out;
+	}
 
 	if (probe) {
 		rc = 0;
@@ -95,6 +100,7 @@ static int reset_slot(struct hotplug_slot *hotplug_slot, bool probe,
 	}
 
 	rc = zpci_hot_reset_device(zdev);
+	*result = rc ? PCI_RESET_FAILED : PCI_RESET_SUCCEEDED;
 out:
 	mutex_unlock(&zdev->state_lock);
 	return rc;

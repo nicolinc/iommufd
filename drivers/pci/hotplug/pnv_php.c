@@ -8,6 +8,7 @@
  */
 
 #include <linux/bitfield.h>
+#include <linux/iommu.h>
 #include <linux/libfdt.h>
 #include <linux/module.h>
 #include <linux/pci.h>
@@ -653,6 +654,7 @@ static int pnv_php_reset_slot(struct hotplug_slot *slot, bool probe,
 	if (php_slot->irq > 0)
 		enable_irq(php_slot->irq);
 
+	*result = PCI_RESET_SUCCEEDED;
 	return 0;
 }
 

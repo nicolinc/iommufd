@@ -3980,8 +3980,10 @@ static int reset_ivb_igd(struct pci_dev *dev, bool probe,
 		return 0;
 
 	mmio_base = pci_iomap(dev, 0, 0);
-	if (!mmio_base)
+	if (!mmio_base) {
+		*result = PCI_RESET_SKIPPED;
 		return -ENOMEM;
+	}
 
 	iowrite32(0x00000002, mmio_base + MSG_CTL);
 
@@ -3999,11 +4001,14 @@ static int reset_ivb_igd(struct pci_dev *dev, bool probe,
 	timeout = jiffies + msecs_to_jiffies(IGD_OPERATION_TIMEOUT);
 	do {
 		val = ioread32(mmio_base + PCH_PP_STATUS);
-		if ((val & 0xb0000000) == 0)
+		if ((val & 0xb0000000) == 0) {
+			*result = PCI_RESET_SUCCEEDED;
 			goto reset_complete;
+		}
 		msleep(10);
 	} while (time_before(jiffies, timeout));
 	pci_warn(dev, "timeout during reset\n");
+	*result = PCI_RESET_FAILED;
 
 reset_complete:
 	iowrite32(0x00000002, mmio_base + NSDE_PWR_STATE);
@@ -4023,8 +4028,10 @@ static int reset_chelsio_generic_dev(struct pci_dev *dev, bool probe,
 	 * If this isn't a Chelsio T4-based device, return -ENOTTY indicating
 	 * that we have no device-specific reset method.
 	 */
-	if ((dev->device & 0xf000) != 0x4000)
+	if ((dev->device & 0xf000) != 0x4000) {
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
+	}
 
 	/*
 	 * If this is the "probe" phase, return 0 indicating that we can
@@ -4100,15 +4107,20 @@ static int nvme_disable_and_flr(struct pci_dev *dev, bool probe,
 	u32 cfg;
 
 	if (dev->class != PCI_CLASS_STORAGE_EXPRESS ||
-	    pcie_reset_flr(dev, PCI_RESET_PROBE) || !pci_resource_start(dev, 0))
+	    pcie_reset_flr(dev, PCI_RESET_PROBE) ||
+	    !pci_resource_start(dev, 0)) {
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
+	}
 
 	if (probe)
 		return 0;
 
 	bar = pci_iomap(dev, 0, NVME_REG_CC + sizeof(cfg));
-	if (!bar)
+	if (!bar) {
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
+	}
 
 	pci_read_config_word(dev, PCI_COMMAND, &cmd);
 	pci_write_config_word(dev, PCI_COMMAND, cmd | PCI_COMMAND_MEMORY);
@@ -4200,13 +4212,16 @@ static int reset_hinic_vf_dev(struct pci_dev *pdev, bool probe,
 		return 0;
 
 	bar = pci_iomap(pdev, 0, 0);
-	if (!bar)
+	if (!bar) {
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
+	}
 
 	/* Get and check firmware capabilities */
 	val = ioread32be(bar + HINIC_VF_FLR_TYPE);
 	if (!(val & HINIC_VF_FLR_CAP_BIT)) {
 		pci_iounmap(pdev, bar);
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
 	}
 
@@ -4238,6 +4253,7 @@ static int reset_hinic_vf_dev(struct pci_dev *pdev, bool probe,
 		goto reset_complete;
 
 	pci_warn(pdev, "Reset dev timeout, FLR ack reg: %#010x\n", val);
+	*result = PCI_RESET_FAILED;
 
 reset_complete:
 	pci_iounmap(pdev, bar);
@@ -4273,6 +4289,7 @@ static int __pci_dev_specific_reset(struct pci_dev *dev, bool probe,
 		ret = pci_dev_reset_iommu_prepare(dev);
 		if (ret) {
 			pci_err(dev, "failed to stop IOMMU for a PCI reset: %d\n", ret);
+			*result = PCI_RESET_SKIPPED;
 			return ret;
 		}
 	}

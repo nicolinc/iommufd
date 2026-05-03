@@ -960,10 +960,12 @@ int pci_dev_acpi_reset(struct pci_dev *dev, bool probe,
 		       enum pci_reset_result *result)
 {
 	acpi_handle handle = ACPI_HANDLE(&dev->dev);
-	int ret;
+	int ret = 0;
 
-	if (!handle || !acpi_has_method(handle, "_RST"))
+	if (!handle || !acpi_has_method(handle, "_RST")) {
+		*result = PCI_RESET_SKIPPED;
 		return -ENOTTY;
+	}
 
 	if (probe)
 		return 0;
@@ -971,12 +973,20 @@ int pci_dev_acpi_reset(struct pci_dev *dev, bool probe,
 	ret = pci_dev_reset_iommu_prepare(dev);
 	if (ret) {
 		pci_err(dev, "failed to stop IOMMU for a PCI reset: %d\n", ret);
+		*result = PCI_RESET_SKIPPED;
 		return ret;
 	}
 
 	if (ACPI_FAILURE(acpi_evaluate_object(handle, "_RST", NULL, NULL))) {
 		pci_warn(dev, "ACPI _RST failed\n");
+		/*
+		 * ACPI_FAILURE on _RST means the firmware did not cause a state
+		 * change, so report it as PCI_RESET_SKIPPED rather than FAILED.
+		 */
+		*result = PCI_RESET_SKIPPED;
 		ret = -ENOTTY;
+	} else {
+		*result = PCI_RESET_SUCCEEDED;
 	}
 
 	pci_dev_reset_iommu_done(dev, *result);
