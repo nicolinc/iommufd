@@ -870,6 +870,7 @@ struct arm_smmu_device {
 
 	int				gerr_irq;
 	int				combined_irq;
+	raw_spinlock_t			gerror_lock;
 
 	unsigned long			oas; /* PA */
 	unsigned long			pgsize_bitmap;

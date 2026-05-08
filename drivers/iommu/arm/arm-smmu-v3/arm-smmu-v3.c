@@ -107,6 +107,7 @@ static const char * const event_class_str[] = {
 	[3] = "Reserved",
 };
 
+static irqreturn_t arm_smmu_gerror_handler(int irq, void *dev);
 static int arm_smmu_alloc_cd_tables(struct arm_smmu_master *master);
 
 static void parse_driver_options(struct arm_smmu_device *smmu)
@@ -911,6 +912,13 @@ int arm_smmu_cmdq_issue_cmdlist(struct arm_smmu_device *smmu,
 		llq.prod = queue_inc_prod_n(&llq, n);
 		sync_prod = llq.prod;
 		ret = arm_smmu_cmdq_poll_until_sync(smmu, cmdq, &llq);
+
+		/*
+		 * The GERROR ISR is not guaranteed to have run by this point,
+		 * so the atc_sync_timeouts test below could miss our ATC_INV
+		 * timeout. Thus, drain any pending GERROR synchronously first.
+		 */
+		arm_smmu_gerror_handler(0, smmu);
 
 		/*
 		 * Test atc_sync_timeouts first and see if there is ATC timeout
@@ -2386,10 +2394,19 @@ static irqreturn_t arm_smmu_priq_thread(int irq, void *dev)
 
 static int arm_smmu_device_disable(struct arm_smmu_device *smmu);
 
+/*
+ * Process any pending GERROR cause and ack via GERRORN.
+ *
+ * Called as the GERROR ISR and also directly from arm_smmu_cmdq_issue_cmdlist()
+ * after a CMD_SYNC poll, so that cmdq->atc_sync_timeouts is authoritative when
+ * the issuer reads its bit. The lock serializes the two callers.
+ */
 static irqreturn_t arm_smmu_gerror_handler(int irq, void *dev)
 {
 	u32 gerror, gerrorn, active;
 	struct arm_smmu_device *smmu = dev;
+
+	guard(raw_spinlock)(&smmu->gerror_lock);
 
 	gerror = readl_relaxed(smmu->base + ARM_SMMU_GERROR);
 	gerrorn = readl_relaxed(smmu->base + ARM_SMMU_GERRORN);
@@ -5511,6 +5528,7 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 	if (!smmu)
 		return -ENOMEM;
 	smmu->dev = dev;
+	raw_spin_lock_init(&smmu->gerror_lock);
 
 	if (dev->of_node) {
 		ret = arm_smmu_device_dt_probe(pdev, smmu);
