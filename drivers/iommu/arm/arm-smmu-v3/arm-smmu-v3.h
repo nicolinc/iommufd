@@ -974,6 +974,11 @@ struct arm_smmu_master {
 	/* Scratch memory for arm_smmu_atc_inv_master() to build an ATS array */
 	struct arm_smmu_invs		*ats_invs;
 	struct arm_smmu_vmaster		*vmaster; /* use smmu->streams_mutex */
+	/*
+	 * Serializes arm_smmu_write_ste(), reset_device_done, and an ATS-broken
+	 * path, preventing races on ats_broken flag and STE updates.
+	 */
+	spinlock_t			ats_broken_lock;
 	/* Locked by the iommu core using the group mutex */
 	struct arm_smmu_ctx_desc_cfg	cd_table;
 	unsigned int			num_streams;

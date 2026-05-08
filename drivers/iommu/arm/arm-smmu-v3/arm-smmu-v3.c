@@ -1902,7 +1902,25 @@ static void arm_smmu_write_ste(struct arm_smmu_master *master, u32 sid,
 		.sid = sid,
 	};
 
-	arm_smmu_write_entry(&ste_writer.writer, ste->data, target->data);
+	/*
+	 * Fence against the ATS-broken path concurrently overwriting STE.EATS.
+	 * It's fine if the ATS-broken path writes after arm_smmu_write_entry.
+	 * Otherwise, we must clear STE.EATS before sending a CFGI_STE command.
+	 */
+	if (le64_to_cpu(target->data[1]) & STRTAB_STE_1_EATS) {
+		struct arm_smmu_ste local_target = *target;
+
+		scoped_guard(spinlock_irqsave, &master->ats_broken_lock) {
+			if (READ_ONCE(master->ats_broken))
+				local_target.data[1] &=
+					~cpu_to_le64(STRTAB_STE_1_EATS);
+			arm_smmu_write_entry(&ste_writer.writer, ste->data,
+					     local_target.data);
+		}
+	} else {
+		arm_smmu_write_entry(&ste_writer.writer, ste->data,
+				     target->data);
+	}
 
 	/* It's likely that we'll want to use the new STE soon */
 	if (!(smmu->options & ARM_SMMU_OPT_SKIP_PREFETCH)) {
@@ -3090,6 +3108,9 @@ static void arm_smmu_reset_device_done(struct device *dev)
 
 	if (WARN_ON(!master))
 		return;
+
+	/* Ensure the device recovery is seen, to flush any pre-reset fault */
+	guard(spinlock_irqsave)(&master->ats_broken_lock);
 	WRITE_ONCE(master->ats_broken, false);
 }
 
@@ -4324,6 +4345,7 @@ static struct iommu_device *arm_smmu_probe_device(struct device *dev)
 
 	master->dev = dev;
 	master->smmu = smmu;
+	spin_lock_init(&master->ats_broken_lock);
 	dev_iommu_priv_set(dev, master);
 
 	ret = arm_smmu_insert_master(smmu, master);
