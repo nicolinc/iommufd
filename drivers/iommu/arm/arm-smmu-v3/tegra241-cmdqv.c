@@ -319,10 +319,19 @@ static void tegra241_vintf0_handle_error(struct tegra241_vintf *vintf)
 		while (map) {
 			unsigned long lidx = __ffs64(map);
 			struct tegra241_vcmdq *vcmdq = vintf->lvcmdqs[lidx];
-			u32 gerror = readl_relaxed(REG_VCMDQ_PAGE0(vcmdq, GERROR));
+			struct arm_smmu_cmdq *cmdq = &vcmdq->cmdq;
+			unsigned long flags;
+			u32 gerror, gerrorn;
 
-			__arm_smmu_cmdq_skip_err(&vintf->cmdqv->smmu, &vcmdq->cmdq);
+			raw_spin_lock_irqsave(&cmdq->cmdq_err_lock, flags);
+			gerror = readl_relaxed(REG_VCMDQ_PAGE0(vcmdq, GERROR));
+			gerrorn = readl_relaxed(REG_VCMDQ_PAGE0(vcmdq, GERRORN));
+
+			if ((gerror ^ gerrorn) & GERROR_CMDQ_ERR)
+				__arm_smmu_cmdq_skip_err(&vintf->cmdqv->smmu,
+							 cmdq);
 			writel(gerror, REG_VCMDQ_PAGE0(vcmdq, GERRORN));
+			raw_spin_unlock_irqrestore(&cmdq->cmdq_err_lock, flags);
 			map &= ~BIT_ULL(lidx);
 		}
 	}
@@ -643,7 +652,7 @@ static int tegra241_vcmdq_alloc_smmu_cmdq(struct tegra241_vcmdq *vcmdq)
 	q->q_base = q->base_dma & VCMDQ_ADDR;
 	q->q_base |= FIELD_PREP(VCMDQ_LOG2SIZE, q->llq.max_n_shift);
 
-	return arm_smmu_cmdq_init(smmu, cmdq);
+	return arm_smmu_cmdq_init(smmu, cmdq, NULL);
 }
 
 /* VINTF Logical VCMDQ Resource Helpers */
