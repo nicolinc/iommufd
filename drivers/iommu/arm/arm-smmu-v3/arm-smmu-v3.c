@@ -723,6 +723,13 @@ int arm_smmu_cmdq_issue_cmdlist(struct arm_smmu_device *smmu,
 
 		while (!queue_has_space(&llq, n + sync)) {
 			local_irq_restore(flags);
+			/*
+			 * If the CMDQ is nearly full, it's possible that the HW
+			 * is stalled by an unhandled GERROR_CMDQ_ERR. Thus give
+			 * cmdq_err_handler a chance before each poll.
+			 */
+			if (cmdq->cmdq_err_handler)
+				cmdq->cmdq_err_handler(smmu, cmdq);
 			if (arm_smmu_cmdq_poll_until_not_full(smmu, cmdq, &llq))
 				dev_err_ratelimited(smmu->dev, "CMDQ timeout\n");
 			local_irq_save(flags);
