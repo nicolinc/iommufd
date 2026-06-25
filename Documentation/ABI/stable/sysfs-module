@@ -45,3 +45,10 @@ Date:		Jun 2005
 Description:
 		If the module source has MODULE_VERSION, this file will contain
 		the version of the source code.
+
+What:		/sys/module/module/parameters/require_trust
+Description:
+		(RW) Emits "1" if modules are required to specify a trust=
+		option on load to permit driver(s) in the module to attach to
+		matched devices. By default drivers always attach on match
+		unless the kernel was compiled with DEVICE_TRUST_NONE.
