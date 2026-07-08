@@ -2590,6 +2590,51 @@ static void arm_smmu_inv_all_cmd(struct arm_smmu_inv *inv,
 }
 
 /*
+ * DEBUG (not for merge): flag a walk-cache-only invalidation whose emitted
+ * command cannot cover the leaf entries under a freed table. Fires only for a
+ * table-only tlbi (table_levels_bitmap set, leaf_levels_bitmap clear), which is
+ * exactly what arm_smmu_tlb_inv_walk() produces on an io-pgtable table free.
+ */
+static void arm_smmu_debug_underinval(struct arm_smmu_inv *inv,
+				      struct arm_smmu_tlbi *tlbi)
+{
+	unsigned int tg_lg2 = tlbi->smmu_domain->tgsz_lg2;
+	unsigned long granules;
+
+	if (!tlbi->table_levels_bitmap || tlbi->leaf_levels_bitmap)
+		return;
+
+	granules = (tlbi->last - tlbi->start + 1) >> tg_lg2;
+
+	if (inv->smmu->features & ARM_SMMU_FEAT_RANGE_INV) {
+		unsigned int ttl;
+
+		if (tlbi->range.use_full_inv)
+			return; /* full invalidation is safe */
+		ttl = FIELD_GET(CMDQ_TLBI_1_TTL, tlbi->range.data1);
+		/* ttl==0 hints all levels; ttl==3 hints the base 4K/16K/64K leaf */
+		if (ttl == 0 || ttl == 3)
+			return;
+		pr_warn_ratelimited(
+			"SMMUv3 DEBUG: RIL walk under-inval vmid/asid=%u table_bm=%#x start=%#lx last=%#lx tg_lg2=%u TTL=%u spans=%lu granules; leaves below hinted level NOT invalidated\n",
+			inv->id, tlbi->table_levels_bitmap, tlbi->start,
+			tlbi->last, tg_lg2, ttl, granules);
+		WARN_ONCE(1, "SMMUv3 DEBUG: first RIL walk under-invalidation (stack shows the io-pgtable free path)\n");
+	} else {
+		if (tlbi->single.use_full_inv)
+			return; /* full invalidation is safe */
+		if (tlbi->single.num >= granules)
+			return; /* every granule gets a probe */
+		pr_warn_ratelimited(
+			"SMMUv3 DEBUG: non-RIL walk under-inval vmid/asid=%u table_bm=%#x start=%#lx last=%#lx tg_lg2=%u probes=%u spans=%lu granules; up to %lu leaf entries left stale\n",
+			inv->id, tlbi->table_levels_bitmap, tlbi->start,
+			tlbi->last, tg_lg2, tlbi->single.num, granules,
+			granules - tlbi->single.num);
+		WARN_ONCE(1, "SMMUv3 DEBUG: first non-RIL walk under-invalidation (stack shows the io-pgtable free path)\n");
+	}
+}
+
+/*
  * Used by non INV_TYPE_ATS* invalidations. Returns true if it fell back to
  * full invalidation using nsize_opcode.
  */
@@ -2600,6 +2645,8 @@ static bool arm_smmu_inv_to_cmdq_batch(struct arm_smmu_inv *inv,
 {
 	u64 iova = tlbi->start;
 	unsigned int i;
+
+	arm_smmu_debug_underinval(inv, tlbi);
 
 	if (inv->smmu->features & ARM_SMMU_FEAT_RANGE_INV) {
 		if (tlbi->range.use_full_inv) {
