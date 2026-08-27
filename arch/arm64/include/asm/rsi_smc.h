@@ -190,4 +190,63 @@ struct realm_config {
  */
 #define SMC_RSI_HOST_CALL			SMC_RSI_FID(0x199)
 
+#define RSI_VDEV_FLAGS_VSMMU			BIT(0)
+#define RSI_VDEV_FLAGS_PROTOCOL_DATA_SET	BIT(1)
+#define RSI_VDEV_FLAGS_PLATFORM_NONCE		BIT(2)
+
+#ifndef __ASSEMBLER__
+
+struct rsi_vdevice_info {
+	union {
+		struct {
+			u64 flags;
+			u64 id_index;
+			union {
+				u8 hash_algo;
+				u64 padding0;
+			};
+			u64 lock_seq;
+			u64 meas_seq;
+			u64 report_seq;
+			u64 padding1;
+			u64 tdisp_version;
+			union {
+				u8 state;
+				u64 padding2;
+			};
+		};
+		u8 padding3[0x80];
+	};
+	union {
+		struct {
+			u8 protocol_data_digest[0x40];
+			u8 identity_digest[0x40];
+			u8 pubkey_digest[0x40];
+			u8 meas_digest[0x40];
+			u8 report_digest[0x40];
+		};
+		u8 padding4[0x1c0 - 0x80];
+	};
+	union {
+		struct {
+			u64 vsmmu_addr;
+			u64 vsmmu_vsid;
+		};
+		u8 padding5[0x200 - 0x1c0];
+	};
+};
+
+static_assert(sizeof(struct rsi_vdevice_info) == 0x200);
+
+#endif /* __ASSEMBLER__ */
+
+/*
+ * Get information for a device.
+ *
+ * arg1 == Realm device identifier
+ * arg2 == IPA to which the configuration data will be written
+ * ret0 == Status / error
+ */
+#define SMC_RSI_VDEV_GET_INFO			SMC_RSI_FID(0x19D)
+
 #endif /* __ASM_RSI_SMC_H_ */

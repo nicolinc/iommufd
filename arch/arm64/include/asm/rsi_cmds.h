@@ -170,4 +170,14 @@ static inline unsigned long rsi_attestation_token_continue(phys_addr_t granule,
 	return res.a0;
 }
 
+static inline unsigned long rsi_vdev_get_info(unsigned long vdev_id,
+					      phys_addr_t info)
+{
+	struct arm_smccc_res res;
+
+	arm_smccc_1_1_invoke(SMC_RSI_VDEV_GET_INFO, vdev_id, info, &res);
+
+	return res.a0;
+}
+
 #endif /* __ASM_RSI_CMDS_H */
