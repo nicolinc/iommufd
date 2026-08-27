@@ -32,6 +32,8 @@
 #include <kunit/visibility.h>
 #include <uapi/linux/iommufd.h>
 
+#include <asm/rsi.h>
+
 #include "arm-smmu-v3.h"
 #include "../../dma-iommu.h"
 
@@ -5507,6 +5509,38 @@ err_remove:
 	return ERR_PTR(ret);
 }
 
+static int arm_smmu_probe_realm_vsmmu(struct device *dev,
+				      const struct resource *res)
+{
+	unsigned long rsi_ret;
+	phys_addr_t top;
+
+	if (!is_realm_world())
+		return 0;
+
+	rsi_ret = rsi_vsmmu_get_info(res->start, &top);
+	if (rsi_ret != RSI_SUCCESS) {
+		dev_err(dev, "RSI_VSMMU_GET_INFO failed for %pr: %lu\n", res,
+			rsi_ret);
+		return -ENODEV;
+	}
+
+	if (top != res->end + 1) {
+		dev_err(dev, "VSMMU range %pr ends at %pa\n", res, &top);
+		return -EINVAL;
+	}
+
+	rsi_ret = rsi_arch_dev_activate(res->start, RSI_ARCH_DEV_SMMUV3);
+	if (rsi_ret != RSI_SUCCESS) {
+		dev_err(dev, "RSI_ARCH_DEV_ACTIVATE failed for %pr: %lu\n", res,
+			rsi_ret);
+		return -EIO;
+	}
+
+	device_cc_accept_cpu_integrated(dev);
+	return 0;
+}
+
 static int arm_smmu_device_probe(struct platform_device *pdev)
 {
 	int irq, ret;
@@ -5542,6 +5576,10 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 	}
 	ioaddr = res->start;
 	smmu->base_phys = ioaddr;
+
+	ret = arm_smmu_probe_realm_vsmmu(dev, res);
+	if (ret)
+		return ret;
 
 	/*
 	 * Don't map the IMPLEMENTATION DEFINED regions, since they may contain
