@@ -4223,6 +4223,49 @@ static int arm_smmu_master_prepare_ats(struct arm_smmu_master *master)
 	return arm_smmu_alloc_cd_tables(master);
 }
 
+static int arm_smmu_validate_realm_vdev(struct device *dev,
+					struct arm_smmu_device *smmu,
+					struct iommu_fwspec *fwspec)
+{
+	struct rsi_vdevice_info *info;
+	struct pci_dev *pdev;
+	unsigned long rsi_ret;
+	unsigned long vdev_id;
+	int ret = 0;
+
+	if (!device_tcb_trusted(smmu->dev))
+		return 0;
+
+	if (!dev_is_pci(dev) || fwspec->num_ids != 1)
+		return -EINVAL;
+
+	pdev = to_pci_dev(dev);
+	vdev_id = ((unsigned long)pci_domain_nr(pdev->bus) << 16) |
+		  PCI_DEVID(pdev->bus->number, pdev->devfn);
+
+	info = kzalloc_obj(*info);
+	if (!info)
+		return -ENOMEM;
+
+	rsi_ret = rsi_vdev_get_info(vdev_id, virt_to_phys(info));
+	if (rsi_ret != RSI_SUCCESS) {
+		dev_err(dev, "RSI_VDEV_GET_INFO failed: %lu\n", rsi_ret);
+		ret = -ENODEV;
+		goto out_free;
+	}
+
+	if (!(info->flags & RSI_VDEV_FLAGS_VSMMU) ||
+	    info->vsmmu_addr != smmu->base_phys ||
+	    info->vsmmu_vsid != fwspec->ids[0]) {
+		dev_err(dev, "VDEV is not bound to this VSMMU and StreamID\n");
+		ret = -EINVAL;
+	}
+
+out_free:
+	kfree(info);
+	return ret;
+}
+
 static struct iommu_device *arm_smmu_probe_device(struct device *dev)
 {
 	int ret;
@@ -4236,6 +4279,10 @@ static struct iommu_device *arm_smmu_probe_device(struct device *dev)
 	smmu = arm_smmu_get_by_fwnode(fwspec->iommu_fwnode);
 	if (!smmu)
 		return ERR_PTR(-ENODEV);
+
+	ret = arm_smmu_validate_realm_vdev(dev, smmu, fwspec);
+	if (ret)
+		return ERR_PTR(ret);
 
 	master = kzalloc_obj(*master);
 	if (!master)
