@@ -1393,6 +1393,7 @@ static inline bool device_link_test(const struct device_link *link, u32 flags)
 /* Confidential Device state helpers */
 #ifdef CONFIG_CONFIDENTIAL_DEVICES
 int device_cc_accept(struct device *dev);
+void device_cc_accept_cpu_integrated(struct device *dev);
 int device_cc_reject(struct device *dev);
 bool device_cc_accepted(struct device *dev);
 #else
@@ -1401,6 +1402,12 @@ static inline int device_cc_accept(struct device *dev)
 	lockdep_assert_held(&dev->mutex);
 	return 0;
 }
+
+static inline void device_cc_accept_cpu_integrated(struct device *dev)
+{
+	lockdep_assert_held(&dev->mutex);
+}
+
 static inline int device_cc_reject(struct device *dev)
 {
 	lockdep_assert_held(&dev->mutex);

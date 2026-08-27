@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (C) 2026 Intel Corporation */
 #include <linux/device.h>
+#include <linux/export.h>
 #include <linux/lockdep.h>
 #include "base.h"
 
@@ -34,6 +35,20 @@ int device_cc_accept(struct device *dev)
 	return 0;
 }
 
+/**
+ * device_cc_accept_cpu_integrated() - Accept a CPU-integrated device
+ * @dev: device to accept
+ *
+ * CPU-integrated devices are accepted as part of their driver probe. Mark
+ * them as able to access private memory without requiring driver detachment.
+ */
+void device_cc_accept_cpu_integrated(struct device *dev)
+{
+	lockdep_assert_held(&dev->mutex);
+	dev->p->cc_accepted = 1;
+}
+EXPORT_SYMBOL_GPL(device_cc_accept_cpu_integrated);
+
 int device_cc_reject(struct device *dev)
 {
 	lockdep_assert_held(&dev->mutex);
@@ -56,3 +71,4 @@ bool device_cc_accepted(struct device *dev)
 {
 	return dev->p->cc_accepted;
 }
+EXPORT_SYMBOL_GPL(device_cc_accepted);
