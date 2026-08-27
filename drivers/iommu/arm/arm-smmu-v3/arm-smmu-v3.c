@@ -4192,6 +4192,16 @@ static int arm_smmu_master_prepare_ats(struct arm_smmu_master *master)
 
 	if (!dev_is_pci(master->dev))
 		return 0;
+
+	/*
+	 * The core owns ATS for a device in the physical regime, as this SMMU
+	 * is not the thing that translates for it. Whether it supports ATS is
+	 * the wrong question to ask, and answering it would fail the probe for
+	 * nothing. Becoming T=1 is what runs this for real.
+	 */
+	if (master->dev->iommu->physical_regime)
+		return 0;
+
 	pdev = to_pci_dev(master->dev);
 
 	if (!arm_smmu_ats_supported(master)) {
@@ -4218,7 +4228,106 @@ static int arm_smmu_master_prepare_ats(struct arm_smmu_master *master)
 
 	master->ats_always_on = true;
 
+	/* A transition that failed on its way out of the regime may retry */
+	if (arm_smmu_cdtab_allocated(&master->cd_table))
+		return 0;
+
 	return arm_smmu_alloc_cd_tables(master);
+}
+
+/*
+ * A realm device is T=1 only if the RMM has bound it to this VSMMU as a VDEV.
+ * Mark those as reaching private memory, and park everything else in the
+ * blocking domain, where the T=1 traffic it must not issue is refused.
+ */
+static int arm_smmu_probe_realm_vdev(struct device *dev,
+				     struct arm_smmu_device *smmu,
+				     struct iommu_fwspec *fwspec)
+{
+	struct rsi_vdevice_info *info;
+	unsigned long rsi_ret;
+	unsigned long vdev_id;
+	struct pci_dev *pdev;
+	bool trusted = false;
+	int ret = 0;
+
+	/* Only a PCI function can be a VDEV, keyed off its requester ID */
+	if (!dev_is_pci(dev))
+		goto out;
+
+	/*
+	 * A binding names one vSID, so there is nothing to check against and
+	 * no point asking. Say it at debug level only, since nothing so far
+	 * suggests this device was ever meant to be T=1.
+	 */
+	if (fwspec->num_ids != 1) {
+		dev_dbg(dev, "%u StreamIDs in firmware, expected 1\n",
+			fwspec->num_ids);
+		goto out;
+	}
+
+	pdev = to_pci_dev(dev);
+	vdev_id = ((unsigned long)pci_domain_nr(pdev->bus) << 16) |
+		  PCI_DEVID(pdev->bus->number, pdev->devfn);
+
+	info = kzalloc_obj(*info);
+	if (!info)
+		return -ENOMEM;
+
+	/*
+	 * RSI_ERROR_INPUT covers both a free vdev_id and three ways of handing
+	 * an invalid buffer to the RMM. This buffer is sound: the structure is
+	 * exactly 512 bytes wide, so kmalloc aligns it to 512, and slab memory
+	 * is realm private and never RIPAS_EMPTY. So the RMM holds no VDEV for
+	 * this device, either because it never will or because the host has not
+	 * created one yet. Both look alike here, so stay at T=0 and let a later
+	 * probe find out otherwise.
+	 *
+	 * Any other error is the RMM refusing a call it should have answered. A
+	 * realm without device assignment, or an RMM too old for this command,
+	 * cannot reach here because RSI_VSMMU_GET_INFO would have failed this
+	 * SMMU probe first.
+	 */
+	rsi_ret = rsi_vdev_get_info(vdev_id, virt_to_phys(info));
+	if (rsi_ret == RSI_ERROR_INPUT)
+		goto out_free;
+	if (rsi_ret != RSI_SUCCESS) {
+		dev_err(dev, "RSI_VDEV_GET_INFO failed: %lu\n", rsi_ret);
+		ret = -EIO;
+		goto out_free;
+	}
+
+	/* Only a started VDEV issues T=1 traffic; an errored one never will */
+	if (info->state != RSI_VDEV_STARTED)
+		goto out_free;
+
+	/* A VDEV without a VSMMU reports no address or vSID to check */
+	if (!(info->flags & RSI_VDEV_FLAGS_VSMMU)) {
+		dev_warn(dev, "VDEV is not behind a VSMMU\n");
+		goto out_free;
+	}
+
+	/*
+	 * The RMM runs this as T=1, so guest firmware has to agree. Enforcing
+	 * that is not this driver's job, since the RMM blocks a device it has
+	 * not admitted whatever the guest decides. So say so and stay at T=0.
+	 */
+	if (info->vsmmu_addr != smmu->base_phys ||
+	    info->vsmmu_vsid != fwspec->ids[0]) {
+		dev_warn(dev,
+			 "VDEV is at VSMMU %#llx vSID %llu, firmware says %#llx vSID %u\n",
+			 info->vsmmu_addr, info->vsmmu_vsid,
+			 (u64)smmu->base_phys, fwspec->ids[0]);
+		goto out_free;
+	}
+
+	trusted = true;
+
+out_free:
+	kfree(info);
+out:
+	dev->iommu->physical_regime = !trusted;
+	return ret;
 }
 
 static struct iommu_device *arm_smmu_probe_device(struct device *dev)
@@ -4234,6 +4343,12 @@ static struct iommu_device *arm_smmu_probe_device(struct device *dev)
 	smmu = arm_smmu_get_by_fwnode(fwspec->iommu_fwnode);
 	if (!smmu)
 		return ERR_PTR(-ENODEV);
+
+	if (is_realm_world()) {
+		ret = arm_smmu_probe_realm_vdev(dev, smmu, fwspec);
+		if (ret)
+			return ERR_PTR(ret);
+	}
 
 	master = kzalloc_obj(*master);
 	if (!master)
@@ -4273,6 +4388,14 @@ static struct iommu_device *arm_smmu_probe_device(struct device *dev)
 	if (ret)
 		goto err_disable_pasid;
 
+	/*
+	 * Only a device that the RMM runs as T=1 reaches private memory. Mark
+	 * it once nothing is left that can fail, or a device left behind by a
+	 * failed probe would keep the mark with no IOMMU to go with it.
+	 */
+	if (is_realm_world() && !dev->iommu->physical_regime)
+		dma_set_private(dev);
+
 	return &smmu->iommu;
 
 err_disable_pasid:
@@ -4283,11 +4406,38 @@ err_free_master:
 	return ERR_PTR(ret);
 }
 
+/*
+ * The RMM can admit a device to the realm after it was probed, while no driver
+ * is bound to it. Ask again on the way in, and finish the setup that was left
+ * undone while the device was still T=0.
+ */
+static int arm_smmu_leave_physical_regime(struct device *dev)
+{
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
+	int ret;
+
+	ret = arm_smmu_probe_realm_vdev(dev, master->smmu, fwspec);
+	if (ret || dev->iommu->physical_regime)
+		return ret;
+
+	ret = arm_smmu_master_prepare_ats(master);
+	if (ret)
+		return ret;
+
+	dma_set_private(dev);
+	return 1;
+}
+
 static void arm_smmu_release_device(struct device *dev)
 {
 	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
 
 	WARN_ON(master->iopf_refcount);
+
+	/* The device is leaving this VSMMU, so it is no longer T=1 to us */
+	if (is_realm_world())
+		dma_clear_private(dev);
 
 	arm_smmu_disable_pasid(master);
 	arm_smmu_remove_master(master);
@@ -4385,6 +4535,7 @@ static const struct iommu_ops arm_smmu_ops = {
 	.domain_alloc_sva       = arm_smmu_sva_domain_alloc,
 	.domain_alloc_paging_flags = arm_smmu_domain_alloc_paging_flags,
 	.probe_device		= arm_smmu_probe_device,
+	.leave_physical_regime	= arm_smmu_leave_physical_regime,
 	.release_device		= arm_smmu_release_device,
 	.device_group		= arm_smmu_device_group,
 	.of_xlate		= arm_smmu_of_xlate,
