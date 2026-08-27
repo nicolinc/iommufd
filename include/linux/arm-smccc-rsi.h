@@ -7,6 +7,7 @@
 #define __LINUX_ARM_SMCCC_RSI_H_
 
 #include <linux/arm-smccc.h>
+#include <linux/bits.h>
 
 /*
  * This file describes the Realm Services Interface (RSI) Application Binary
@@ -189,5 +190,78 @@ struct realm_config {
  * ret0 == Status / error
  */
 #define SMC_RSI_HOST_CALL			SMC_RSI_FID(0x199)
+
+#define RSI_VDEV_FLAGS_VSMMU			BIT(0)
+#define RSI_VDEV_FLAGS_PROTOCOL_DATA_SET	BIT(1)
+#define RSI_VDEV_FLAGS_PLATFORM_NONCE		BIT(2)
+
+/* State of a VDEV, only RSI_VDEV_STARTED issues T=1 traffic */
+#define RSI_VDEV_UNLOCKED	UL(0)
+#define RSI_VDEV_LOCKED		UL(1)
+#define RSI_VDEV_STARTED	UL(2)
+#define RSI_VDEV_ERROR		UL(3)
+
+#ifndef __ASSEMBLER__
+
+/*
+ * hash_algo and state are 8 bits wide at the byte offsets the RMM defines, so
+ * the u8 in each union reads the right byte on any endianness.
+ */
+struct rsi_vdevice_info {
+	union {
+		struct {
+			u64 flags;
+			u64 id_index;
+			union {
+				u8 hash_algo;
+				u64 pad;
+			};
+			u64 lock_seq;
+			u64 meas_seq;
+			u64 report_seq;
+			u64 pad2;
+			u64 tdisp_version;
+			union {
+				u8 state;
+				u64 pad3;
+			};
+		};
+		u8 pad4[0x80];
+	};
+	union {
+		struct {
+			u8 protocol_data_digest[0x40];
+			u8 identity_digest[0x40];
+			u8 pubkey_digest[0x40];
+			u8 meas_digest[0x40];
+			u8 report_digest[0x40];
+		};
+		u8 pad5[0x1c0 - 0x80];
+	};
+	union {
+		struct {
+			u64 vsmmu_addr;
+			u64 vsmmu_vsid;
+		};
+		u8 pad6[0x200 - 0x1c0];
+	};
+	/*
+	 * The RMM requires the device information structure to be aligned to a
+	 * 512 byte boundary, ensure this happens by aligning this structure.
+	 */
+} __aligned(0x200);
+
+static_assert(sizeof(struct rsi_vdevice_info) == 0x200);
+
+#endif /* __ASSEMBLER__ */
+
+/*
+ * Get information for a device.
+ *
+ * arg1 == Realm device identifier
+ * arg2 == IPA to which the configuration data will be written
+ * ret0 == Status / error
+ */
+#define SMC_RSI_VDEV_GET_INFO			SMC_RSI_FID(0x19D)
 
 #endif /* __LINUX_ARM_SMCCC_RSI_H_ */
