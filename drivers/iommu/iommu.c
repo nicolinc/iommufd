@@ -133,6 +133,8 @@ static int __iommu_attach_group(struct iommu_domain *domain,
 static struct iommu_domain *__iommu_paging_domain_alloc_flags(struct device *dev,
 						       unsigned int type,
 						       unsigned int flags);
+static const struct iommu_device *
+iommu_from_fwnode(const struct fwnode_handle *fwnode);
 
 enum {
 	IOMMU_SET_DOMAIN_MUST_SUCCEED = 1 << 0,
@@ -298,6 +300,7 @@ int iommu_device_register(struct iommu_device *iommu,
 	iommu->ops = ops;
 	if (hwdev)
 		iommu->fwnode = dev_fwnode(hwdev);
+	iommu->cc_accepted = hwdev && device_cc_accepted(hwdev);
 
 	spin_lock(&iommu_device_lock);
 	list_add_tail(&iommu->list, &iommu_device_list);
@@ -490,6 +493,22 @@ static int iommu_init_device(struct device *dev)
 		if (!dev->iommu || dev->iommu_group)
 			return -ENODEV;
 	}
+
+	if (dev->iommu->fwspec) {
+		const struct iommu_device *iommu =
+			iommu_from_fwnode(dev->iommu->fwspec->iommu_fwnode);
+
+		/*
+		 * Keep the firmware description so a driver rebind after TDISP
+		 * acceptance can finish probing the device through this IOMMU.
+		 */
+		if (iommu && iommu->cc_accepted && !device_cc_accepted(dev)) {
+			dev->iommu->probe_deferred = 1;
+			return 0;
+		}
+	}
+	dev->iommu->probe_deferred = 0;
+
 	/*
 	 * At this point, relevant devices either now have a fwspec which will
 	 * match ops registered with a non-NULL fwnode, or we can reasonably
@@ -626,6 +645,7 @@ DEFINE_MUTEX(iommu_probe_device_lock);
 
 static int __iommu_probe_device(struct device *dev, struct list_head *group_list)
 {
+	bool probe_was_deferred = dev->iommu && dev->iommu->probe_deferred;
 	struct iommu_group *group;
 	struct group_device *gdev;
 	int ret;
@@ -644,13 +664,13 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 		return 0;
 
 	ret = iommu_init_device(dev);
-	if (ret)
+	if (ret || dev->iommu->probe_deferred)
 		return ret;
 	/*
 	 * And if we do now see any replay calls, they would indicate someone
 	 * misusing the dma_configure path outside bus code.
 	 */
-	if (dev->driver)
+	if (dev->driver && !probe_was_deferred)
 		dev_WARN(dev, "late IOMMU probe at driver bind, something fishy here!\n");
 
 	group = dev->iommu_group;
@@ -709,12 +729,15 @@ err_put_group:
 int iommu_probe_device(struct device *dev)
 {
 	const struct iommu_ops *ops;
+	bool probe_deferred = false;
 	int ret;
 
 	mutex_lock(&iommu_probe_device_lock);
 	ret = __iommu_probe_device(dev, NULL);
+	if (!ret)
+		probe_deferred = dev->iommu->probe_deferred;
 	mutex_unlock(&iommu_probe_device_lock);
-	if (ret)
+	if (ret || probe_deferred)
 		return ret;
 
 	ops = dev_iommu_ops(dev);
@@ -3316,9 +3339,19 @@ out_unlock:
 int iommu_device_use_default_domain(struct device *dev)
 {
 	/* Caller is the driver core during the pre-probe path */
-	struct iommu_group *group = dev->iommu_group;
+	struct iommu_group *group;
 	int ret = 0;
 
+	if (dev->iommu && dev->iommu->probe_deferred) {
+		if (!device_cc_accepted(dev))
+			return 0;
+
+		ret = iommu_probe_device(dev);
+		if (ret)
+			return ret;
+	}
+
+	group = dev->iommu_group;
 	if (!group)
 		return 0;
 
