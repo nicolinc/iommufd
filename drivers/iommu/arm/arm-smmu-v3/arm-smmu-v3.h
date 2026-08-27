@@ -898,6 +898,7 @@ struct arm_smmu_device {
 	const struct arm_smmu_impl_ops	*impl_ops;
 
 	void __iomem			*base;
+	phys_addr_t			base_phys;
 	void __iomem			*page1;
 
 #define ARM_SMMU_FEAT_2_LVL_STRTAB	(1 << 0)
