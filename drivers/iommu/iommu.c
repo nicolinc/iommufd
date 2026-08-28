@@ -1250,6 +1250,13 @@ static int iommu_create_device_direct_mappings(struct iommu_domain *domain,
 	unsigned long pg_size;
 	int ret = 0;
 
+	/*
+	 * Firmware requests a 1:1 mapping, but the IOMMU does not translate for
+	 * a device while TDISP is T=0. Skip the region.
+	 */
+	if (dev->iommu->tdisp_t0)
+		return 0;
+
 	pg_size = domain->pgsize_bitmap ? 1UL << __ffs(domain->pgsize_bitmap) : 0;
 
 	if (WARN_ON_ONCE(iommu_is_dma_domain(domain) && !pg_size))
@@ -1802,10 +1809,26 @@ __iommu_group_alloc_default_domain(struct iommu_group *group, int req_type)
 static struct iommu_domain *
 iommu_group_alloc_default_domain(struct iommu_group *group, int req_type)
 {
-	const struct iommu_ops *ops = dev_iommu_ops(iommu_group_first_dev(group));
+	struct device *first = iommu_group_first_dev(group);
+	const struct iommu_ops *ops = dev_iommu_ops(first);
 	struct iommu_domain *dom;
 
 	lockdep_assert_held(&group->mutex);
+
+	/*
+	 * TDISP T=0 describes this device's DMA path, rather than its default
+	 * domain preference. Keep the device associated with its IOMMU, but use
+	 * blocking domain while the device remains T=0.
+	 *
+	 * This overrides any type the system or driver would otherwise select.
+	 * Every device on a confidential IOMMU starts with TDISP T=0, so each
+	 * selects the blocking domain uniformly.
+	 */
+	if (first->iommu->tdisp_t0) {
+		if (!ops->blocked_domain)
+			return ERR_PTR(-EINVAL);
+		return ops->blocked_domain;
+	}
 
 	/*
 	 * Allow legacy drivers to specify the domain that will be the default
@@ -2409,6 +2432,14 @@ static int __iommu_attach_group(struct iommu_domain *domain,
 	dev = iommu_group_first_dev(group);
 	if (!dev_has_iommu(dev) ||
 	    !domain_iommu_ops_compatible(dev_iommu_ops(dev), domain))
+		return -EINVAL;
+
+	/*
+	 * A driver managing its own DMA may reach this path without requesting
+	 * a default domain while this device remains TDISP T=0. Such a domain
+	 * makes the IOMMU translate for a device it must leave alone.
+	 */
+	if (dev->iommu->tdisp_t0)
 		return -EINVAL;
 
 	return __iommu_group_set_domain(group, domain);
@@ -3337,6 +3368,12 @@ static ssize_t iommu_group_store_type(struct iommu_group *group,
 		goto out_unlock;
 	}
 
+	/* Do not let sysfs move a TDISP T=0 device from blocking. */
+	if (iommu_group_first_dev(group)->iommu->tdisp_t0) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
 	ret = iommu_setup_default_domain(group, req_type);
 	if (ret)
 		goto out_unlock;
@@ -3702,6 +3739,15 @@ int iommu_attach_device_pasid(struct iommu_domain *domain,
 		goto out_unlock;
 	}
 
+	/*
+	 * A PASID domain makes this IOMMU translate a TDISP T=0 device's DMA,
+	 * precisely what this state rules out.
+	 */
+	if (dev->iommu->tdisp_t0) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
 	for_each_group_device(group, device) {
 		/*
 		 * Skip PASID validation for devices without PASID support
@@ -3792,6 +3838,15 @@ int iommu_replace_device_pasid(struct iommu_domain *domain,
 	 */
 	if (group->recovery_cnt) {
 		ret = -EBUSY;
+		goto out_unlock;
+	}
+
+	/*
+	 * A PASID domain makes this IOMMU translate a TDISP T=0 device's DMA,
+	 * precisely what this state rules out.
+	 */
+	if (dev->iommu->tdisp_t0) {
+		ret = -EINVAL;
 		goto out_unlock;
 	}
 
@@ -4029,6 +4084,12 @@ int iommu_replace_group_handle(struct iommu_group *group,
 		return -EINVAL;
 
 	mutex_lock(&group->mutex);
+	/* Keep a TDISP T=0 device in its blocking domain. */
+	if (iommu_group_first_dev(group)->iommu->tdisp_t0) {
+		ret = -EINVAL;
+		goto err_unlock;
+	}
+
 	entry = iommu_make_pasid_array_entry(new_domain, handle);
 	ret = xa_reserve(&group->pasid_array, IOMMU_NO_PASID, GFP_KERNEL);
 	if (ret)
