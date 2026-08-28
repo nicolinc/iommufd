@@ -501,6 +501,42 @@ static void dma_setup_need_sync(struct device *dev)
 static inline void dma_setup_need_sync(struct device *dev) { }
 #endif /* !CONFIG_DMA_NEED_SYNC */
 
+/**
+ * dma_init_unencrypted - Compute whether @dev needs the shared alias
+ * @dev: device to compute the DMA memory flavour for
+ *
+ * force_dma_unencrypted() sits on the DMA mapping fast path, so its answer is
+ * computed here instead: once when the device is added, and then again on every
+ * DMA mask change, because an architecture may key the answer off the address
+ * range that the device is able to reach. A device that reaches private memory
+ * keeps that property for its whole lifetime, so it is never reconsidered here.
+ */
+void dma_init_unencrypted(struct device *dev)
+{
+	if (dev_dma_private(dev))
+		return;
+	dev_assign_dma_unencrypted(dev, arch_dma_force_unencrypted(dev));
+}
+
+/**
+ * dma_set_private - Note that @dev reaches private memory directly
+ * @dev: device that has been admitted to the trust boundary
+ *
+ * Called by whichever layer knows how the DMA of @dev is translated: the IOMMU
+ * layer for a device behind an IOMMU, or the driver for a CPU built in device
+ * that has proven itself to the platform.
+ *
+ * It has to be called before the first DMA mapping is made, and it can never be
+ * undone, since anything mapped already was mapped for the flavour of memory in
+ * force at the time.
+ */
+void dma_set_private(struct device *dev)
+{
+	dev_set_dma_private(dev);
+	dev_clear_dma_unencrypted(dev);
+}
+EXPORT_SYMBOL_GPL(dma_set_private);
+
 /*
  * The whole dma_get_sgtable() idea is fundamentally unsafe - it seems
  * that the intention is to allow exporting memory allocated via the
@@ -941,6 +977,7 @@ int dma_set_mask(struct device *dev, u64 mask)
 	arch_dma_set_mask(dev, mask);
 	*dev->dma_mask = mask;
 	dma_setup_need_sync(dev);
+	dma_init_unencrypted(dev);
 
 	return 0;
 }
@@ -958,6 +995,7 @@ int dma_set_coherent_mask(struct device *dev, u64 mask)
 		return -EIO;
 
 	dev->coherent_dma_mask = mask;
+	dma_init_unencrypted(dev);
 	return 0;
 }
 EXPORT_SYMBOL(dma_set_coherent_mask);

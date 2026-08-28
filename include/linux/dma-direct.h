@@ -126,13 +126,23 @@ static inline phys_addr_t dma_to_phys(struct device *dev, dma_addr_t dma_addr)
 #endif /* !CONFIG_ARCH_HAS_PHYS_TO_DMA */
 
 #ifdef CONFIG_ARCH_HAS_FORCE_DMA_UNENCRYPTED
-bool force_dma_unencrypted(struct device *dev);
+bool arch_dma_force_unencrypted(struct device *dev);
 #else
-static inline bool force_dma_unencrypted(struct device *dev)
+static inline bool arch_dma_force_unencrypted(struct device *dev)
 {
 	return false;
 }
 #endif /* CONFIG_ARCH_HAS_FORCE_DMA_UNENCRYPTED */
+
+/*
+ * Whether the device has to be handed the shared alias of a buffer. The answer
+ * is computed once per device by dma_init_unencrypted(), since the mapping path
+ * is too hot to ask the architecture on every call.
+ */
+static inline bool force_dma_unencrypted(struct device *dev)
+{
+	return dev_dma_unencrypted(dev);
+}
 
 static inline bool dma_capable(struct device *dev, dma_addr_t addr, size_t size,
 		bool is_ram, unsigned long attrs)

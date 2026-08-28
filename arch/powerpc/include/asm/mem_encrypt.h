@@ -13,7 +13,7 @@
 
 struct device;
 
-static inline bool force_dma_unencrypted(struct device *dev)
+static inline bool arch_dma_force_unencrypted(struct device *dev)
 {
 	return is_secure_guest();
 }

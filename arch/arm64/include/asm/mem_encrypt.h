@@ -19,7 +19,7 @@ int set_memory_decrypted(unsigned long addr, int numpages);
 
 int realm_register_memory_enc_ops(void);
 
-static inline bool force_dma_unencrypted(struct device *dev)
+static inline bool arch_dma_force_unencrypted(struct device *dev)
 {
 	return is_realm_world() || is_protected_kvm_guest();
 }

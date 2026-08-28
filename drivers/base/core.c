@@ -3715,6 +3715,14 @@ int device_add(struct device *dev)
 	error = device_add_attrs(dev);
 	if (error)
 		goto AttrsError;
+
+	/*
+	 * Settle the DMA memory flavour before the bus notifiers run, because
+	 * that is where an IOMMU gets to say that this device reaches private
+	 * memory, overriding the architecture default.
+	 */
+	dma_init_unencrypted(dev);
+
 	error = bus_add_device(dev);
 	if (error)
 		goto BusError;

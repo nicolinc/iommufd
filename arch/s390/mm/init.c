@@ -138,7 +138,7 @@ int set_memory_decrypted(unsigned long vaddr, int numpages)
 }
 
 /* are we a protected virtualization guest? */
-bool force_dma_unencrypted(struct device *dev)
+bool arch_dma_force_unencrypted(struct device *dev)
 {
 	return is_prot_virt_guest();
 }
