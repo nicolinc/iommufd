@@ -15,6 +15,7 @@
 
 #include <linux/bug.h>
 #include <linux/compiler.h>
+#include <linux/device.h>
 #include <linux/err.h>
 #include <linux/mm.h>
 
@@ -48,3 +49,16 @@ int set_memory_decrypted(unsigned long addr, int numpages)
 	return crypt_ops->decrypt(addr, numpages);
 }
 EXPORT_SYMBOL_GPL(set_memory_decrypted);
+
+bool force_dma_unencrypted(struct device *dev)
+{
+	/*
+	 * A device that reaches realm private memory has no use for the shared
+	 * alias of a buffer, and must not be bounced through one.
+	 */
+	if (dev_dma_private(dev))
+		return false;
+
+	return is_realm_world() || is_protected_kvm_guest();
+}
+EXPORT_SYMBOL_GPL(force_dma_unencrypted);
