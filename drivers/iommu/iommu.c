@@ -598,10 +598,12 @@ static void iommu_deinit_device(struct device *dev)
 		/*
 		 * If the device requires direct mappings then it should not
 		 * be parked on a BLOCKED domain during release as that would
-		 * break the direct mappings.
+		 * break the direct mappings. A bypassed confidential vIOMMU is
+		 * not in the DMA path of the device. So it stays BLOCKED.
 		 */
 		if (dev->iommu->require_direct && ops->identity_domain &&
-		    release_domain == ops->blocked_domain)
+		    release_domain == ops->blocked_domain &&
+		    !iommu_cc_viommu_bypassed(dev))
 			release_domain = ops->identity_domain;
 
 		release_domain->ops->attach_dev(release_domain, dev,
@@ -1777,10 +1779,23 @@ __iommu_group_alloc_default_domain(struct iommu_group *group, int req_type)
 static struct iommu_domain *
 iommu_group_alloc_default_domain(struct iommu_group *group, int req_type)
 {
-	const struct iommu_ops *ops = dev_iommu_ops(iommu_group_first_dev(group));
+	struct device *first = iommu_group_first_dev(group);
+	const struct iommu_ops *ops = dev_iommu_ops(first);
 	struct iommu_domain *dom;
 
 	lockdep_assert_held(&group->mutex);
+
+	/*
+	 * A bypassed confidential vIOMMU is not in the DMA path of the device.
+	 * Attach the device to the blocking domain. This keeps the vIOMMU path
+	 * closed. Also, it keeps the DMA API on dma-direct, which matches the
+	 * DMA path set up by the hypervisor.
+	 */
+	if (iommu_cc_viommu_bypassed(first)) {
+		if (!ops->blocked_domain)
+			return ERR_PTR(-EINVAL);
+		return ops->blocked_domain;
+	}
 
 	/*
 	 * Allow legacy drivers to specify the domain that will be the default
@@ -2386,6 +2401,10 @@ static int __iommu_attach_group(struct iommu_domain *domain,
 	    !domain_iommu_ops_compatible(dev_iommu_ops(dev), domain))
 		return -EINVAL;
 
+	/* No domain attachment while the confidential vIOMMU is bypassed */
+	if (iommu_cc_viommu_bypassed(dev))
+		return -EINVAL;
+
 	return __iommu_group_set_domain(group, domain);
 }
 
@@ -2427,8 +2446,12 @@ static int __iommu_device_set_domain(struct iommu_group *group,
 	 * required 1:1 mapping. This test effectively excludes the device
 	 * being used with iommu_group_claim_dma_owner() which will block
 	 * vfio and iommufd as well.
+	 *
+	 * A bypassed confidential vIOMMU is not in the DMA path of the device.
+	 * The hypervisor sets up the identity translation on that path. So the
+	 * blocking domain cannot break any 1:1 mapping.
 	 */
-	if (dev->iommu->require_direct &&
+	if (dev->iommu->require_direct && !iommu_cc_viommu_bypassed(dev) &&
 	    (new_domain->type == IOMMU_DOMAIN_BLOCKED ||
 	     new_domain == group->blocking_domain)) {
 		dev_warn(dev,
@@ -3312,6 +3335,12 @@ static ssize_t iommu_group_store_type(struct iommu_group *group,
 		goto out_unlock;
 	}
 
+	/* No default domain change while the confidential vIOMMU is bypassed */
+	if (iommu_cc_viommu_bypassed(iommu_group_first_dev(group))) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
 	ret = iommu_setup_default_domain(group, req_type);
 	if (ret)
 		goto out_unlock;
@@ -3677,6 +3706,12 @@ int iommu_attach_device_pasid(struct iommu_domain *domain,
 		goto out_unlock;
 	}
 
+	/* PASID cannot be used while the confidential vIOMMU is bypassed */
+	if (iommu_cc_viommu_bypassed(dev)) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
 	for_each_group_device(group, device) {
 		/*
 		 * Skip PASID validation for devices without PASID support
@@ -3767,6 +3802,12 @@ int iommu_replace_device_pasid(struct iommu_domain *domain,
 	 */
 	if (group->recovery_cnt) {
 		ret = -EBUSY;
+		goto out_unlock;
+	}
+
+	/* PASID cannot be used while the confidential vIOMMU is bypassed */
+	if (iommu_cc_viommu_bypassed(dev)) {
+		ret = -EINVAL;
 		goto out_unlock;
 	}
 
@@ -4004,6 +4045,12 @@ int iommu_replace_group_handle(struct iommu_group *group,
 		return -EINVAL;
 
 	mutex_lock(&group->mutex);
+	/* Like attach, no replace while the confidential vIOMMU is bypassed */
+	if (iommu_cc_viommu_bypassed(iommu_group_first_dev(group))) {
+		ret = -EINVAL;
+		goto err_unlock;
+	}
+
 	entry = iommu_make_pasid_array_entry(new_domain, handle);
 	ret = xa_reserve(&group->pasid_array, IOMMU_NO_PASID, GFP_KERNEL);
 	if (ret)
@@ -4268,8 +4315,9 @@ int iommu_dma_prepare_msi(struct msi_desc *desc, phys_addr_t msi_addr)
 		return ret;
 
 	mutex_lock(&group->mutex);
-	/* An IDENTITY domain must pass through */
-	if (group->domain && group->domain->type != IOMMU_DOMAIN_IDENTITY) {
+	/* An IDENTITY domain or a confidential vIOMMU passes MSI through */
+	if (group->domain && group->domain->type != IOMMU_DOMAIN_IDENTITY &&
+	    !dev->iommu->iommu_dev->cc_private) {
 		switch (group->domain->cookie_type) {
 		case IOMMU_COOKIE_DMA_MSI:
 		case IOMMU_COOKIE_DMA_IOVA:

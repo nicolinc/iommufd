@@ -8,6 +8,17 @@
 #include <linux/iommu-debug-pagealloc.h>
 #include <linux/msi.h>
 
+/*
+ * A bypassed confidential vIOMMU does not translate the DMA of the device. The
+ * hypervisor sets up identity translation for the device instead. PCIe ATS on
+ * its own controls the ATS behavior. For now, every device behind a cc_private
+ * IOMMU bypasses it.
+ */
+static inline bool iommu_cc_viommu_bypassed(struct device *dev)
+{
+	return dev->iommu->iommu_dev->cc_private;
+}
+
 static inline const struct iommu_ops *dev_iommu_ops(struct device *dev)
 {
 	/*
