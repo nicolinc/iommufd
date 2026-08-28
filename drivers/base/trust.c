@@ -3,6 +3,7 @@
 
 #include <linux/device.h>
 #include <linux/device/trust.h>
+#include <linux/lockdep.h>
 #include <linux/module.h>
 #include "base.h"
 
@@ -16,6 +17,23 @@ bool device_tcb_trusted(struct device *dev)
 {
 	return dev->p->trust >= DEVICE_TRUST_TCB;
 }
+EXPORT_SYMBOL_GPL(device_tcb_trusted);
+
+/**
+ * device_trust_set_tcb - Note that @dev operates inside the TCB
+ * @dev: device that has proven itself to the platform
+ *
+ * A CPU built in device is not handed to the platform by a bus, and so its own
+ * driver is the only code that can prove it belongs inside the TCB. The driver
+ * calls this once it has done so, before it makes its first DMA mapping.
+ */
+void device_trust_set_tcb(struct device *dev)
+{
+	lockdep_assert_held(&dev->mutex);
+
+	dev->p->trust = DEVICE_TRUST_TCB;
+}
+EXPORT_SYMBOL_GPL(device_trust_set_tcb);
 
 /* Driver trust policy requires modules, builtin drivers always attach */
 static enum device_trust builtin_driver_trust(void)

@@ -31,12 +31,16 @@ struct device_driver;
 
 #ifdef CONFIG_DEVICE_TRUST
 bool device_tcb_trusted(struct device *dev);
+void device_trust_set_tcb(struct device *dev);
 void module_driver_trust(struct module *mod, const char *val);
 void module_driver_trust_init(struct module *mod, bool distrust);
 #else
 static inline bool device_tcb_trusted(struct device *dev)
 {
 	return false;
+}
+static inline void device_trust_set_tcb(struct device *dev)
+{
 }
 static inline void module_driver_trust(struct module *mod, const char *val)
 {
