@@ -218,6 +218,8 @@ void *dma_vmap_noncontiguous(struct device *dev, size_t size,
 void dma_vunmap_noncontiguous(struct device *dev, void *vaddr);
 int dma_mmap_noncontiguous(struct device *dev, struct vm_area_struct *vma,
 		size_t size, struct sg_table *sgt);
+void dma_set_private(struct device *dev);
+void dma_clear_private(struct device *dev);
 #else /* CONFIG_HAS_DMA */
 static inline dma_addr_t dma_map_page_attrs(struct device *dev,
 		struct page *page, size_t offset, size_t size,
@@ -356,6 +358,12 @@ static inline int dma_mmap_noncontiguous(struct device *dev,
 		struct vm_area_struct *vma, size_t size, struct sg_table *sgt)
 {
 	return -EINVAL;
+}
+static inline void dma_set_private(struct device *dev)
+{
+}
+static inline void dma_clear_private(struct device *dev)
+{
 }
 #endif /* CONFIG_HAS_DMA */
 

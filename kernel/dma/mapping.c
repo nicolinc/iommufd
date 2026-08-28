@@ -501,6 +501,44 @@ static void dma_setup_need_sync(struct device *dev)
 static inline void dma_setup_need_sync(struct device *dev) { }
 #endif /* !CONFIG_DMA_NEED_SYNC */
 
+/**
+ * dma_set_private - Note that @dev reaches private memory directly
+ * @dev: device that has been let inside the trust boundary
+ *
+ * Called by whichever layer knows how the DMA of @dev is translated: the IOMMU
+ * layer for a device behind an IOMMU, or the driver for a CPU built in device
+ * that has proven itself to the platform.
+ *
+ * The flag must not change while a mapping made under the old flavour is still
+ * live, so it is set before the device can map anything: from ->probe_device()
+ * for a device behind an IOMMU, which runs ahead of the client driver's probe,
+ * or early in probe for a CPU built in device, before it allocates anything it
+ * will DMA to.
+ *
+ * Neither helper looks at dev->driver. A CPU built in device sets the flag from
+ * its own probe, where a driver is bound already, and really_probe() binds the
+ * driver before ->dma_configure() runs, so an IOMMU can see one bound too.
+ */
+void dma_set_private(struct device *dev)
+{
+	dev_set_dma_private(dev);
+}
+EXPORT_SYMBOL_GPL(dma_set_private);
+
+/**
+ * dma_clear_private - Note that @dev no longer reaches private memory
+ * @dev: device that has left the trust boundary
+ *
+ * The counterpart of dma_set_private(), for a device that is taken back out,
+ * unplugged, or handed to a layer that never let it in. Same rule applies: no
+ * mapping made under the old flavour may still be live.
+ */
+void dma_clear_private(struct device *dev)
+{
+	dev_clear_dma_private(dev);
+}
+EXPORT_SYMBOL_GPL(dma_clear_private);
+
 /*
  * The whole dma_get_sgtable() idea is fundamentally unsafe - it seems
  * that the intention is to allow exporting memory allocated via the
