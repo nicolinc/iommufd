@@ -12,9 +12,16 @@ void device_initialize_trust(struct device *dev)
 		dev->p->trust = DEVICE_DEFAULT_TRUST;
 }
 
+bool device_tcb_trusted(struct device *dev)
+{
+	return dev->p->trust >= DEVICE_TRUST_TCB;
+}
+
 /* Driver trust policy requires modules, builtin drivers always attach */
 static enum device_trust builtin_driver_trust(void)
 {
+	if (IS_ENABLED(CONFIG_BUILTIN_DEVICE_TRUST_TCB))
+		return DEVICE_TRUST_TCB;
 	return DEVICE_TRUST_AUTO;
 }
 
@@ -43,6 +50,7 @@ bool device_trust_bind(const struct device_driver *drv, struct device *dev)
 static const char * const device_trust_names[] = {
 	[DEVICE_TRUST_NONE]	 = "none",
 	[DEVICE_TRUST_AUTO]	 = "auto",
+	[DEVICE_TRUST_TCB]	 = "tcb",
 };
 
 static enum device_trust device_trust_parse(const char *name)
