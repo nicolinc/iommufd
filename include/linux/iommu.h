@@ -822,6 +822,11 @@ struct iommu_domain_ops {
  * @singleton_group: Used internally for drivers that have only one group
  * @max_pasids: number of supported PASIDs
  * @ready: set once iommu_device_register() has completed successfully
+ * @private_dma: this instance only serves devices that have been let inside
+ *		 a trust boundary, so the core holds a client back until the
+ *		 DMA API says that the device reaches private memory. The core
+ *		 only reads that, it never sets it. Set by the driver before
+ *		 iommu_device_register().
  */
 struct iommu_device {
 	struct list_head list;
@@ -831,6 +836,7 @@ struct iommu_device {
 	struct iommu_group *singleton_group;
 	u32 max_pasids;
 	bool ready;
+	bool private_dma;
 };
 
 /**
@@ -867,6 +873,7 @@ struct iommu_fault_param {
  * @priv:	 IOMMU Driver private data
  * @max_pasids:  number of PASIDs this device can consume
  * @attach_deferred: the dma domain attachment is deferred
+ * @probe_deferred: IOMMU probing waits until the device has a driver
  * @pci_32bit_workaround: Limit DMA allocations to 32-bit IOVAs
  * @require_direct: device requires IOMMU_RESV_DIRECT regions
  * @shadow_on_flush: IOTLB flushes are used to sync shadow tables
@@ -881,6 +888,7 @@ struct dev_iommu {
 	struct iommu_device		*iommu_dev;
 	void				*priv;
 	u32				max_pasids;
+	u32				probe_deferred:1;
 	u32				attach_deferred:1;
 	u32				pci_32bit_workaround:1;
 	u32				require_direct:1;

@@ -133,6 +133,8 @@ static int __iommu_attach_group(struct iommu_domain *domain,
 static struct iommu_domain *__iommu_paging_domain_alloc_flags(struct device *dev,
 						       unsigned int type,
 						       unsigned int flags);
+static const struct iommu_device *
+iommu_from_fwnode(const struct fwnode_handle *fwnode);
 
 enum {
 	IOMMU_SET_DOMAIN_MUST_SUCCEED = 1 << 0,
@@ -503,6 +505,22 @@ static int iommu_init_device(struct device *dev)
 		goto err_free;
 	}
 
+	/*
+	 * A private-DMA IOMMU serves only a device that has been let inside the
+	 * trust boundary. Keep the firmware description until then, so that the
+	 * probe can be finished at the bind that follows.
+	 */
+	if (!dev->driver && dev->iommu->fwspec) {
+		const struct iommu_device *iommu =
+			iommu_from_fwnode(dev->iommu->fwspec->iommu_fwnode);
+
+		if (iommu && iommu->private_dma) {
+			dev->iommu->probe_deferred = 1;
+			return 0;
+		}
+	}
+	dev->iommu->probe_deferred = 0;
+
 	if (!try_module_get(ops->owner)) {
 		ret = -EINVAL;
 		goto err_free;
@@ -626,6 +644,7 @@ DEFINE_MUTEX(iommu_probe_device_lock);
 
 static int __iommu_probe_device(struct device *dev, struct list_head *group_list)
 {
+	bool probe_was_deferred = dev->iommu && dev->iommu->probe_deferred;
 	struct iommu_group *group;
 	struct group_device *gdev;
 	int ret;
@@ -644,13 +663,14 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 		return 0;
 
 	ret = iommu_init_device(dev);
-	if (ret)
+	if (ret || dev->iommu->probe_deferred)
 		return ret;
 	/*
 	 * And if we do now see any replay calls, they would indicate someone
-	 * misusing the dma_configure path outside bus code.
+	 * misusing the dma_configure path outside bus code. A probe that was
+	 * deferred to driver bind is the one legitimate late caller.
 	 */
-	if (dev->driver)
+	if (dev->driver && !probe_was_deferred)
 		dev_WARN(dev, "late IOMMU probe at driver bind, something fishy here!\n");
 
 	group = dev->iommu_group;
@@ -709,12 +729,14 @@ err_put_group:
 int iommu_probe_device(struct device *dev)
 {
 	const struct iommu_ops *ops;
+	bool probe_deferred;
 	int ret;
 
 	mutex_lock(&iommu_probe_device_lock);
 	ret = __iommu_probe_device(dev, NULL);
+	probe_deferred = !ret && dev->iommu->probe_deferred;
 	mutex_unlock(&iommu_probe_device_lock);
-	if (ret)
+	if (ret || probe_deferred)
 		return ret;
 
 	ops = dev_iommu_ops(dev);
@@ -3316,9 +3338,24 @@ out_unlock:
 int iommu_device_use_default_domain(struct device *dev)
 {
 	/* Caller is the driver core during the pre-probe path */
-	struct iommu_group *group = dev->iommu_group;
+	struct iommu_group *group;
 	int ret = 0;
 
+	if (dev->iommu && dev->iommu->probe_deferred) {
+		/*
+		 * Still outside the trust boundary, so leave the probe deferred
+		 * and the device on the direct DMA path. It gets another chance
+		 * at the bind that follows whatever lets it in.
+		 */
+		if (!dev_dma_private(dev))
+			return 0;
+
+		ret = iommu_probe_device(dev);
+		if (ret)
+			return ret;
+	}
+
+	group = dev->iommu_group;
 	if (!group)
 		return 0;
 
