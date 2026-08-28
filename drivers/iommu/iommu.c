@@ -1254,6 +1254,16 @@ static int iommu_create_device_direct_mappings(struct iommu_domain *domain,
 	unsigned long pg_size;
 	int ret = 0;
 
+	/*
+	 * Firmware asks this IOMMU for a 1:1 mapping, but it does not translate
+	 * for a device in the physical regime at all, so the request is not for
+	 * it to answer. Whatever does translate for the device is what has to
+	 * honour that region. Nothing is lost by returning here, as a blocking
+	 * domain would map nothing anyway.
+	 */
+	if (dev->iommu->physical_regime)
+		return 0;
+
 	pg_size = domain->pgsize_bitmap ? 1UL << __ffs(domain->pgsize_bitmap) : 0;
 
 	if (WARN_ON_ONCE(iommu_is_dma_domain(domain) && !pg_size))
@@ -1806,10 +1816,25 @@ __iommu_group_alloc_default_domain(struct iommu_group *group, int req_type)
 static struct iommu_domain *
 iommu_group_alloc_default_domain(struct iommu_group *group, int req_type)
 {
-	const struct iommu_ops *ops = dev_iommu_ops(iommu_group_first_dev(group));
+	struct device *first = iommu_group_first_dev(group);
+	const struct iommu_ops *ops = dev_iommu_ops(first);
 	struct iommu_domain *dom;
 
 	lockdep_assert_held(&group->mutex);
+
+	/*
+	 * A device in the physical regime operates outside this IOMMU, so the
+	 * driver must not translate for it but attach it to its blocking domain
+	 * instead. That is a fact about the device rather than a preference, so
+	 * it overrides any type that the system or the driver would otherwise
+	 * pick. Only a confidential instance gets here, and its groups hold one
+	 * device each, so no translated device shares the answer.
+	 */
+	if (first->iommu->physical_regime) {
+		if (!ops->blocked_domain)
+			return ERR_PTR(-EINVAL);
+		return ops->blocked_domain;
+	}
 
 	/*
 	 * Allow legacy drivers to specify the domain that will be the default
@@ -2413,6 +2438,14 @@ static int __iommu_attach_group(struct iommu_domain *domain,
 	dev = iommu_group_first_dev(group);
 	if (!dev_has_iommu(dev) ||
 	    !domain_iommu_ops_compatible(dev_iommu_ops(dev), domain))
+		return -EINVAL;
+
+	/*
+	 * A driver managing its own DMA never asks for a default domain, so it
+	 * can get here with a device that is still in the physical regime. The
+	 * domain it brings would translate for one this IOMMU must leave alone.
+	 */
+	if (dev->iommu->physical_regime)
 		return -EINVAL;
 
 	return __iommu_group_set_domain(group, domain);
@@ -3341,6 +3374,12 @@ static ssize_t iommu_group_store_type(struct iommu_group *group,
 		goto out_unlock;
 	}
 
+	/* No type to pick for a device this IOMMU never translates for */
+	if (iommu_group_first_dev(group)->iommu->physical_regime) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
 	ret = iommu_setup_default_domain(group, req_type);
 	if (ret)
 		goto out_unlock;
@@ -3362,6 +3401,51 @@ out_unlock:
  * The device driver about to bind @dev wants to do DMA through the kernel
  * DMA API. Return 0 if it is allowed, otherwise an error.
  */
+/*
+ * A device in the physical regime was classified when it was probed, and that
+ * can go stale while no driver is bound. Ask the driver again before one is,
+ * and hand it a translating domain if the answer has turned around.
+ *
+ * The driver takes ATS over when it accepts the device, and pci_prepare_ats()
+ * refuses one that already has ATS on, so give it back first and take it again
+ * if the device stays where it is.
+ *
+ * The domain has to land before any of this counts. Until it does the device
+ * is still blocked, so unwind everything the move set up and leave it in the
+ * regime, where the bind after this one can try the whole thing again.
+ */
+static int iommu_leave_physical_regime(struct device *dev)
+{
+	struct iommu_group *group = dev->iommu_group;
+	const struct iommu_ops *ops = dev_iommu_ops(dev);
+	int ret;
+
+	lockdep_assert_held(&group->mutex);
+
+	if (!dev->iommu->physical_regime || !ops->leave_physical_regime ||
+	    group->owner_cnt)
+		return 0;
+
+	iommu_physical_regime_exit(dev);
+	dev->iommu->physical_regime = 0;
+
+	ret = ops->leave_physical_regime(dev);
+	if (ret > 0) {
+		ret = iommu_setup_default_domain(group, 0);
+		if (!ret) {
+			/* A confidential IOMMU gives @dev a group to itself */
+			iommu_setup_dma_ops(dev, group->default_domain);
+			return 0;
+		}
+		dma_clear_private(dev);
+	}
+
+	dev->iommu->physical_regime = 1;
+	if (iommu_physical_regime_enter(dev) && !ret)
+		return -ENODEV;
+	return ret;
+}
+
 int iommu_device_use_default_domain(struct device *dev)
 {
 	/* Caller is the driver core during the pre-probe path */
@@ -3384,6 +3468,10 @@ int iommu_device_use_default_domain(struct device *dev)
 			goto unlock_out;
 		}
 	}
+
+	ret = iommu_leave_physical_regime(dev);
+	if (ret)
+		goto unlock_out;
 
 	group->owner_cnt++;
 
@@ -3684,6 +3772,13 @@ int iommu_attach_device_pasid(struct iommu_domain *domain,
 	if (!group)
 		return -ENODEV;
 
+	/*
+	 * A PASID domain would have this IOMMU translate for a device that is
+	 * in the physical regime, which is the one thing that regime rules out.
+	 */
+	if (dev->iommu->physical_regime)
+		return -EINVAL;
+
 	ops = dev_iommu_ops(dev);
 
 	if (!domain->ops->set_dev_pasid ||
@@ -3780,6 +3875,13 @@ int iommu_replace_device_pasid(struct iommu_domain *domain,
 
 	if (!group)
 		return -ENODEV;
+
+	/*
+	 * A PASID domain would have this IOMMU translate for a device that is
+	 * in the physical regime, which is the one thing that regime rules out.
+	 */
+	if (dev->iommu->physical_regime)
+		return -EINVAL;
 
 	if (!domain->ops->set_dev_pasid)
 		return -EOPNOTSUPP;

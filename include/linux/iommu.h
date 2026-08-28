@@ -656,6 +656,11 @@ __iommu_copy_struct_to_user(const struct iommu_user_data *dst_data,
  * @domain_alloc_nested: Allocate an iommu_domain for nested translation.
  * @probe_device: Add device to iommu driver handling
  * @release_device: Remove device from iommu driver handling
+ * @leave_physical_regime: Ask whether a device in the physical regime can
+ *                         leave it now, and if so finish the setup that
+ *                         probe_device() left undone for it. ATS has been
+ *                         handed back by the core beforehand. Return 1 if
+ *                         the device left, 0 if it stays, or an errno.
  * @probe_finalize: Do final setup work after the device is added to an IOMMU
  *                  group and attached to the groups domain
  * @device_group: find iommu group for a particular device
@@ -714,6 +719,7 @@ struct iommu_ops {
 
 	struct iommu_device *(*probe_device)(struct device *dev);
 	void (*release_device)(struct device *dev);
+	int (*leave_physical_regime)(struct device *dev);
 	void (*probe_finalize)(struct device *dev);
 	struct iommu_group *(*device_group)(struct device *dev);
 
