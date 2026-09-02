@@ -536,9 +536,24 @@ static int iommu_init_device(struct device *dev)
 	}
 	dev->iommu->iommu_dev = iommu_dev;
 
+	/* The driver has told us it will not be translating for this device */
+	if (dev->iommu->physical_regime) {
+		/*
+		 * The regime relies on the group of one that a confidential
+		 * instance gets, so that no translated device shares it.
+		 */
+		if (WARN_ON(!iommu_dev->confidential)) {
+			ret = -ENODEV;
+			goto err_release;
+		}
+		ret = iommu_physical_regime_enter(dev);
+		if (ret)
+			goto err_release;
+	}
+
 	ret = iommu_device_link(iommu_dev, dev);
 	if (ret)
-		goto err_release;
+		goto err_physical;
 
 	/*
 	 * A confidential IOMMU is not the thing that isolates its devices from
@@ -563,6 +578,9 @@ static int iommu_init_device(struct device *dev)
 
 err_unlink:
 	iommu_device_unlink(iommu_dev, dev);
+err_physical:
+	if (dev->iommu->physical_regime)
+		iommu_physical_regime_exit(dev);
 err_release:
 	if (ops->release_device)
 		ops->release_device(dev);
@@ -580,6 +598,9 @@ static void iommu_deinit_device(struct device *dev)
 	const struct iommu_ops *ops = dev_iommu_ops(dev);
 
 	lockdep_assert_held(&group->mutex);
+
+	if (dev->iommu->physical_regime)
+		iommu_physical_regime_exit(dev);
 
 	iommu_device_unlink(dev->iommu->iommu_dev, dev);
 

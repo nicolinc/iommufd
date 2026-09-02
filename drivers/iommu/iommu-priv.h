@@ -8,6 +8,9 @@
 #include <linux/iommu-debug-pagealloc.h>
 #include <linux/msi.h>
 
+int iommu_physical_regime_enter(struct device *dev);
+void iommu_physical_regime_exit(struct device *dev);
+
 static inline const struct iommu_ops *dev_iommu_ops(struct device *dev)
 {
 	/*

@@ -873,6 +873,10 @@ struct iommu_fault_param {
  * @max_pasids:  number of PASIDs this device can consume
  * @attach_deferred: the dma domain attachment is deferred
  * @pci_32bit_workaround: Limit DMA allocations to 32-bit IOVAs
+ * @physical_regime: the device is operating outside this IOMMU, so the
+ *                   driver must not translate for it and is parked in its
+ *                   blocking domain. The core owns it meanwhile. Only a
+ *                   confidential instance may use this.
  * @require_direct: device requires IOMMU_RESV_DIRECT regions
  * @shadow_on_flush: IOTLB flushes are used to sync shadow tables
  *
@@ -888,6 +892,7 @@ struct dev_iommu {
 	u32				max_pasids;
 	u32				attach_deferred:1;
 	u32				pci_32bit_workaround:1;
+	u32				physical_regime:1;
 	u32				require_direct:1;
 	u32				shadow_on_flush:1;
 };
