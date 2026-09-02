@@ -17,6 +17,7 @@
 #include <linux/slab.h>
 #include <linux/errno.h>
 #include <linux/host1x_context_bus.h>
+#include <linux/dma-mapping.h>
 #include <linux/iommu.h>
 #include <linux/iommufd.h>
 #include <linux/idr.h>
@@ -313,6 +314,23 @@ int iommu_device_register(struct iommu_device *iommu,
 }
 EXPORT_SYMBOL_GPL(iommu_device_register);
 
+/**
+ * iommu_device_set_confidential - Mark an IOMMU instance as confidential
+ * @iommu: the IOMMU instance
+ * @dev: the struct device of @iommu
+ *
+ * Declare that @iommu runs inside a confidential VM
+ *
+ * Call this before iommu_device_register().
+ */
+void iommu_device_set_confidential(struct iommu_device *iommu,
+				   struct device *dev)
+{
+	iommu->confidential = true;
+	dma_set_private(dev);
+}
+EXPORT_SYMBOL_GPL(iommu_device_set_confidential);
+
 void iommu_device_unregister(struct iommu_device *iommu)
 {
 	for (int i = 0; i < ARRAY_SIZE(iommu_buses); i++)
@@ -519,7 +537,14 @@ static int iommu_init_device(struct device *dev)
 	if (ret)
 		goto err_release;
 
-	group = ops->device_group(dev);
+	/*
+	 * A confidential IOMMU would group from a topology the host describes
+	 * and the guest cannot check, so give each device a group of its own.
+	 */
+	if (iommu_dev->confidential)
+		group = iommu_group_alloc();
+	else
+		group = ops->device_group(dev);
 	if (WARN_ON_ONCE(group == NULL))
 		group = ERR_PTR(-EINVAL);
 	if (IS_ERR(group)) {
