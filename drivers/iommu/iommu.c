@@ -533,9 +533,29 @@ static int iommu_init_device(struct device *dev)
 	}
 	dev->iommu->iommu_dev = iommu_dev;
 
+	/*
+	 * The IOMMU driver has marked this device for the physical regime. It
+	 * remains associated with this IOMMU, but the driver must not translate
+	 * its DMA.
+	 */
+	if (dev->iommu->physical_regime) {
+		/*
+		 * Keep translated peers out of this device's blocking domain.
+		 * Confidential IOMMUs provide the required one-device groups.
+		 */
+		if (WARN_ON(!iommu_dev->confidential)) {
+			ret = -ENODEV;
+			goto err_release;
+		}
+		/* Broken for the device, but not for the whole IOMMU */
+		if (iommu_physical_regime_enter(dev))
+			dev_warn(dev,
+				 "cannot enable ATS in the physical regime\n");
+	}
+
 	ret = iommu_device_link(iommu_dev, dev);
 	if (ret)
-		goto err_release;
+		goto err_physical;
 
 	/*
 	 * A confidential IOMMU would group from a topology the host describes
@@ -560,6 +580,9 @@ static int iommu_init_device(struct device *dev)
 
 err_unlink:
 	iommu_device_unlink(iommu_dev, dev);
+err_physical:
+	if (dev->iommu->physical_regime)
+		iommu_physical_regime_exit(dev);
 err_release:
 	if (ops->release_device)
 		ops->release_device(dev);
@@ -577,6 +600,9 @@ static void iommu_deinit_device(struct device *dev)
 	const struct iommu_ops *ops = dev_iommu_ops(dev);
 
 	lockdep_assert_held(&group->mutex);
+
+	if (dev->iommu->physical_regime)
+		iommu_physical_regime_exit(dev);
 
 	iommu_device_unlink(dev->iommu->iommu_dev, dev);
 
