@@ -535,9 +535,28 @@ static int iommu_init_device(struct device *dev)
 	}
 	dev->iommu->iommu_dev = iommu_dev;
 
+	/*
+	 * The IOMMU driver has marked this device as TDISP T=0, so it remains
+	 * associated with this IOMMU while its driver leaves DMA untranslated.
+	 */
+	if (dev->iommu->tdisp_t0) {
+		/*
+		 * All devices on a confidential IOMMU start with TDISP T=0, so
+		 * each group selects the blocking domain uniformly.
+		 */
+		if (WARN_ON(!iommu_dev->confidential)) {
+			ret = -ENODEV;
+			goto err_release;
+		}
+		/* Broken for the device, but not for the whole IOMMU */
+		if (iommu_tdisp_enter_t0(dev))
+			dev_warn(dev,
+				 "cannot enable ATS while TDISP is T=0\n");
+	}
+
 	ret = iommu_device_link(iommu_dev, dev);
 	if (ret)
-		goto err_release;
+		goto err_tdisp_t0;
 
 	group = ops->device_group(dev);
 	if (WARN_ON_ONCE(group == NULL))
@@ -555,6 +574,9 @@ static int iommu_init_device(struct device *dev)
 
 err_unlink:
 	iommu_device_unlink(iommu_dev, dev);
+err_tdisp_t0:
+	if (dev->iommu->tdisp_t0)
+		iommu_tdisp_exit_t0(dev);
 err_release:
 	if (ops->release_device)
 		ops->release_device(dev);
@@ -572,6 +594,9 @@ static void iommu_deinit_device(struct device *dev)
 	const struct iommu_ops *ops = dev_iommu_ops(dev);
 
 	lockdep_assert_held(&group->mutex);
+
+	if (dev->iommu->tdisp_t0)
+		iommu_tdisp_exit_t0(dev);
 
 	iommu_device_unlink(dev->iommu->iommu_dev, dev);
 

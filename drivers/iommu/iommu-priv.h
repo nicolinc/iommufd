@@ -8,6 +8,9 @@
 #include <linux/iommu-debug-pagealloc.h>
 #include <linux/msi.h>
 
+int iommu_tdisp_enter_t0(struct device *dev);
+void iommu_tdisp_exit_t0(struct device *dev);
+
 static inline const struct iommu_ops *dev_iommu_ops(struct device *dev)
 {
 	/*
