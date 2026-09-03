@@ -4269,6 +4269,18 @@ static struct iommu_device *arm_smmu_probe_device(struct device *dev)
 	    smmu->features & ARM_SMMU_FEAT_STALL_FORCE)
 		master->stall_enabled = true;
 
+	/*
+	 * A Realm VSMMU translates for a device only after RMM admission, so a
+	 * device starts out in TDISP T=0. The master is set up above, but ATS
+	 * stays with the core until the device leaves T=0. Whether this VSMMU
+	 * supports ATS is the wrong question for a device that the hypervisor
+	 * translates for, and asking it would fail the probe.
+	 */
+	if (smmu->iommu.confidential) {
+		dev->iommu->tdisp_t0 = 1;
+		return &smmu->iommu;
+	}
+
 	ret = arm_smmu_master_prepare_ats(master);
 	if (ret)
 		goto err_disable_pasid;
