@@ -4247,6 +4247,19 @@ static struct iommu_device *arm_smmu_probe_device(struct device *dev)
 	if (ret)
 		goto err_free_master;
 
+	/*
+	 * A Realm VSMMU translates for a device only following RMM admission.
+	 * At probe time, the device is not accepted or admitted, so it begins
+	 * in the T=0 physical regime. Keep its firmware-described SMMU link and
+	 * install the blocking STE, but skip T=1 setup. Later binding validates
+	 * the VDEV, leaves the regime, and attaches guest-managed translation
+	 * to the same device.
+	 */
+	if (smmu->iommu.confidential) {
+		dev->iommu->physical_regime = 1;
+		return &smmu->iommu;
+	}
+
 	device_property_read_u32(dev, "pasid-num-bits", &master->ssid_bits);
 	master->ssid_bits = min(smmu->ssid_bits, master->ssid_bits);
 
