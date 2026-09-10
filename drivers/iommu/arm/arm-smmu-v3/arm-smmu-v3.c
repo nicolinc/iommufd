@@ -4886,7 +4886,7 @@ static int arm_smmu_init_queues(struct arm_smmu_device *smmu)
 		return ret;
 
 	if (IS_ENABLED(CONFIG_IOMMU_IOPF) &&
-	    (smmu->features & ARM_SMMU_FEAT_STALLS)) {
+	    (smmu->features & (ARM_SMMU_FEAT_STALLS | ARM_SMMU_FEAT_PRI))) {
 		smmu->evtq.iopf = iopf_queue_alloc(dev_name(smmu->dev));
 		if (!smmu->evtq.iopf)
 			return -ENOMEM;
