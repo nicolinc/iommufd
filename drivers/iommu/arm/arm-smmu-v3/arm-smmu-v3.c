@@ -3302,9 +3302,6 @@ static int arm_smmu_enable_iopf(struct arm_smmu_master *master,
 
 	iommu_group_mutex_assert(master->dev);
 
-	if (!IS_ENABLED(CONFIG_ARM_SMMU_V3_SVA))
-		return -EOPNOTSUPP;
-
 	/*
 	 * Drivers for devices supporting PRI or stall require iopf others have
 	 * device-specific fault handlers and don't need IOPF, so this is not a
@@ -3335,9 +3332,6 @@ static void arm_smmu_disable_iopf(struct arm_smmu_master *master,
 				  struct arm_smmu_master_domain *master_domain)
 {
 	iommu_group_mutex_assert(master->dev);
-
-	if (!IS_ENABLED(CONFIG_ARM_SMMU_V3_SVA))
-		return;
 
 	if (!master_domain || !master_domain->using_iopf)
 		return;
@@ -4787,7 +4781,7 @@ static int arm_smmu_init_queues(struct arm_smmu_device *smmu)
 	if (ret)
 		return ret;
 
-	if ((smmu->features & ARM_SMMU_FEAT_SVA) &&
+	if (IS_ENABLED(CONFIG_IOMMU_IOPF) &&
 	    (smmu->features & ARM_SMMU_FEAT_STALLS)) {
 		smmu->evtq.iopf = iopf_queue_alloc(dev_name(smmu->dev));
 		if (!smmu->evtq.iopf)
