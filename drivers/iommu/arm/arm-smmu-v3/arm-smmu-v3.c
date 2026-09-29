@@ -5014,6 +5014,14 @@ static void arm_smmu_setup_unique_irqs(struct arm_smmu_device *smmu)
 	}
 }
 
+static void arm_smmu_disable_irqs_action(void *data)
+{
+	struct arm_smmu_device *smmu = data;
+
+	arm_smmu_write_reg_sync(smmu, 0, ARM_SMMU_IRQ_CTRL,
+				ARM_SMMU_IRQ_CTRLACK);
+}
+
 static int arm_smmu_setup_irqs(struct arm_smmu_device *smmu)
 {
 	int ret, irq;
@@ -5052,7 +5060,8 @@ static int arm_smmu_setup_irqs(struct arm_smmu_device *smmu)
 	if (ret)
 		dev_warn(smmu->dev, "failed to enable irqs\n");
 
-	return 0;
+	return devm_add_action_or_reset(smmu->dev,
+					arm_smmu_disable_irqs_action, smmu);
 }
 
 static int arm_smmu_device_disable(struct arm_smmu_device *smmu)
@@ -5865,15 +5874,17 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 	/* Check for RMRs and install bypass STEs if any */
 	arm_smmu_rmr_install_bypass_ste(smmu);
 
+	/*
+	 * Register ahead of the IRQ requests, so devres frees them first, since
+	 * free_irq() waits out a threaded handler. Yet it still runs before the
+	 * queues are freed, so the CMDQ is up for the impl teardown.
+	 */
+	ret = devm_add_action_or_reset(smmu->dev, arm_smmu_disable_action, smmu);
+	if (ret)
+		return ret;
+
 	/* Reset the device */
 	ret = arm_smmu_device_reset(smmu);
-	if (ret) {
-		arm_smmu_device_disable(smmu);
-		return ret;
-	}
-
-	/* Register last so it unwinds first, while the CMDQ is still up. */
-	ret = devm_add_action_or_reset(smmu->dev, arm_smmu_disable_action, smmu);
 	if (ret)
 		return ret;
 
