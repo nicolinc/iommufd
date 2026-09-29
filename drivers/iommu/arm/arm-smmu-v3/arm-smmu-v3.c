@@ -3485,16 +3485,40 @@ arm_smmu_remove_master_domain(struct arm_smmu_master *master,
 	return master_domain;
 }
 
+/* Wait out any fault handler running in a queue IRQ thread */
+static void arm_smmu_sync_fault_irqs(struct arm_smmu_device *smmu)
+{
+	if (smmu->evtq.q.irq)
+		synchronize_irq(smmu->evtq.q.irq);
+	if (smmu->priq.q.irq)
+		synchronize_irq(smmu->priq.q.irq);
+	if (smmu->combined_irq)
+		synchronize_irq(smmu->combined_irq);
+}
+
 /* Release the old master_domain detached by arm_smmu_remove_master_domain() */
 void arm_smmu_attach_release(struct arm_smmu_attach_state *state)
 {
 	struct arm_smmu_master_domain *master_domain = state->old_master_domain;
 	struct arm_smmu_master *master = state->master;
+	struct arm_smmu_device *smmu = master->smmu;
 
+	lockdep_assert_not_held(&arm_smmu_asid_lock);
 	iommu_group_mutex_assert(master->dev);
 
 	if (!master_domain)
 		return;
+
+	if (master_domain->using_iopf) {
+		/*
+		 * The IOMMU core unpublishes the attach handle ahead of this,
+		 * so a fault raised from here on can no longer resolve to the
+		 * old domain. A handler that read the handle before that still
+		 * can, so wait those out, then flush the work that they queued.
+		 */
+		arm_smmu_sync_fault_irqs(smmu);
+		iopf_queue_flush_dev(master->dev);
+	}
 
 	arm_smmu_disable_iopf(master, master_domain);
 	kfree(master_domain);
