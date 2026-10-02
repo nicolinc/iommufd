@@ -954,10 +954,12 @@ static int arm_smmu_cmdq_batch_submit(struct arm_smmu_device *smmu,
 					   cmds->num, true);
 }
 
-static void arm_smmu_page_response(struct device *dev, struct iopf_fault *unused,
+static void arm_smmu_page_response(struct device *dev, struct iopf_fault *evt,
 				   struct iommu_page_response *resp)
 {
 	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+	/* The stalled StreamID, recorded by arm_smmu_handle_event() */
+	u32 sid = evt->fault.prm.private_data[0];
 	u8 resume_resp;
 
 	if (WARN_ON(!master->stall_enabled))
@@ -977,8 +979,7 @@ static void arm_smmu_page_response(struct device *dev, struct iopf_fault *unused
 	}
 
 	arm_smmu_cmdq_issue_cmd(master->smmu,
-				arm_smmu_make_cmd_resume(master->streams[0].id,
-							 resp->grpid,
+				arm_smmu_make_cmd_resume(sid, resp->grpid,
 							 resume_resp));
 	/*
 	 * Don't send a SYNC, it doesn't do anything for RESUME or PRI_RESP.
@@ -2170,6 +2171,9 @@ static int arm_smmu_handle_event(struct arm_smmu_device *smmu, u64 *evt,
 			flt->prm.flags |= IOMMU_FAULT_PAGE_REQUEST_PASID_VALID;
 			flt->prm.pasid = event->ssid;
 		}
+
+		/* A multi-SID master must be resumed on the SID that stalled */
+		flt->prm.private_data[0] = event->sid;
 	}
 
 	mutex_lock(&smmu->streams_mutex);
