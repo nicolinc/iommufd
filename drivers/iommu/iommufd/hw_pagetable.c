@@ -111,7 +111,8 @@ iommufd_hwpt_paging_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 {
 	const u32 valid_flags = IOMMU_HWPT_ALLOC_NEST_PARENT |
 				IOMMU_HWPT_ALLOC_DIRTY_TRACKING |
-				IOMMU_HWPT_FAULT_ID_VALID;
+				IOMMU_HWPT_FAULT_ID_VALID |
+				IOMMU_HWPT_ALLOC_NONCOHERENT;
 	const struct iommu_ops *ops = dev_iommu_ops(idev->dev);
 	struct iommufd_hwpt_paging *hwpt_paging;
 	struct iommufd_hw_pagetable *hwpt;
@@ -174,7 +175,8 @@ iommufd_hwpt_paging_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 	 * but only devices (CC). Instead user space in this case would need to
 	 * allocate a separate HWPT (non-CC).
 	 */
-	if (idev->enforce_cache_coherency) {
+	if (idev->enforce_cache_coherency &&
+	    !(flags & IOMMU_HWPT_ALLOC_NONCOHERENT)) {
 		rc = iommufd_hwpt_paging_enforce_cc(hwpt_paging);
 		if (WARN_ON(rc))
 			goto out_abort;

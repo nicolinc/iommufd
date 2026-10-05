@@ -1383,6 +1383,11 @@ void arm_smmu_make_s1_cd(struct arm_smmu_cd *target,
 
 	memset(target, 0, sizeof(*target));
 
+	/*
+	 * IRGN0, ORGN0 and SH0 are the CD controls for S1 page-table walk
+	 * coherency. io-pgtable derives them from coherent_walk, including
+	 * the per-domain IOMMU_HWPT_ALLOC_NONCOHERENT override.
+	 */
 	target->data[0] = cpu_to_le64(
 		FIELD_PREP(CTXDESC_CD_0_TCR_T0SZ, tcr->tsz) |
 		FIELD_PREP(CTXDESC_CD_0_TCR_TG0, tcr->tg) |
@@ -2532,7 +2537,8 @@ static int arm_smmu_domain_finalise(struct arm_smmu_domain *smmu_domain,
 
 	pgtbl_cfg = (struct io_pgtable_cfg) {
 		.pgsize_bitmap	= smmu->pgsize_bitmap,
-		.coherent_walk	= smmu->features & ARM_SMMU_FEAT_COHERENCY,
+		.coherent_walk	= (smmu->features & ARM_SMMU_FEAT_COHERENCY) &&
+				  !(flags & IOMMU_HWPT_ALLOC_NONCOHERENT),
 		.tlb		= &arm_smmu_flush_ops,
 		.iommu_dev	= smmu->dev,
 	};
@@ -3205,11 +3211,16 @@ arm_smmu_domain_alloc_paging_flags(struct device *dev, u32 flags,
 	struct arm_smmu_device *smmu = master->smmu;
 	const u32 PAGING_FLAGS = IOMMU_HWPT_ALLOC_DIRTY_TRACKING |
 				 IOMMU_HWPT_ALLOC_PASID |
-				 IOMMU_HWPT_ALLOC_NEST_PARENT;
+				 IOMMU_HWPT_ALLOC_NEST_PARENT |
+				 IOMMU_HWPT_ALLOC_NONCOHERENT;
+	u32 domain_flags = flags & ~IOMMU_HWPT_ALLOC_NONCOHERENT;
 	struct arm_smmu_domain *smmu_domain;
 	int ret;
 
 	if (flags & ~PAGING_FLAGS)
+		return ERR_PTR(-EOPNOTSUPP);
+	if ((flags & IOMMU_HWPT_ALLOC_NONCOHERENT) &&
+	    (domain_flags & IOMMU_HWPT_ALLOC_NEST_PARENT))
 		return ERR_PTR(-EOPNOTSUPP);
 	if (user_data)
 		return ERR_PTR(-EOPNOTSUPP);
@@ -3218,13 +3229,18 @@ arm_smmu_domain_alloc_paging_flags(struct device *dev, u32 flags,
 	if (IS_ERR(smmu_domain))
 		return ERR_CAST(smmu_domain);
 
-	switch (flags) {
+	switch (domain_flags) {
 	case 0:
 		/* Prefer S1 if available */
-		if (smmu->features & ARM_SMMU_FEAT_TRANS_S1)
+		if (smmu->features & ARM_SMMU_FEAT_TRANS_S1) {
 			smmu_domain->stage = ARM_SMMU_DOMAIN_S1;
-		else
+		} else if (flags & IOMMU_HWPT_ALLOC_NONCOHERENT) {
+			/* Non-coherent walks are only meaningful for S1 CDs */
+			ret = -EOPNOTSUPP;
+			goto err_free;
+		} else {
 			smmu_domain->stage = ARM_SMMU_DOMAIN_S2;
+		}
 		break;
 	case IOMMU_HWPT_ALLOC_NEST_PARENT:
 		if (!(smmu->features & ARM_SMMU_FEAT_NESTING)) {

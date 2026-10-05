@@ -4,7 +4,10 @@
  */
 #include <kunit/test.h>
 #include <linux/io-pgtable.h>
+#include <linux/iommu.h>
+#include <uapi/linux/iommufd.h>
 
+#include "../../io-pgtable-arm.h"
 #include "arm-smmu-v3.h"
 
 struct arm_smmu_test_writer {
@@ -567,6 +570,183 @@ static void arm_smmu_v3_write_cd_test_sva_release(struct kunit *test)
 						      NUM_EXPECTED_SYNCS(2));
 }
 
+static void test_flush_all(void *cookie)
+{
+}
+
+static void test_flush_walk(unsigned long iova, size_t size, size_t granule,
+			    void *cookie)
+{
+}
+
+static void test_flush_add_page(struct iommu_iotlb_gather *gather,
+				unsigned long iova, size_t granule, void *cookie)
+{
+}
+
+static const struct iommu_flush_ops test_flush_ops = {
+	.tlb_flush_all = test_flush_all,
+	.tlb_flush_walk = test_flush_walk,
+	.tlb_add_page = test_flush_add_page,
+};
+
+struct arm_smmu_test_walk_attrs {
+	u8 sh;
+	u8 irgn;
+	u8 orgn;
+};
+
+static void arm_smmu_test_cd_get_walk_attrs(const struct arm_smmu_cd *cd,
+					    struct arm_smmu_test_walk_attrs *attrs)
+{
+	u64 cd0 = le64_to_cpu(cd->data[0]);
+
+	attrs->sh = FIELD_GET(CTXDESC_CD_0_TCR_SH0, cd0);
+	attrs->irgn = FIELD_GET(CTXDESC_CD_0_TCR_IRGN0, cd0);
+	attrs->orgn = FIELD_GET(CTXDESC_CD_0_TCR_ORGN0, cd0);
+}
+
+static void arm_smmu_test_expect_walk_attrs(struct kunit *test,
+					    const struct arm_smmu_test_walk_attrs *attrs,
+					    u8 sh, u8 irgn, u8 orgn)
+{
+	KUNIT_EXPECT_EQ(test, attrs->sh, sh);
+	KUNIT_EXPECT_EQ(test, attrs->irgn, irgn);
+	KUNIT_EXPECT_EQ(test, attrs->orgn, orgn);
+}
+
+static struct io_pgtable_ops *
+arm_smmu_test_alloc_s1_pgtable(struct kunit *test, bool coherent_walk,
+			       struct arm_smmu_domain *smmu_domain)
+{
+	struct io_pgtable_cfg pgtable_cfg = {
+		.pgsize_bitmap = ~0UL,
+		.ias = 48,
+		.oas = 48,
+		.coherent_walk = coherent_walk,
+		.tlb = &test_flush_ops,
+	};
+	struct io_pgtable_ops *ops;
+
+	ops = alloc_io_pgtable_ops(ARM_64_LPAE_S1, &pgtable_cfg, smmu_domain);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ops);
+	return ops;
+}
+
+static void arm_smmu_v3_noncoherent_pgtable_tcr_test(struct kunit *test)
+{
+	struct arm_smmu_domain smmu_domain = {};
+	struct io_pgtable_ops *ops;
+	const struct io_pgtable_cfg *cfg;
+	typeof(&cfg->arm_lpae_s1_cfg.tcr) tcr;
+
+	ops = arm_smmu_test_alloc_s1_pgtable(test, false, &smmu_domain);
+	cfg = &io_pgtable_ops_to_pgtable(ops)->cfg;
+	tcr = &cfg->arm_lpae_s1_cfg.tcr;
+
+	KUNIT_EXPECT_EQ(test, tcr->sh, ARM_LPAE_TCR_SH_OS);
+	KUNIT_EXPECT_EQ(test, tcr->irgn, ARM_LPAE_TCR_RGN_NC);
+	KUNIT_EXPECT_EQ(test, tcr->orgn, ARM_LPAE_TCR_RGN_NC);
+
+	free_io_pgtable_ops(ops);
+}
+
+static void arm_smmu_v3_coherent_pgtable_tcr_test(struct kunit *test)
+{
+	struct arm_smmu_domain smmu_domain = {};
+	struct io_pgtable_ops *ops;
+	const struct io_pgtable_cfg *cfg;
+	typeof(&cfg->arm_lpae_s1_cfg.tcr) tcr;
+
+	ops = arm_smmu_test_alloc_s1_pgtable(test, true, &smmu_domain);
+	cfg = &io_pgtable_ops_to_pgtable(ops)->cfg;
+	tcr = &cfg->arm_lpae_s1_cfg.tcr;
+
+	KUNIT_EXPECT_EQ(test, tcr->sh, ARM_LPAE_TCR_SH_IS);
+	KUNIT_EXPECT_EQ(test, tcr->irgn, ARM_LPAE_TCR_RGN_WBWA);
+	KUNIT_EXPECT_EQ(test, tcr->orgn, ARM_LPAE_TCR_RGN_WBWA);
+
+	free_io_pgtable_ops(ops);
+}
+
+static void arm_smmu_v3_noncoherent_cd_test(struct kunit *test)
+{
+	struct arm_smmu_master master = {
+		.smmu = &smmu,
+	};
+	struct arm_smmu_domain smmu_domain = {
+		.cd = {
+			.asid = 42,
+		},
+	};
+	struct io_pgtable_ops *ops;
+	struct arm_smmu_cd cd;
+	struct arm_smmu_test_walk_attrs attrs;
+
+	ops = arm_smmu_test_alloc_s1_pgtable(test, false, &smmu_domain);
+	smmu_domain.pgtbl_ops = ops;
+
+	arm_smmu_make_s1_cd(&cd, &master, &smmu_domain);
+	arm_smmu_test_cd_get_walk_attrs(&cd, &attrs);
+	arm_smmu_test_expect_walk_attrs(test, &attrs,
+					ARM_LPAE_TCR_SH_OS,
+					ARM_LPAE_TCR_RGN_NC,
+					ARM_LPAE_TCR_RGN_NC);
+	kunit_info(test,
+		   "noncoherent CD SH0=%u IRGN0=%u ORGN0=%u cd[0]=0x%llx\n",
+		   attrs.sh, attrs.irgn, attrs.orgn,
+		   le64_to_cpu(cd.data[0]));
+
+	free_io_pgtable_ops(ops);
+}
+
+static void arm_smmu_v3_coherent_cd_test(struct kunit *test)
+{
+	struct arm_smmu_master master = {
+		.smmu = &smmu,
+	};
+	struct arm_smmu_domain smmu_domain = {
+		.cd = {
+			.asid = 42,
+		},
+	};
+	struct io_pgtable_ops *ops;
+	struct arm_smmu_cd cd;
+	struct arm_smmu_test_walk_attrs attrs;
+
+	ops = arm_smmu_test_alloc_s1_pgtable(test, true, &smmu_domain);
+	smmu_domain.pgtbl_ops = ops;
+
+	arm_smmu_make_s1_cd(&cd, &master, &smmu_domain);
+	arm_smmu_test_cd_get_walk_attrs(&cd, &attrs);
+	arm_smmu_test_expect_walk_attrs(test, &attrs,
+					ARM_LPAE_TCR_SH_IS,
+					ARM_LPAE_TCR_RGN_WBWA,
+					ARM_LPAE_TCR_RGN_WBWA);
+
+	free_io_pgtable_ops(ops);
+}
+
+static void arm_smmu_v3_noncoherent_flag_test(struct kunit *test)
+{
+	bool coherent_walk;
+
+	smmu.features = ARM_SMMU_FEAT_COHERENCY;
+
+	coherent_walk = (smmu.features & ARM_SMMU_FEAT_COHERENCY) &&
+			!(0 & IOMMU_HWPT_ALLOC_NONCOHERENT);
+	KUNIT_EXPECT_TRUE(test, coherent_walk);
+
+	coherent_walk = (smmu.features & ARM_SMMU_FEAT_COHERENCY) &&
+			!(IOMMU_HWPT_ALLOC_NONCOHERENT);
+	KUNIT_EXPECT_FALSE(test, coherent_walk);
+
+	coherent_walk = (smmu.features & ARM_SMMU_FEAT_COHERENCY) &&
+			!(IOMMU_HWPT_ALLOC_NONCOHERENT |
+			  IOMMU_HWPT_ALLOC_PASID);
+	KUNIT_EXPECT_FALSE(test, coherent_walk);
+}
+
 static struct kunit_case arm_smmu_v3_test_cases[] = {
 	KUNIT_CASE(arm_smmu_v3_write_ste_test_bypass_to_abort),
 	KUNIT_CASE(arm_smmu_v3_write_ste_test_abort_to_bypass),
@@ -590,6 +770,11 @@ static struct kunit_case arm_smmu_v3_test_cases[] = {
 	KUNIT_CASE(arm_smmu_v3_write_ste_test_s2_to_s1_stall),
 	KUNIT_CASE(arm_smmu_v3_write_cd_test_sva_clear),
 	KUNIT_CASE(arm_smmu_v3_write_cd_test_sva_release),
+	KUNIT_CASE(arm_smmu_v3_noncoherent_flag_test),
+	KUNIT_CASE(arm_smmu_v3_noncoherent_pgtable_tcr_test),
+	KUNIT_CASE(arm_smmu_v3_coherent_pgtable_tcr_test),
+	KUNIT_CASE(arm_smmu_v3_noncoherent_cd_test),
+	KUNIT_CASE(arm_smmu_v3_coherent_cd_test),
 	{},
 };
 

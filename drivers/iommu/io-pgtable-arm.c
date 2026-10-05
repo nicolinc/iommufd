@@ -17,6 +17,7 @@
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/dma-mapping.h>
+#include <linux/dma-map-ops.h>
 
 #include <asm/barrier.h>
 
@@ -278,16 +279,28 @@ static void *__arm_lpae_alloc_pages(size_t size, gfp_t gfp,
 		return NULL;
 
 	if (!cfg->coherent_walk) {
-		dma = dma_map_single(dev, pages, size, DMA_TO_DEVICE);
-		if (dma_mapping_error(dev, dma))
-			goto out_free;
 		/*
-		 * We depend on the IOMMU being able to work with any physical
-		 * address directly, so if the DMA layer suggests otherwise by
-		 * translating or truncating them, that bodes very badly...
+		 * dma_map_single() only performs CPU cache maintenance when the
+		 * IOMMU *device* is non-coherent. On a coherent SMMU with a
+		 * non-coherent walk domain, map is a no-op for sync — clean to
+		 * PoC explicitly instead.
 		 */
-		if (dma != virt_to_phys(pages))
-			goto out_unmap;
+		if (dev_is_dma_coherent(dev)) {
+			arch_sync_dma_for_device(virt_to_phys(pages), size,
+						 DMA_TO_DEVICE);
+		} else {
+			dma = dma_map_single(dev, pages, size, DMA_TO_DEVICE);
+			if (dma_mapping_error(dev, dma))
+				goto out_free;
+			/*
+			 * We depend on the IOMMU being able to work with any
+			 * physical address directly, so if the DMA layer
+			 * suggests otherwise by translating or truncating
+			 * them, that bodes very badly...
+			 */
+			if (dma != virt_to_phys(pages))
+				goto out_unmap;
+		}
 	}
 
 	return pages;
@@ -309,7 +322,7 @@ static void __arm_lpae_free_pages(void *pages, size_t size,
 				  struct io_pgtable_cfg *cfg,
 				  void *cookie)
 {
-	if (!cfg->coherent_walk)
+	if (!cfg->coherent_walk && !dev_is_dma_coherent(cfg->iommu_dev))
 		dma_unmap_single(cfg->iommu_dev, __arm_lpae_dma_addr(pages),
 				 size, DMA_TO_DEVICE);
 
@@ -322,8 +335,16 @@ static void __arm_lpae_free_pages(void *pages, size_t size,
 static void __arm_lpae_sync_pte(arm_lpae_iopte *ptep, int num_entries,
 				struct io_pgtable_cfg *cfg)
 {
-	dma_sync_single_for_device(cfg->iommu_dev, __arm_lpae_dma_addr(ptep),
-				   sizeof(*ptep) * num_entries, DMA_TO_DEVICE);
+	/*
+	 * Follow walk coherency, not the IOMMU device's DMA coherency.
+	 * dma_sync_* is a no-op when the SMMU device is dma-coherent, which
+	 * breaks per-domain IOMMU_HWPT_ALLOC_NONCOHERENT on a coherent SMMU.
+	 */
+	if (cfg->coherent_walk)
+		return;
+
+	arch_sync_dma_for_device(virt_to_phys(ptep),
+				 sizeof(*ptep) * num_entries, DMA_TO_DEVICE);
 }
 
 static void __arm_lpae_clear_pte(arm_lpae_iopte *ptep, struct io_pgtable_cfg *cfg, int num_entries)

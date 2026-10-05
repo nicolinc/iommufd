@@ -416,6 +416,32 @@ TEST_F(iommufd_ioas, ioas_destroy)
 	}
 }
 
+TEST_F(iommufd_ioas, hwpt_alloc_noncoherent)
+{
+	uint32_t hwpt_id;
+	uint32_t stddev_id;
+
+	if (!self->device_id)
+		return;
+
+	test_cmd_hwpt_alloc(self->device_id, self->ioas_id,
+			    IOMMU_HWPT_ALLOC_NONCOHERENT, &hwpt_id);
+	test_cmd_mock_domain(hwpt_id, &stddev_id, NULL, NULL);
+	test_ioctl_destroy(stddev_id);
+	test_ioctl_destroy(hwpt_id);
+}
+
+TEST_F(iommufd_ioas, hwpt_alloc_noncoherent_reject_invalid)
+{
+	uint32_t hwpt_id;
+
+	if (!self->device_id)
+		return;
+
+	test_err_hwpt_alloc(EOPNOTSUPP, self->device_id, self->ioas_id,
+			    IOMMU_HWPT_ALLOC_NONCOHERENT | (1U << 31), &hwpt_id);
+}
+
 TEST_F(iommufd_ioas, alloc_hwpt_nested)
 {
 	const uint32_t min_data_len =

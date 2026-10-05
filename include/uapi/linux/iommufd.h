@@ -394,12 +394,16 @@ struct iommu_vfio_ioas {
  *                          PASID will blocked.
  *                          If IOMMU does not support PASID it will return
  *                          error (-EOPNOTSUPP).
+ * @IOMMU_HWPT_ALLOC_NONCOHERENT: Page table walks for this HWPT are
+ *                                non-coherent, even if the SMMU is globally
+ *                                IO coherent.
  */
 enum iommufd_hwpt_alloc_flags {
 	IOMMU_HWPT_ALLOC_NEST_PARENT = 1 << 0,
 	IOMMU_HWPT_ALLOC_DIRTY_TRACKING = 1 << 1,
 	IOMMU_HWPT_FAULT_ID_VALID = 1 << 2,
 	IOMMU_HWPT_ALLOC_PASID = 1 << 3,
+	IOMMU_HWPT_ALLOC_NONCOHERENT = 1 << 4,
 };
 
 /**
