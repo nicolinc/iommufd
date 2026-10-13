@@ -827,9 +827,13 @@ static void tegra241_cmdqv_hw_disable(struct arm_smmu_device *smmu)
 		container_of(smmu, struct tegra241_cmdqv, smmu);
 	u16 idx;
 
-	for (idx = 0; idx < cmdqv->num_vintfs; idx++)
-		if (cmdqv->vintfs[idx])
-			tegra241_vintf_hw_deinit(cmdqv->vintfs[idx]);
+	/* Userspace must have destroyed all user-owned VINTFs by this point */
+	for (idx = 0; idx < cmdqv->num_vintfs; idx++) {
+		struct tegra241_vintf *vintf = cmdqv->vintfs[idx];
+
+		if (vintf && READ_ONCE(vintf->enabled))
+			tegra241_vintf_hw_deinit(vintf);
+	}
 }
 
 static void tegra241_cmdqv_remove(struct arm_smmu_device *smmu)
