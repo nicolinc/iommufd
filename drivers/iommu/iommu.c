@@ -4018,6 +4018,59 @@ err_unlock:
 }
 EXPORT_SYMBOL_NS_GPL(iommu_replace_group_handle, "IOMMUFD_INTERNAL");
 
+/*
+ * Attach the device's RID/PASID(s) to the group->blocking_domain, retaining the
+ * group->domain and pasid_array, and set gdev->blocked to @reason.
+ */
+static int __pci_dev_iommu_block(struct pci_dev *pdev,
+				 struct group_device *gdev,
+				 enum blocked_reason reason)
+{
+	struct iommu_group *group = pdev->dev.iommu_group;
+	unsigned long pasid;
+	void *entry;
+	int ret;
+
+	lockdep_assert_held(&group->mutex);
+
+	ret = __iommu_group_alloc_blocking_domain(group);
+	if (ret)
+		return ret;
+
+	/* Stage RID domain at blocking_domain while retaining group->domain */
+	if (group->domain != group->blocking_domain) {
+		ret = __iommu_attach_device(group->blocking_domain, &pdev->dev,
+					    group->domain);
+		if (ret)
+			return ret;
+	}
+
+	/*
+	 * Update gdev->blocked upon the domain change, as it is used to return
+	 * the correct domain in iommu_driver_get_domain_for_dev() that might be
+	 * called in a set_dev_pasid callback function.
+	 */
+	gdev->blocked = reason;
+
+	/*
+	 * Stage PASID domains at blocking_domain while retaining pasid_array.
+	 *
+	 * The pasid_array is mostly fenced by group->mutex, except one reader
+	 * in iommu_attach_handle_get(), so it's safe to read without xa_lock.
+	 */
+	if (pdev->dev.iommu->max_pasids > 0) {
+		xa_for_each_start(&group->pasid_array, pasid, entry, 1) {
+			struct iommu_domain *pasid_dom =
+				pasid_array_entry_to_domain(entry);
+
+			iommu_remove_dev_pasid(&pdev->dev, pasid, pasid_dom);
+		}
+	}
+
+	group->recovery_cnt++;
+	return 0;
+}
+
 /**
  * pci_dev_reset_iommu_prepare() - Block IOMMU to prepare for a PCI device reset
  * @pdev: PCI device that is going to enter a reset routine
@@ -4051,8 +4104,6 @@ int pci_dev_reset_iommu_prepare(struct pci_dev *pdev)
 {
 	struct iommu_group *group = pdev->dev.iommu_group;
 	struct group_device *gdev;
-	unsigned long pasid;
-	void *entry;
 	int ret;
 
 	if (!pci_ats_supported(pdev) || !dev_has_iommu(&pdev->dev))
@@ -4071,45 +4122,9 @@ int pci_dev_reset_iommu_prepare(struct pci_dev *pdev)
 	if (gdev->blocked)
 		return 0;
 
-	ret = __iommu_group_alloc_blocking_domain(group);
-	if (ret) {
+	ret = __pci_dev_iommu_block(pdev, gdev, BLOCKED_RESETTING);
+	if (ret)
 		gdev->reset_depth--;
-		return ret;
-	}
-
-	/* Stage RID domain at blocking_domain while retaining group->domain */
-	if (group->domain != group->blocking_domain) {
-		ret = __iommu_attach_device(group->blocking_domain, &pdev->dev,
-					    group->domain);
-		if (ret) {
-			gdev->reset_depth--;
-			return ret;
-		}
-	}
-
-	/*
-	 * Update gdev->blocked upon the domain change, as it is used to return
-	 * the correct domain in iommu_driver_get_domain_for_dev() that might be
-	 * called in a set_dev_pasid callback function.
-	 */
-	gdev->blocked = BLOCKED_RESETTING;
-
-	/*
-	 * Stage PASID domains at blocking_domain while retaining pasid_array.
-	 *
-	 * The pasid_array is mostly fenced by group->mutex, except one reader
-	 * in iommu_attach_handle_get(), so it's safe to read without xa_lock.
-	 */
-	if (pdev->dev.iommu->max_pasids > 0) {
-		xa_for_each_start(&group->pasid_array, pasid, entry, 1) {
-			struct iommu_domain *pasid_dom =
-				pasid_array_entry_to_domain(entry);
-
-			iommu_remove_dev_pasid(&pdev->dev, pasid, pasid_dom);
-		}
-	}
-
-	group->recovery_cnt++;
 	return ret;
 }
 EXPORT_SYMBOL_GPL(pci_dev_reset_iommu_prepare);
@@ -4149,6 +4164,72 @@ static bool group_device_dma_alias_is_blocked(struct iommu_group *group,
 	return false;
 }
 
+/*
+ * Re-attach the device's RID/PASID(s) to the domains retained in group->domain
+ * and pasid_array, and set gdev->blocked to BLOCKED_NONE.
+ */
+static void __pci_dev_iommu_unblock(struct pci_dev *pdev,
+				    struct group_device *gdev)
+{
+	struct iommu_group *group = pdev->dev.iommu_group;
+	unsigned long pasid;
+	void *entry;
+
+	lockdep_assert_held(&group->mutex);
+
+	if (group_device_dma_alias_is_blocked(group, gdev)) {
+		/*
+		 * FIXME: DMA aliased devices share the same RID, which would be
+		 * convoluted to handle, as "gdev->blocked" is not sufficient:
+		 *  - "blocked" state is effectively shared across these devices
+		 *  - if the core skipped the blocking on the second device, the
+		 *    IOMMU driver's attachment state would diverge from the HW
+		 *    state
+		 * For now, just warn and see whether real ATS use cases hit it.
+		 */
+		pci_warn(pdev,
+			 "DMA-aliased sibling may be prematurely unblocked\n");
+	}
+
+	/*
+	 * Re-attach RID domain back to group->domain
+	 *
+	 * Leave the device parked in the blocking_domain if group->domain isn't
+	 * initialized yet
+	 */
+	if (group->domain && group->domain != group->blocking_domain) {
+		WARN_ON(__iommu_attach_device(group->domain, &pdev->dev,
+					      group->blocking_domain));
+	}
+
+	/*
+	 * Update gdev->blocked upon the domain change, as it is used to return
+	 * the correct domain in iommu_driver_get_domain_for_dev() that might be
+	 * called in a set_dev_pasid callback function.
+	 */
+	gdev->blocked = BLOCKED_NONE;
+
+	/*
+	 * Re-attach PASID domains back to the domains retained in pasid_array.
+	 *
+	 * The pasid_array is mostly fenced by group->mutex, except one reader
+	 * in iommu_attach_handle_get(), so it's safe to read without xa_lock.
+	 */
+	if (pdev->dev.iommu->max_pasids > 0) {
+		xa_for_each_start(&group->pasid_array, pasid, entry, 1) {
+			struct iommu_domain *pasid_dom =
+				pasid_array_entry_to_domain(entry);
+
+			WARN_ON(pasid_dom->ops->set_dev_pasid(
+				pasid_dom, &pdev->dev, pasid,
+				group->blocking_domain));
+		}
+	}
+
+	if (!WARN_ON(group->recovery_cnt == 0))
+		group->recovery_cnt--;
+}
+
 /**
  * pci_dev_reset_iommu_done() - Restore IOMMU after a PCI device reset is done
  * @pdev: PCI device that has finished a reset routine
@@ -4175,8 +4256,6 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev, int reset_result)
 	struct iommu_group *group = pdev->dev.iommu_group;
 	enum blocked_reason old_blocked;
 	struct group_device *gdev;
-	unsigned long pasid;
-	void *entry;
 
 	if (!pci_ats_supported(pdev) || !dev_has_iommu(&pdev->dev))
 		return;
@@ -4227,58 +4306,8 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev, int reset_result)
 	if (WARN_ON(!gdev->blocked))
 		return;
 
-	if (group_device_dma_alias_is_blocked(group, gdev)) {
-		/*
-		 * FIXME: DMA aliased devices share the same RID, which would be
-		 * convoluted to handle, as "gdev->blocked" is not sufficient:
-		 *  - "blocked" state is effectively shared across these devices
-		 *  - if the core skipped the blocking on the second device, the
-		 *    IOMMU driver's attachment state would diverge from the HW
-		 *    state
-		 * For now, just warn and see whether real ATS use cases hit it.
-		 */
-		pci_warn(pdev,
-			 "DMA-aliased sibling may be prematurely unblocked\n");
-	}
-
-	/*
-	 * Re-attach RID domain back to group->domain
-	 *
-	 * Leave the device parked in the blocking_domain if group->domain isn't
-	 * initialized yet
-	 */
-	if (group->domain && group->domain != group->blocking_domain) {
-		WARN_ON(__iommu_attach_device(group->domain, &pdev->dev,
-					      group->blocking_domain));
-	}
-
-	/*
-	 * Update gdev->blocked upon the domain change, as it is used to return
-	 * the correct domain in iommu_driver_get_domain_for_dev() that might be
-	 * called in a set_dev_pasid callback function.
-	 */
 	old_blocked = gdev->blocked;
-	gdev->blocked = BLOCKED_NONE;
-
-	/*
-	 * Re-attach PASID domains back to the domains retained in pasid_array.
-	 *
-	 * The pasid_array is mostly fenced by group->mutex, except one reader
-	 * in iommu_attach_handle_get(), so it's safe to read without xa_lock.
-	 */
-	if (pdev->dev.iommu->max_pasids > 0) {
-		xa_for_each_start(&group->pasid_array, pasid, entry, 1) {
-			struct iommu_domain *pasid_dom =
-				pasid_array_entry_to_domain(entry);
-
-			WARN_ON(pasid_dom->ops->set_dev_pasid(
-				pasid_dom, &pdev->dev, pasid,
-				group->blocking_domain));
-		}
-	}
-
-	if (!WARN_ON(group->recovery_cnt == 0))
-		group->recovery_cnt--;
+	__pci_dev_iommu_unblock(pdev, gdev);
 
 	if (old_blocked > BLOCKED_RESETTING)
 		pci_info(pdev, "Device is unblocked after successful reset\n");
