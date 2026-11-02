@@ -2534,6 +2534,8 @@ err_revert:
 		/* No need to revert the last gdev that failed to set domain */
 		if (gdev == last_gdev)
 			break;
+		if (gdev->blocked)
+			continue;
 		/*
 		 * A NULL domain can happen only for first probe, in which case
 		 * we leave group->domain as NULL and let release clean
@@ -3572,6 +3574,13 @@ static int __iommu_set_group_pasid(struct iommu_domain *domain,
 	int ret;
 
 	for_each_group_device(group, device) {
+		/*
+		 * A blocked device is attached to group->blocking_domain. Its
+		 * PASID domain will be attached from the pasid_array, once the
+		 * device is unblocked.
+		 */
+		if (device->blocked)
+			continue;
 		if (device->dev->iommu->max_pasids > 0) {
 			ret = domain->ops->set_dev_pasid(domain, device->dev,
 							 pasid, old);
@@ -3587,6 +3596,8 @@ err_revert:
 	for_each_group_device(group, device) {
 		if (device == last_gdev)
 			break;
+		if (device->blocked)
+			continue;
 		if (device->dev->iommu->max_pasids > 0) {
 			/*
 			 * If no old domain, undo the succeeded devices/pasid.
