@@ -1425,8 +1425,10 @@ static int pci_set_full_power_state(struct pci_dev *dev, bool locked)
 
 	ret = pci_power_up(dev);
 	if (ret < 0) {
-		if (dev->current_state == PCI_D0)
+		if (dev->current_state == PCI_D0) {
+			pci_dev_pm_iommu_resume(dev);
 			return 0;
+		}
 
 		return ret;
 	}
@@ -1452,6 +1454,10 @@ static int pci_set_full_power_state(struct pci_dev *dev, bool locked)
 		 */
 		pci_restore_bars(dev);
 	}
+
+	/* Restore ATS only after verifying that the device is back in D0 */
+	if (dev->current_state == PCI_D0)
+		pci_dev_pm_iommu_resume(dev);
 
 	if (dev->bus->self)
 		pcie_aspm_pm_state_change(dev->bus->self, locked);
@@ -1601,6 +1607,13 @@ static int __pci_set_power_state(struct pci_dev *dev, pci_power_t state, bool lo
 	if (state >= PCI_D3hot && (dev->dev_flags & PCI_DEV_FLAGS_NO_D3))
 		return 0;
 
+	/*
+	 * Stop ATS before the device leaves D0, either in the native way or via
+	 * the platform ops below.
+	 */
+	if (dev->current_state == PCI_D0)
+		pci_dev_pm_iommu_suspend(dev);
+
 	if (state == PCI_D3cold) {
 		/*
 		 * To put the device in D3cold, put it into D3hot in the native
@@ -1609,7 +1622,7 @@ static int __pci_set_power_state(struct pci_dev *dev, pci_power_t state, bool lo
 		error = pci_set_low_power_state(dev, PCI_D3hot, locked);
 
 		if (pci_platform_power_transition(dev, PCI_D3cold))
-			return error;
+			goto out;
 
 		/* Powering off a bridge may power off the whole hierarchy */
 		if (dev->current_state == PCI_D3cold)
@@ -1618,10 +1631,15 @@ static int __pci_set_power_state(struct pci_dev *dev, pci_power_t state, bool lo
 		error = pci_set_low_power_state(dev, state, locked);
 
 		if (pci_platform_power_transition(dev, state))
-			return error;
+			goto out;
 	}
 
-	return 0;
+	error = 0;
+out:
+	/* The device stayed in D0, so undo the suspend */
+	if (dev->current_state == PCI_D0)
+		pci_dev_pm_iommu_resume(dev);
+	return error;
 }
 
 /**
@@ -3210,6 +3228,10 @@ void pci_pm_power_up_and_verify_state(struct pci_dev *pci_dev)
 {
 	pci_power_up(pci_dev);
 	pci_update_current_state(pci_dev, PCI_D0);
+
+	/* Restore ATS only after verifying that the device is back in D0 */
+	if (pci_dev->current_state == PCI_D0)
+		pci_dev_pm_iommu_resume(pci_dev);
 }
 
 /**
