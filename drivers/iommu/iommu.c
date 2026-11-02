@@ -73,6 +73,13 @@ struct iommu_group {
 	void *owner;
 };
 
+/*
+ * A larger value has a higher priority. Blocking for a higher reason upgrades
+ * gdev->blocked, while blocking for a lower one keeps it. Only the reason that
+ * is equal to or higher than gdev->blocked can unblock the device.
+ *
+ * Any reason starting from BLOCKED_RESETTING holds one group->recovery_cnt.
+ */
 enum blocked_reason {
 	BLOCKED_NONE = 0, /* Not blocked */
 	BLOCKED_RESETTING, /* PCI reset in flight */
@@ -767,7 +774,8 @@ static void __iommu_group_remove_device(struct device *dev)
 			continue;
 
 		/* Must drop the recovery_cnt when removing a blocked device */
-		if (blocked && !WARN_ON(group->recovery_cnt == 0))
+		if (device->blocked >= BLOCKED_RESETTING &&
+		    !WARN_ON(group->recovery_cnt == 0))
 			group->recovery_cnt--;
 		list_del(&device->list);
 		__iommu_group_free_device(group, device);
@@ -4032,11 +4040,15 @@ EXPORT_SYMBOL_NS_GPL(iommu_replace_group_handle, "IOMMUFD_INTERNAL");
 /*
  * Attach the device's RID/PASID(s) to the group->blocking_domain, retaining the
  * group->domain and pasid_array, and set gdev->blocked to @reason.
+ *
+ * If the device is already blocked, only upgrade the gdev->blocked to a higher
+ * @reason. A lower @reason is a NOP.
  */
 static int __pci_dev_iommu_block(struct pci_dev *pdev,
 				 struct group_device *gdev,
 				 enum blocked_reason reason)
 {
+	enum blocked_reason old_blocked = gdev->blocked;
 	struct iommu_group *group = pdev->dev.iommu_group;
 	unsigned long pasid;
 	void *entry;
@@ -4044,16 +4056,21 @@ static int __pci_dev_iommu_block(struct pci_dev *pdev,
 
 	lockdep_assert_held(&group->mutex);
 
-	ret = __iommu_group_alloc_blocking_domain(group);
-	if (ret)
-		return ret;
+	if (reason <= old_blocked)
+		return 0;
 
-	/* Stage RID domain at blocking_domain while retaining group->domain */
-	if (group->domain != group->blocking_domain) {
-		ret = __iommu_attach_device(group->blocking_domain, &pdev->dev,
-					    group->domain);
+	if (old_blocked == BLOCKED_NONE) {
+		ret = __iommu_group_alloc_blocking_domain(group);
 		if (ret)
 			return ret;
+
+		/* Stage RID domain at blocking_domain, retain group->domain */
+		if (group->domain != group->blocking_domain) {
+			ret = __iommu_attach_device(group->blocking_domain,
+						    &pdev->dev, group->domain);
+			if (ret)
+				return ret;
+		}
 	}
 
 	/*
@@ -4069,7 +4086,7 @@ static int __pci_dev_iommu_block(struct pci_dev *pdev,
 	 * The pasid_array is mostly fenced by group->mutex, except one reader
 	 * in iommu_attach_handle_get(), so it's safe to read without xa_lock.
 	 */
-	if (pdev->dev.iommu->max_pasids > 0) {
+	if (old_blocked == BLOCKED_NONE && pdev->dev.iommu->max_pasids > 0) {
 		xa_for_each_start(&group->pasid_array, pasid, entry, 1) {
 			struct iommu_domain *pasid_dom =
 				pasid_array_entry_to_domain(entry);
@@ -4078,7 +4095,8 @@ static int __pci_dev_iommu_block(struct pci_dev *pdev,
 		}
 	}
 
-	group->recovery_cnt++;
+	if (old_blocked < BLOCKED_RESETTING && reason >= BLOCKED_RESETTING)
+		group->recovery_cnt++;
 	return 0;
 }
 
@@ -4129,10 +4147,7 @@ int pci_dev_reset_iommu_prepare(struct pci_dev *pdev)
 	if (gdev->reset_depth++)
 		return 0;
 
-	/* Device might be already blocked for a quarantine */
-	if (gdev->blocked)
-		return 0;
-
+	/* Keep a quarantined device as it is */
 	ret = __pci_dev_iommu_block(pdev, gdev, BLOCKED_RESETTING);
 	if (ret)
 		gdev->reset_depth--;
@@ -4178,15 +4193,23 @@ static bool group_device_dma_alias_is_blocked(struct iommu_group *group,
 /*
  * Re-attach the device's RID/PASID(s) to the domains retained in group->domain
  * and pasid_array, and set gdev->blocked to BLOCKED_NONE.
+ *
+ * Do nothing if @reason is lower than gdev->blocked, since a higher reason must
+ * be cleared by its own caller.
  */
 static void __pci_dev_iommu_unblock(struct pci_dev *pdev,
-				    struct group_device *gdev)
+				    struct group_device *gdev,
+				    enum blocked_reason reason)
 {
+	enum blocked_reason old_blocked = gdev->blocked;
 	struct iommu_group *group = pdev->dev.iommu_group;
 	unsigned long pasid;
 	void *entry;
 
 	lockdep_assert_held(&group->mutex);
+
+	if (old_blocked == BLOCKED_NONE || reason < old_blocked)
+		return;
 
 	if (group_device_dma_alias_is_blocked(group, gdev)) {
 		/*
@@ -4237,7 +4260,8 @@ static void __pci_dev_iommu_unblock(struct pci_dev *pdev,
 		}
 	}
 
-	if (!WARN_ON(group->recovery_cnt == 0))
+	if (old_blocked >= BLOCKED_RESETTING &&
+	    !WARN_ON(group->recovery_cnt == 0))
 		group->recovery_cnt--;
 }
 
@@ -4318,7 +4342,7 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev, int reset_result)
 		return;
 
 	old_blocked = gdev->blocked;
-	__pci_dev_iommu_unblock(pdev, gdev);
+	__pci_dev_iommu_unblock(pdev, gdev, BLOCKED_RESET_FAILED);
 
 	if (old_blocked > BLOCKED_RESETTING)
 		pci_info(pdev, "Device is unblocked after successful reset\n");
