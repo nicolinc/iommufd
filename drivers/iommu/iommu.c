@@ -82,6 +82,7 @@ struct iommu_group {
  */
 enum blocked_reason {
 	BLOCKED_NONE = 0, /* Not blocked */
+	BLOCKED_SUSPENDED, /* PCI device not in D0 */
 	BLOCKED_RESETTING, /* PCI reset in flight */
 	BLOCKED_RESET_FAILED, /* PCI reset failed */
 };
@@ -2510,6 +2511,7 @@ static int __iommu_group_set_domain_internal(struct iommu_group *group,
 		 * Device under recovery is attached to group->blocking_domain.
 		 * Don't change that. pci_dev_reset_iommu_done() will re-attach
 		 * its domain to the updated group->domain, after the recovery.
+		 * pci_dev_pm_iommu_resume() re-attaches a suspended device too.
 		 */
 		if (gdev->blocked)
 			continue;
@@ -4147,7 +4149,7 @@ int pci_dev_reset_iommu_prepare(struct pci_dev *pdev)
 	if (gdev->reset_depth++)
 		return 0;
 
-	/* Keep a quarantined device as it is */
+	/* Upgrade a suspended device, or keep a quarantined device as it is */
 	ret = __pci_dev_iommu_block(pdev, gdev, BLOCKED_RESETTING);
 	if (ret)
 		gdev->reset_depth--;
@@ -4341,6 +4343,10 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev, int reset_result)
 	if (WARN_ON(!gdev->blocked))
 		return;
 
+	/*
+	 * A successful reset clears every reason. It includes a suspend, since
+	 * the PM registers default to D0 after a reset.
+	 */
 	old_blocked = gdev->blocked;
 	__pci_dev_iommu_unblock(pdev, gdev, BLOCKED_RESET_FAILED);
 
@@ -4348,6 +4354,78 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev, int reset_result)
 		pci_info(pdev, "Device is unblocked after successful reset\n");
 }
 EXPORT_SYMBOL_GPL(pci_dev_reset_iommu_done);
+
+/**
+ * pci_dev_pm_iommu_suspend() - Block IOMMU before a PCI device leaves D0
+ * @pdev: PCI device that is going to enter a low-power state
+ *
+ * A device outside D0 cannot be relied on to complete an ATC invalidation, so
+ * an IOMMU driver invalidating its ATC would hit a timeout. A transition from
+ * D3hot to D0 might also reset the device internally, which drops its ATS and
+ * ATC state.
+ *
+ * This function attaches the device's RID/PASID(s) to group->blocking_domain,
+ * like pci_dev_reset_iommu_prepare() does, so that the IOMMU driver stops ATS
+ * for the device. The group->domain and pasid_array are retained, so that the
+ * pairing pci_dev_pm_iommu_resume() can restore them.
+ *
+ * Unlike a reset, a suspend can last for an indefinite time, e.g. for an idle
+ * device under runtime PM. Thus, it does not hold group->recovery_cnt. Instead
+ * of being rejected, a concurrent domain attachment is deferred until resume.
+ *
+ * A device that is already blocked for a reset is left untouched. A failure to
+ * block is only reported, as the power transition goes on anyway.
+ *
+ * The PM core disables runtime PM and removes the device from its PM list, in
+ * device_del(), before notifying BUS_NOTIFY_REMOVED_DEVICE. So, a PM transition
+ * does not race with iommu_release_device().
+ */
+void pci_dev_pm_iommu_suspend(struct pci_dev *pdev)
+{
+	struct iommu_group *group = pdev->dev.iommu_group;
+	struct group_device *gdev;
+
+	if (!pci_ats_supported(pdev) || !dev_has_iommu(&pdev->dev))
+		return;
+
+	guard(mutex)(&group->mutex);
+
+	gdev = __dev_to_gdev(&pdev->dev);
+	if (WARN_ON(!gdev))
+		return;
+
+	if (__pci_dev_iommu_block(pdev, gdev, BLOCKED_SUSPENDED))
+		pci_warn(pdev, "Failed to block IOMMU for a low-power state\n");
+}
+EXPORT_SYMBOL_GPL(pci_dev_pm_iommu_suspend);
+
+/**
+ * pci_dev_pm_iommu_resume() - Restore IOMMU after a PCI device returns to D0
+ * @pdev: PCI device that has returned to D0
+ *
+ * This is a pairing function for pci_dev_pm_iommu_suspend(). It re-attaches all
+ * RID/PASID(s) of the device to the domains that are retained in the core-level
+ * structures, including any domain attached while the device was suspended.
+ *
+ * A device blocked for a reset stays blocked, as it has a higher priority.
+ */
+void pci_dev_pm_iommu_resume(struct pci_dev *pdev)
+{
+	struct iommu_group *group = pdev->dev.iommu_group;
+	struct group_device *gdev;
+
+	if (!pci_ats_supported(pdev) || !dev_has_iommu(&pdev->dev))
+		return;
+
+	guard(mutex)(&group->mutex);
+
+	gdev = __dev_to_gdev(&pdev->dev);
+	if (WARN_ON(!gdev))
+		return;
+
+	__pci_dev_iommu_unblock(pdev, gdev, BLOCKED_SUSPENDED);
+}
+EXPORT_SYMBOL_GPL(pci_dev_pm_iommu_resume);
 
 #if IS_ENABLED(CONFIG_IRQ_MSI_IOMMU)
 /**

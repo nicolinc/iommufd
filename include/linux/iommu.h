@@ -1225,6 +1225,10 @@ void iommu_free_global_pasid(ioasid_t pasid);
 /* PCI device reset functions */
 int pci_dev_reset_iommu_prepare(struct pci_dev *pdev);
 void pci_dev_reset_iommu_done(struct pci_dev *pdev, int reset_result);
+
+/* PCI device power management functions */
+void pci_dev_pm_iommu_suspend(struct pci_dev *pdev);
+void pci_dev_pm_iommu_resume(struct pci_dev *pdev);
 #else /* CONFIG_IOMMU_API */
 
 struct iommu_ops {};
@@ -1556,6 +1560,14 @@ static inline int pci_dev_reset_iommu_prepare(struct pci_dev *pdev)
 
 static inline void pci_dev_reset_iommu_done(struct pci_dev *pdev,
 					    int reset_result)
+{
+}
+
+static inline void pci_dev_pm_iommu_suspend(struct pci_dev *pdev)
+{
+}
+
+static inline void pci_dev_pm_iommu_resume(struct pci_dev *pdev)
 {
 }
 #endif /* CONFIG_IOMMU_API */
